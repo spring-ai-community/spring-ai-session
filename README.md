@@ -102,14 +102,14 @@ Full reference documentation is available at:
 
 Topics covered:
 
-- [Getting Started](https://spring-ai-community.github.io/spring-ai-session/getting-started/) — setup options (in-memory, JDBC auto-config, JDBC manual)
-- [Core Concepts](https://spring-ai-community.github.io/spring-ai-session/session-core/concepts/) — `Session`, `SessionEvent`, turns, and architecture
-- [Event Filtering](https://spring-ai-community.github.io/spring-ai-session/session-core/event-filtering/) — composable `EventFilter` API
-- [Context Compaction](https://spring-ai-community.github.io/spring-ai-session/session-core/compaction/) — triggers, strategies, turn-boundary safety
-- [ChatClient Integration](https://spring-ai-community.github.io/spring-ai-session/session-core/chat-client/) — `SessionMemoryAdvisor` setup and options
-- [Multi-Agent Branch Isolation](https://spring-ai-community.github.io/spring-ai-session/session-core/multi-agent/) — sharing sessions across parallel agents
-- [Recall Storage](https://spring-ai-community.github.io/spring-ai-session/session-core/recall-storage/) — keyword search over the full verbatim history
-- [Session JDBC](https://spring-ai-community.github.io/spring-ai-session/session-jdbc/) — JDBC repository setup, schema, and design notes
+- [Getting Started](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/getting-started/) — setup options (in-memory, JDBC auto-config, JDBC manual)
+- [Core Concepts](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/concepts/) — `Session`, `SessionEvent`, turns, and architecture
+- [Event Filtering](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/event-filtering/) — composable `EventFilter` API
+- [Context Compaction](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/compaction/) — triggers, strategies, turn-boundary safety
+- [ChatClient Integration](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/chat-client/) — `SessionMemoryAdvisor` setup and options
+- [Multi-Agent Branch Isolation](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/multi-agent/) — sharing sessions across parallel agents
+- [Recall Storage](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/recall-storage/) — keyword search over the full verbatim history
+- [Session JDBC](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-jdbc/) — JDBC repository setup, schema, and design notes
 
 ## Requirements
 
