@@ -302,7 +302,7 @@
                         <configuration>
                             <publishingServerId>central</publishingServerId>
                             <excludeArtifacts>
-                                spring-ai-agent-utils-parent,examples-parent,travel-planner-demo-parent
+                                spring-ai-session-parent
                             </excludeArtifacts>
                             <autoPublish>true</autoPublish>
                         </configuration>
