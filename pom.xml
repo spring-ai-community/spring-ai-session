@@ -66,6 +66,7 @@
         <module>spring-ai-session-bom</module>
         <module>spring-ai-session-core</module>
         <module>spring-ai-session-jdbc</module>
+        <module>auto-configurations/session/spring-ai-autoconfigure-session</module>
         <module>auto-configurations/session/spring-ai-autoconfigure-session-jdbc</module>
     </modules>
 

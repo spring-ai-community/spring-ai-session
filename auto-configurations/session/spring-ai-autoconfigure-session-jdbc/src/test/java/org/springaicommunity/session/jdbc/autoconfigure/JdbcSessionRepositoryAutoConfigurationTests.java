@@ -18,12 +18,14 @@ package org.springaicommunity.session.jdbc.autoconfigure;
 
 import org.junit.jupiter.api.Test;
 
+import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.jdbc.JdbcSessionRepository;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration;
 import org.springframework.boot.sql.init.DatabaseInitializationMode;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springaicommunity.session.autoconfigure.SessionServiceAutoConfiguration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -37,11 +39,16 @@ class JdbcSessionRepositoryAutoConfigurationTests {
 	private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
 		.withPropertyValues("spring.datasource.url=jdbc:h2:mem:sessionautoconfig;DB_CLOSE_DELAY=-1")
 		.withConfiguration(AutoConfigurations.of(DataSourceAutoConfiguration.class, JdbcTemplateAutoConfiguration.class,
-				JdbcSessionRepositoryAutoConfiguration.class));
+				JdbcSessionRepositoryAutoConfiguration.class, SessionServiceAutoConfiguration.class));
 
 	@Test
 	void jdbcSessionRepositoryBeanIsCreated() {
 		this.contextRunner.run(context -> assertThat(context).hasSingleBean(JdbcSessionRepository.class));
+	}
+
+	@Test
+	void sessionServiceBeanIsCreated() {
+		this.contextRunner.run(context -> assertThat(context).hasSingleBean(SessionService.class));
 	}
 
 	@Test

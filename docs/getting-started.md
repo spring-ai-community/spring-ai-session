@@ -65,11 +65,12 @@ Import the BOM so all module versions stay in sync:
     </dependency>
     ```
 
-    Spring Boot will:
+    Spring Boot will automatically create:
 
-    - create a `JdbcSessionRepository` bean backed by the auto-configured `DataSource`
-    - detect the SQL dialect from the DataSource URL
-    - initialise the schema automatically for embedded databases (H2)
+    - a `JdbcSessionRepository` bean backed by the auto-configured `DataSource`
+    - a `DefaultSessionService` bean wrapping the repository
+    - SQL dialect detection from the DataSource URL
+    - schema initialisation for embedded databases (H2)
 
     To initialise the schema for PostgreSQL or MySQL, set:
 
@@ -82,14 +83,8 @@ Import the BOM so all module versions stay in sync:
               initialize-schema: always
     ```
 
-    You still need to declare a `SessionService` bean:
-
-    ```java
-    @Bean
-    SessionService sessionService(JdbcSessionRepository repository) {
-        return new DefaultSessionService(repository);
-    }
-    ```
+    No additional bean declarations are required. To override the auto-configured
+    `SessionService`, declare your own `@Bean SessionService` and it will take precedence.
 
 === "JDBC (manual)"
 

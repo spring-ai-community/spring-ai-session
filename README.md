@@ -25,6 +25,7 @@ spring-ai-session/
 ├── spring-ai-session-bom/                               # Bill of Materials for version management
 └── auto-configurations/
     └── session/
+        ├── spring-ai-autoconfigure-session/             # Spring Boot auto-configuration for DefaultSessionService
         └── spring-ai-autoconfigure-session-jdbc/        # Spring Boot auto-configuration for the JDBC repository
 ```
 
@@ -34,6 +35,7 @@ spring-ai-session/
 |--------|----------|-------------|
 | **Session Core** | `spring-ai-session-core` | `Session`, `SessionEvent`, `SessionService`, `SessionRepository` SPI, compaction framework, `SessionMemoryAdvisor` |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
+| **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
 | **Session BOM** | `spring-ai-session-bom` | Bill of Materials for managing all module versions together |
 

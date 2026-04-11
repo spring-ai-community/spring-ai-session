@@ -1,7 +1,9 @@
 # Auto-configuration
 
 `spring-ai-autoconfigure-session-jdbc` is a Spring Boot auto-configuration that creates a
-`JdbcSessionRepository` bean automatically when a `DataSource` bean is present.
+`JdbcSessionRepository` bean automatically when a `DataSource` bean is present. It
+depends on `spring-ai-autoconfigure-session`, which creates a `DefaultSessionService`
+bean on top of any available `SessionRepository`.
 
 ---
 
@@ -15,20 +17,14 @@
 </dependency>
 ```
 
-The auto-configuration creates:
+Adding this single dependency gives you:
 
-- A `JdbcSessionRepository` bean backed by the auto-configured `DataSource`
-- Dialect detection from the DataSource URL
-- Schema initialisation (configurable)
+| Bean | Created by |
+|---|---|
+| `JdbcSessionRepository` | `spring-ai-autoconfigure-session-jdbc` |
+| `DefaultSessionService` | `spring-ai-autoconfigure-session` |
 
-You still need to declare a `SessionService` bean:
-
-```java
-@Bean
-SessionService sessionService(JdbcSessionRepository repository) {
-    return new DefaultSessionService(repository);
-}
-```
+No additional bean declarations are required.
 
 ---
 
@@ -64,10 +60,12 @@ All properties are under the prefix `spring.ai.session.repository.jdbc`:
 
 ---
 
-## Overriding the auto-configured bean
+## Overriding the auto-configured beans
 
-Define your own `JdbcSessionRepository` or `SessionRepository` bean to override the
-auto-configured one:
+Declare your own bean of the relevant type and the auto-configuration backs off
+automatically.
+
+**Override the repository** (e.g. to supply a custom dialect or transaction manager):
 
 ```java
 @Bean
@@ -81,8 +79,17 @@ SessionRepository sessionRepository(DataSource dataSource,
 }
 ```
 
-Spring Boot's auto-configuration backs off automatically when a `SessionRepository` bean
-is already present in the context.
+**Override the service** (e.g. to wrap it with custom behaviour):
+
+```java
+@Bean
+SessionService sessionService(SessionRepository repository) {
+    return new MyCustomSessionService(repository);
+}
+```
+
+Both auto-configurations use `@ConditionalOnMissingBean`, so either or both can be
+overridden independently.
 
 ---
 

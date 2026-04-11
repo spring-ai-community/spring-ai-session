@@ -27,12 +27,12 @@
     </parent>
 
     <groupId>org.springaicommunity</groupId>
-    <artifactId>spring-ai-autoconfigure-session-jdbc</artifactId>
+    <artifactId>spring-ai-autoconfigure-session</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
-    <name>Spring AI Session JDBC Auto Configuration</name>
-    <description>Spring AI JDBC-backed Session Repository Auto Configuration</description>
+    <name>Spring AI Session Auto Configuration</name>
+    <description>Spring Boot auto-configuration for DefaultSessionService</description>
 
     <url>https://github.com/spring-ai-community/spring-ai-session</url>
 
@@ -45,31 +45,14 @@
     <dependencies>
         <dependency>
             <groupId>org.springaicommunity</groupId>
-            <artifactId>spring-ai-session-jdbc</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.springaicommunity</groupId>
-            <artifactId>spring-ai-autoconfigure-session</artifactId>
+            <artifactId>spring-ai-session-core</artifactId>
             <version>${project.version}</version>
         </dependency>
 
         <!-- Boot dependencies -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-jdbc</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-configuration-processor</artifactId>
-            <optional>true</optional>
+            <artifactId>spring-boot-autoconfigure</artifactId>
         </dependency>
 
         <dependency>
@@ -82,48 +65,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>com.mysql</groupId>
-            <artifactId>mysql-connector-j</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>testcontainers</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>testcontainers-postgresql</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>testcontainers-mysql</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>testcontainers-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
