@@ -1,0 +1,94 @@
+site_name: Spring AI Session
+site_url: https://spring-ai-community.github.io/spring-ai-session/
+site_description: Event-sourced session management with context compaction for Spring AI applications
+repo_url: https://github.com/spring-ai-community/spring-ai-session
+repo_name: spring-ai-community/spring-ai-session
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.path
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Session Core:
+      - Core Concepts: session-core/concepts.md
+      - Event Filtering: session-core/event-filtering.md
+      - Context Compaction: session-core/compaction.md
+      - ChatClient Integration: session-core/chat-client.md
+      - Multi-Agent Branch Isolation: session-core/multi-agent.md
+      - Recall Storage: session-core/recall-storage.md
+  - Session JDBC:
+      - Overview & Setup: session-jdbc/index.md
+      - Auto-configuration: session-jdbc/auto-configuration.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.mark
+  - pymdownx.critic
+  - pymdownx.caret
+  - pymdownx.keys
+  - pymdownx.tilde
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  version:
+    provider: mike
+    default:
+      - latest-snapshot
+      - latest
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/spring-ai-community/spring-ai-session
+  generator: false
+
+plugins:
+  - search
