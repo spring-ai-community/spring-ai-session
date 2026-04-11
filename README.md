@@ -27,6 +27,8 @@ spring-ai-session/
     └── session/
         ├── spring-ai-autoconfigure-session/             # Spring Boot auto-configuration for DefaultSessionService
         └── spring-ai-autoconfigure-session-jdbc/        # Spring Boot auto-configuration for the JDBC repository
+└── boot-starters/
+    └── spring-ai-starter-session-jdbc/                  # Spring Boot starter (JDBC session, one-dependency setup)
 ```
 
 ## Modules
@@ -37,6 +39,7 @@ spring-ai-session/
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
+| **Session JDBC Starter** | `spring-ai-starter-session-jdbc` | Spring Boot starter — pulls in JDBC repository, auto-configurations, and `spring-boot-starter` |
 | **Session BOM** | `spring-ai-session-bom` | Bill of Materials for managing all module versions together |
 
 ## Quick Start

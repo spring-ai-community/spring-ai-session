@@ -56,12 +56,12 @@ Import the BOM so all module versions stay in sync:
 
 === "JDBC with auto-configuration (Spring Boot)"
 
-    Add the auto-configuration starter:
+    Add the starter:
 
     ```xml
     <dependency>
         <groupId>org.springaicommunity</groupId>
-        <artifactId>spring-ai-autoconfigure-session-jdbc</artifactId>
+        <artifactId>spring-ai-starter-session-jdbc</artifactId>
     </dependency>
     ```
 

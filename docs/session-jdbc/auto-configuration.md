@@ -9,15 +9,17 @@ bean on top of any available `SessionRepository`.
 
 ## Dependency
 
+The recommended way to pull in the full auto-configured stack is via the starter:
+
 ```xml
 <dependency>
     <groupId>org.springaicommunity</groupId>
-    <artifactId>spring-ai-autoconfigure-session-jdbc</artifactId>
+    <artifactId>spring-ai-starter-session-jdbc</artifactId>
     <version>${spring-ai-session.version}</version>
 </dependency>
 ```
 
-Adding this single dependency gives you:
+This single dependency gives you:
 
 | Bean | Created by |
 |---|---|
