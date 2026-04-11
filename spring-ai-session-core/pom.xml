@@ -22,13 +22,13 @@
     <parent>
         <groupId>org.springaicommunity</groupId>
         <artifactId>spring-ai-session-parent</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>0.1.0</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <groupId>org.springaicommunity</groupId>
     <artifactId>spring-ai-session-core</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.0</version>
 
     <name>Spring AI Session Core</name>
     <description>Spring AI Session Core - conversation management with compaction strategies</description>
