@@ -821,10 +821,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#overriding-the-auto-configured-bean" class="md-nav__link">
+  <a href="#overriding-the-auto-configured-beans" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overriding the auto-configured bean
+        Overriding the auto-configured beans
       
     </span>
   </a>
@@ -918,10 +918,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#overriding-the-auto-configured-bean" class="md-nav__link">
+  <a href="#overriding-the-auto-configured-beans" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overriding the auto-configured bean
+        Overriding the auto-configured beans
       
     </span>
   </a>
@@ -1009,7 +1009,9 @@
 
 <h1 id="auto-configuration">Auto-configuration<a class="headerlink" href="#auto-configuration" title="Permanent link">&para;</a></h1>
 <p><code>spring-ai-autoconfigure-session-jdbc</code> is a Spring Boot auto-configuration that creates a
-<code>JdbcSessionRepository</code> bean automatically when a <code>DataSource</code> bean is present.</p>
+<code>JdbcSessionRepository</code> bean automatically when a <code>DataSource</code> bean is present. It
+depends on <code>spring-ai-autoconfigure-session</code>, which creates a <code>DefaultSessionService</code>
+bean on top of any available <code>SessionRepository</code>.</p>
 <hr />
 <h2 id="dependency">Dependency<a class="headerlink" href="#dependency" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">&lt;dependency&gt;</span>
@@ -1018,28 +1020,36 @@
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&lt;version&gt;</span>${spring-ai-session.version}<span class="nt">&lt;/version&gt;</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">&lt;/dependency&gt;</span>
 </span></code></pre></div>
-<p>The auto-configuration creates:</p>
-<ul>
-<li>A <code>JdbcSessionRepository</code> bean backed by the auto-configured <code>DataSource</code></li>
-<li>Dialect detection from the DataSource URL</li>
-<li>Schema initialisation (configurable)</li>
-</ul>
-<p>You still need to declare a <code>SessionService</code> bean:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nd">@Bean</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">SessionService</span><span class="w"> </span><span class="nf">sessionService</span><span class="p">(</span><span class="n">JdbcSessionRepository</span><span class="w"> </span><span class="n">repository</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">DefaultSessionService</span><span class="p">(</span><span class="n">repository</span><span class="p">);</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">}</span>
-</span></code></pre></div>
+<p>Adding this single dependency gives you:</p>
+<table>
+<thead>
+<tr>
+<th>Bean</th>
+<th>Created by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JdbcSessionRepository</code></td>
+<td><code>spring-ai-autoconfigure-session-jdbc</code></td>
+</tr>
+<tr>
+<td><code>DefaultSessionService</code></td>
+<td><code>spring-ai-autoconfigure-session</code></td>
+</tr>
+</tbody>
+</table>
+<p>No additional bean declarations are required.</p>
 <hr />
 <h2 id="schema-initialisation">Schema initialisation<a class="headerlink" href="#schema-initialisation" title="Permanent link">&para;</a></h2>
 <p>By default, schema initialisation only runs for embedded databases (H2). Control this
 with:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spring</span><span class="p">:</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">ai</span><span class="p">:</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">session</span><span class="p">:</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">repository</span><span class="p">:</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="nt">jdbc</span><span class="p">:</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">          </span><span class="nt">initialize-schema</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">always</span><span class="w">    </span><span class="c1"># always | embedded (default) | never</span>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">spring</span><span class="p">:</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">ai</span><span class="p">:</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">session</span><span class="p">:</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">      </span><span class="nt">repository</span><span class="p">:</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="nt">jdbc</span><span class="p">:</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">          </span><span class="nt">initialize-schema</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">always</span><span class="w">    </span><span class="c1"># always | embedded (default) | never</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -1083,21 +1093,28 @@ with:</p>
 </tbody>
 </table>
 <hr />
-<h2 id="overriding-the-auto-configured-bean">Overriding the auto-configured bean<a class="headerlink" href="#overriding-the-auto-configured-bean" title="Permanent link">&para;</a></h2>
-<p>Define your own <code>JdbcSessionRepository</code> or <code>SessionRepository</code> bean to override the
-auto-configured one:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nd">@Bean</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">SessionRepository</span><span class="w"> </span><span class="nf">sessionRepository</span><span class="p">(</span><span class="n">DataSource</span><span class="w"> </span><span class="n">dataSource</span><span class="p">,</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">                                    </span><span class="n">PlatformTransactionManager</span><span class="w"> </span><span class="n">txManager</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">JdbcSessionRepository</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">        </span><span class="p">.</span><span class="na">dataSource</span><span class="p">(</span><span class="n">dataSource</span><span class="p">)</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">        </span><span class="p">.</span><span class="na">transactionManager</span><span class="p">(</span><span class="n">txManager</span><span class="p">)</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">        </span><span class="p">.</span><span class="na">dialect</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">PostgresJdbcSessionRepositoryDialect</span><span class="p">())</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">}</span>
+<h2 id="overriding-the-auto-configured-beans">Overriding the auto-configured beans<a class="headerlink" href="#overriding-the-auto-configured-beans" title="Permanent link">&para;</a></h2>
+<p>Declare your own bean of the relevant type and the auto-configuration backs off
+automatically.</p>
+<p><strong>Override the repository</strong> (e.g. to supply a custom dialect or transaction manager):</p>
+<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nd">@Bean</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">SessionRepository</span><span class="w"> </span><span class="nf">sessionRepository</span><span class="p">(</span><span class="n">DataSource</span><span class="w"> </span><span class="n">dataSource</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">                                    </span><span class="n">PlatformTransactionManager</span><span class="w"> </span><span class="n">txManager</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">JdbcSessionRepository</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="p">.</span><span class="na">dataSource</span><span class="p">(</span><span class="n">dataSource</span><span class="p">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="p">.</span><span class="na">transactionManager</span><span class="p">(</span><span class="n">txManager</span><span class="p">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="p">.</span><span class="na">dialect</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">PostgresJdbcSessionRepositoryDialect</span><span class="p">())</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>Spring Boot's auto-configuration backs off automatically when a <code>SessionRepository</code> bean
-is already present in the context.</p>
+<p><strong>Override the service</strong> (e.g. to wrap it with custom behaviour):</p>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nd">@Bean</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">SessionService</span><span class="w"> </span><span class="nf">sessionService</span><span class="p">(</span><span class="n">SessionRepository</span><span class="w"> </span><span class="n">repository</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">MyCustomSessionService</span><span class="p">(</span><span class="n">repository</span><span class="p">);</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Both auto-configurations use <code>@ConditionalOnMissingBean</code>, so either or both can be
+overridden independently.</p>
 <hr />
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>
