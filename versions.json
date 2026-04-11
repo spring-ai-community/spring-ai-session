@@ -5,5 +5,12 @@
     "aliases": [
       "latest-snapshot"
     ]
+  },
+  {
+    "version": "v0.1.0",
+    "title": "v0.1.0",
+    "aliases": [
+      "latest"
+    ]
   }
 ]
