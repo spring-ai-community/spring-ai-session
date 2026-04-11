@@ -50,6 +50,9 @@ public interface SessionRepository {
 	 */
 	List<String> findExpiredSessionIds(Instant before);
 
+	/**
+	 * Deletes the session with the given ID.
+	 */
 	void delete(String sessionId);
 
 	// Events

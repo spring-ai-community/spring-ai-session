@@ -61,7 +61,10 @@ class TokenCountCompactionStrategyTests {
 	@Test
 	void noOpWhenAllEventsFitWithinBudget() {
 		// budget = 100 tokens, events are tiny
-		TokenCountCompactionStrategy strategy = new TokenCountCompactionStrategy(100, CHAR_ESTIMATOR);
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(100)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 		CompactionRequest request = requestWith(turn("hi", "hello"));
 
 		CompactionResult result = strategy.compact(request);
@@ -77,7 +80,10 @@ class TokenCountCompactionStrategyTests {
 		// Budget = 4 tokens. Turn1 = "u1"(2) + "a1"(2) = 4 tokens.
 		// Turn2 = "u2"(2) + "a2"(2) = 4 tokens.
 		// Total = 8 tokens; budget = 4 → keep only the newest 4 tokens (turn2).
-		TokenCountCompactionStrategy strategy = new TokenCountCompactionStrategy(4, CHAR_ESTIMATOR);
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(4)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 		CompactionRequest request = requestWith(turn("u1", "a1"), turn("u2", "a2"));
 
 		CompactionResult result = strategy.compact(request);
@@ -98,7 +104,10 @@ class TokenCountCompactionStrategyTests {
 	 */
 	@Test
 	void stopsAtFirstOversizeEventKeepsContiguousSuffix() {
-		TokenCountCompactionStrategy strategy = new TokenCountCompactionStrategy(6, CHAR_ESTIMATOR);
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(6)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 
 		List<SessionEvent> events = new ArrayList<>();
 		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build()); // 2
@@ -130,7 +139,10 @@ class TokenCountCompactionStrategyTests {
 	 */
 	@Test
 	void neverKeepsPartialTurn_snapsToTurnBoundary() {
-		TokenCountCompactionStrategy strategy = new TokenCountCompactionStrategy(4, CHAR_ESTIMATOR);
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(4)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 
 		List<SessionEvent> events = new ArrayList<>();
 		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build()); // 2
@@ -164,7 +176,10 @@ class TokenCountCompactionStrategyTests {
 		// Raw cutIndex = 6 - 1 = 5 → real[5] = ffff (ASSISTANT)
 		// Snap: real[5]=ASSISTANT, real[6] doesn't exist → cutIndex becomes 6 (past end)
 		// Result: no real events kept (all archived), only synthetics (none here)
-		TokenCountCompactionStrategy strategy = new TokenCountCompactionStrategy(6, CHAR_ESTIMATOR);
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(6)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 		CompactionRequest request = requestWith(turn("aaaa", "bbbb"), turn("cccc", "dddd"), turn("eeee", "ffff"));
 
 		CompactionResult result = strategy.compact(request);
@@ -181,7 +196,10 @@ class TokenCountCompactionStrategyTests {
 	@Test
 	void syntheticEventsAreAlwaysPreservedAndPlacedFirst() {
 		// Budget so small no real event fits
-		TokenCountCompactionStrategy strategy = new TokenCountCompactionStrategy(1, CHAR_ESTIMATOR);
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(1)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 
 		List<SessionEvent> events = new ArrayList<>();
 		events.add(SessionEvent.builder()
@@ -208,20 +226,26 @@ class TokenCountCompactionStrategyTests {
 
 	@Test
 	void maxTokensZeroIsRejected() {
-		assertThatThrownBy(() -> new TokenCountCompactionStrategy(0, CHAR_ESTIMATOR))
+		assertThatThrownBy(() -> TokenCountCompactionStrategy.builder().maxTokens(0).tokenCountEstimator(CHAR_ESTIMATOR).build())
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("maxTokens must be greater than 0");
 	}
 
 	@Test
 	void nullRequestIsRejected() {
-		TokenCountCompactionStrategy strategy = new TokenCountCompactionStrategy(100, CHAR_ESTIMATOR);
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(100)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 		assertThatThrownBy(() -> strategy.compact(null)).isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test
 	void emptySessionReturnsUnchanged() {
-		TokenCountCompactionStrategy strategy = new TokenCountCompactionStrategy(100, CHAR_ESTIMATOR);
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(100)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 		CompactionResult result = strategy.compact(requestWith(List.of()));
 
 		assertThat(result.compactedEvents()).isEmpty();

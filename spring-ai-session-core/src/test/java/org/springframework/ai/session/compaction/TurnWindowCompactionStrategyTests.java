@@ -38,7 +38,7 @@ class TurnWindowCompactionStrategyTests {
 
 	@Test
 	void noOpWhenTurnsUnderLimit() {
-		TurnWindowCompactionStrategy strategy = new TurnWindowCompactionStrategy(5);
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(5).build();
 		CompactionRequest request = requestWith(turn("q1", "a1"), turn("q2", "a2"), turn("q3", "a3"));
 
 		CompactionResult result = strategy.compact(request);
@@ -50,7 +50,7 @@ class TurnWindowCompactionStrategyTests {
 
 	@Test
 	void noOpWhenTurnsAtExactLimit() {
-		TurnWindowCompactionStrategy strategy = new TurnWindowCompactionStrategy(3);
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(3).build();
 		CompactionRequest request = requestWith(turn("q1", "a1"), turn("q2", "a2"), turn("q3", "a3"));
 
 		CompactionResult result = strategy.compact(request);
@@ -61,7 +61,7 @@ class TurnWindowCompactionStrategyTests {
 
 	@Test
 	void archivesOldestTurnsWhenOverLimit() {
-		TurnWindowCompactionStrategy strategy = new TurnWindowCompactionStrategy(2);
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(2).build();
 		// 4 turns, keep last 2 → archive first 2
 		CompactionRequest request = requestWith(turn("q1", "a1"), turn("q2", "a2"), turn("q3", "a3"), turn("q4", "a4"));
 
@@ -81,7 +81,7 @@ class TurnWindowCompactionStrategyTests {
 
 	@Test
 	void syntheticEventsArePlacedFirstAndPreserved() {
-		TurnWindowCompactionStrategy strategy = new TurnWindowCompactionStrategy(2);
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(2).build();
 
 		List<SessionEvent> events = new ArrayList<>();
 		// One summary turn = 2 synthetic events (USER shadow + ASSISTANT summary)
@@ -114,7 +114,7 @@ class TurnWindowCompactionStrategyTests {
 
 	@Test
 	void multipleSyntheticEventsAllPreserved() {
-		TurnWindowCompactionStrategy strategy = new TurnWindowCompactionStrategy(1);
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(1).build();
 
 		List<SessionEvent> events = new ArrayList<>();
 		// Two prior summary turns = 4 synthetic events
@@ -158,7 +158,7 @@ class TurnWindowCompactionStrategyTests {
 
 	@Test
 	void preambleEventsBeforeFirstUserMessageArePreserved() {
-		TurnWindowCompactionStrategy strategy = new TurnWindowCompactionStrategy(1);
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(1).build();
 
 		List<SessionEvent> events = new ArrayList<>();
 		// preamble: assistant event before any user message (pre-seeded tool state)
@@ -177,7 +177,7 @@ class TurnWindowCompactionStrategyTests {
 
 	@Test
 	void neverSplitsATurnInHalf() {
-		TurnWindowCompactionStrategy strategy = new TurnWindowCompactionStrategy(2);
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(2).build();
 
 		// Turn 1: user + assistant + assistant (multi-step)
 		List<SessionEvent> turn1 = List.of(
@@ -204,7 +204,7 @@ class TurnWindowCompactionStrategyTests {
 
 	@Test
 	void emptySessionReturnsUnchanged() {
-		TurnWindowCompactionStrategy strategy = new TurnWindowCompactionStrategy(3);
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(3).build();
 		CompactionRequest request = requestWith(List.of());
 
 		CompactionResult result = strategy.compact(request);
@@ -216,25 +216,26 @@ class TurnWindowCompactionStrategyTests {
 
 	@Test
 	void maxTurnsZeroIsRejected() {
-		assertThatThrownBy(() -> new TurnWindowCompactionStrategy(0)).isInstanceOf(IllegalArgumentException.class)
+		assertThatThrownBy(() -> TurnWindowCompactionStrategy.builder().maxTurns(0).build())
+				.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("maxTurns must be greater than 0");
 	}
 
 	@Test
 	void nullRequestIsRejected() {
-		TurnWindowCompactionStrategy strategy = new TurnWindowCompactionStrategy(3);
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(3).build();
 		assertThatThrownBy(() -> strategy.compact(null)).isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test
 	void defaultMaxTurnsIsApplied() {
-		TurnWindowCompactionStrategy strategy = new TurnWindowCompactionStrategy();
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().build();
 		assertThat(strategy.getMaxTurns()).isEqualTo(TurnWindowCompactionStrategy.DEFAULT_MAX_TURNS);
 	}
 
 	@Test
 	void tokensRemovedApproximation() {
-		TurnWindowCompactionStrategy strategy = new TurnWindowCompactionStrategy(1);
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(1).build();
 		// Turn 1 archived: "q1" + "a1" — token count estimated via
 		// JTokkitTokenCountEstimator
 		CompactionRequest request = requestWith(turn("q1", "a1"), turn("q2", "a2"));

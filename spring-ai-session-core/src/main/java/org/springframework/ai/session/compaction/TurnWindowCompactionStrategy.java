@@ -65,15 +65,7 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 
 	private final TokenCountEstimator tokenCountEstimator;
 
-	public TurnWindowCompactionStrategy() {
-		this(DEFAULT_MAX_TURNS);
-	}
-
-	public TurnWindowCompactionStrategy(int maxTurns) {
-		this(maxTurns, new JTokkitTokenCountEstimator());
-	}
-
-	public TurnWindowCompactionStrategy(int maxTurns, TokenCountEstimator tokenCountEstimator) {
+	private TurnWindowCompactionStrategy(int maxTurns, TokenCountEstimator tokenCountEstimator) {
 		Assert.isTrue(maxTurns > 0, "maxTurns must be greater than 0");
 		Assert.notNull(tokenCountEstimator, "tokenCountEstimator must not be null");
 		this.maxTurns = maxTurns;
@@ -158,6 +150,36 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 
 	public int getMaxTurns() {
 		return this.maxTurns;
+	}
+
+	public static Builder builder() {
+		return new Builder();
+	}
+
+	public static class Builder {
+
+		private int maxTurns = DEFAULT_MAX_TURNS;
+
+		private TokenCountEstimator tokenCountEstimator = new JTokkitTokenCountEstimator();
+
+		private Builder() {
+		}
+
+		public Builder maxTurns(int maxTurns) {
+			Assert.isTrue(maxTurns > 0, "maxTurns must be greater than 0");
+			this.maxTurns = maxTurns;
+			return this;
+		}
+
+		public Builder tokenCountEstimator(TokenCountEstimator tokenCountEstimator) {
+			Assert.notNull(tokenCountEstimator, "tokenCountEstimator must not be null");
+			this.tokenCountEstimator = tokenCountEstimator;
+			return this;
+		}
+
+		public TurnWindowCompactionStrategy build() {
+			return new TurnWindowCompactionStrategy(this.maxTurns, this.tokenCountEstimator);
+		}
 	}
 
 }

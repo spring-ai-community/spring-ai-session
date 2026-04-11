@@ -24,7 +24,6 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.session.internal.InMemorySessionRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

@@ -58,15 +58,7 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 
 	private final TokenCountEstimator tokenCountEstimator;
 
-	public SlidingWindowCompactionStrategy() {
-		this(DEFAULT_MAX_EVENTS);
-	}
-
-	public SlidingWindowCompactionStrategy(int maxEvents) {
-		this(maxEvents, new JTokkitTokenCountEstimator());
-	}
-
-	public SlidingWindowCompactionStrategy(int maxEvents, TokenCountEstimator tokenCountEstimator) {
+	private SlidingWindowCompactionStrategy(int maxEvents, TokenCountEstimator tokenCountEstimator) {
 		Assert.isTrue(maxEvents > 0, "maxEvents must be greater than 0");
 		Assert.notNull(tokenCountEstimator, "tokenCountEstimator must not be null");
 		this.maxEvents = maxEvents;
@@ -118,6 +110,35 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 
 	public int getMaxEvents() {
 		return this.maxEvents;
+	}
+
+	public static Builder builder() {
+		return new Builder();
+	}
+
+	public static class Builder {
+
+		private int maxEvents = DEFAULT_MAX_EVENTS;
+
+		private TokenCountEstimator tokenCountEstimator = new JTokkitTokenCountEstimator();
+
+		private Builder() {
+		}
+
+		public Builder maxEvents(int maxEvents) {
+			this.maxEvents = maxEvents;
+			return this;
+		}
+
+		public Builder tokenCountEstimator(TokenCountEstimator tokenCountEstimator) {
+			this.tokenCountEstimator = tokenCountEstimator;
+			return this;
+		}
+
+		public SlidingWindowCompactionStrategy build() {
+			return new SlidingWindowCompactionStrategy(this.maxEvents, this.tokenCountEstimator);
+		}
+
 	}
 
 }

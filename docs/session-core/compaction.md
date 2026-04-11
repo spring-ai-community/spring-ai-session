@@ -17,7 +17,7 @@ only runs the strategy — and writes back to the repository — when the trigge
 CompactionResult result = service.compact(
     sessionId,
     new TurnCountTrigger(20),
-    new SlidingWindowCompactionStrategy(10)
+    SlidingWindowCompactionStrategy.builder().maxEvents(10).build()
 );
 
 System.out.println(result.eventsRemoved());        // derived: archivedEvents().size()
@@ -26,7 +26,7 @@ System.out.println(result.archivedEvents());       // the removed event list
 System.out.println(result.tokensEstimatedSaved()); // rough token saving estimate
 
 // Compact unconditionally — pass an always-fire trigger
-service.compact(sessionId, req -> true, new SlidingWindowCompactionStrategy(10));
+service.compact(sessionId, req -> true, SlidingWindowCompactionStrategy.builder().maxEvents(10).build());
 ```
 
 !!! note "CAS write safety"
@@ -58,10 +58,10 @@ Fires when the estimated total token count is at or above a threshold.
 
 ```java
 // Uses JTokkitTokenCountEstimator by default
-new TokenCountTrigger(4000);
+TokenCountTrigger.builder().threshold(4000).build();
 
 // Custom estimator (e.g. for a different model's tokenizer)
-new TokenCountTrigger(4000, myEstimator);
+TokenCountTrigger.builder().threshold(4000).tokenCountEstimator(myEstimator).build();
 ```
 
 ### CompositeCompactionTrigger
@@ -71,7 +71,7 @@ Combines multiple triggers with OR semantics — compaction fires if **any** tri
 ```java
 CompactionTrigger trigger = CompositeCompactionTrigger.anyOf(
     new TurnCountTrigger(20),
-    new TokenCountTrigger(4000)
+    TokenCountTrigger.builder().threshold(4000).build()
 );
 ```
 
@@ -90,8 +90,11 @@ summary events are always preserved and placed first; they do not count against 
 `maxEvents` budget.
 
 ```java
-new SlidingWindowCompactionStrategy(20);               // keep the last 20 real events
-new SlidingWindowCompactionStrategy(20, myEstimator);  // custom token estimator
+// keep the last 20 real events
+SlidingWindowCompactionStrategy.builder().maxEvents(20).build();
+
+// custom token estimator
+SlidingWindowCompactionStrategy.builder().maxEvents(20).tokenCountEstimator(myEstimator).build();
 ```
 
 **Algorithm**
@@ -107,8 +110,11 @@ Keeps the last `N` complete turns. Unlike the sliding window, this never cuts in
 turn — it always archives whole user↔agent exchanges.
 
 ```java
-new TurnWindowCompactionStrategy(10);               // keep the last 10 turns
-new TurnWindowCompactionStrategy(10, myEstimator);  // custom token estimator
+// keep the last 10 turns
+TurnWindowCompactionStrategy.builder().maxTurns(10).build();
+
+// custom token estimator
+TurnWindowCompactionStrategy.builder().maxTurns(10).tokenCountEstimator(myEstimator).build();
 ```
 
 **Algorithm**
@@ -125,8 +131,11 @@ Keeps a **contiguous** suffix of events that fits within a token budget, walking
 newest to oldest.
 
 ```java
-new TokenCountCompactionStrategy(4000);               // stay within 4000 tokens
-new TokenCountCompactionStrategy(4000, myEstimator);  // custom estimator
+// stay within 4000 tokens
+TokenCountCompactionStrategy.builder().maxTokens(4000).build();
+
+// custom estimator
+TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEstimator).build();
 ```
 
 **Algorithm**

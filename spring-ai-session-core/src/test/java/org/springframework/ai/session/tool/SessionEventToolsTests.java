@@ -28,8 +28,8 @@ import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
-import org.springframework.ai.session.internal.DefaultSessionService;
-import org.springframework.ai.session.internal.InMemorySessionRepository;
+import org.springframework.ai.session.DefaultSessionService;
+import org.springframework.ai.session.InMemorySessionRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -46,7 +46,9 @@ class SessionEventToolsTests {
 
 	@BeforeEach
 	void setUp() {
-		this.sessionService = new DefaultSessionService(InMemorySessionRepository.builder().build());
+		this.sessionService = DefaultSessionService.builder()
+			.sessionRepository(InMemorySessionRepository.builder().build())
+			.build();
 		this.tools = SessionEventTools.builder(this.sessionService).build();
 
 		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("test-user").build());

@@ -61,15 +61,7 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 
 	private final TokenCountEstimator tokenCountEstimator;
 
-	public TokenCountCompactionStrategy() {
-		this(DEFAULT_MAX_TOKENS);
-	}
-
-	public TokenCountCompactionStrategy(int maxTokens) {
-		this(maxTokens, new JTokkitTokenCountEstimator());
-	}
-
-	public TokenCountCompactionStrategy(int maxTokens, TokenCountEstimator tokenCountEstimator) {
+	private TokenCountCompactionStrategy(int maxTokens, TokenCountEstimator tokenCountEstimator) {
 		Assert.isTrue(maxTokens > 0, "maxTokens must be greater than 0");
 		Assert.notNull(tokenCountEstimator, "tokenCountEstimator must not be null");
 		this.maxTokens = maxTokens;
@@ -143,6 +135,35 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 
 	public int getMaxTokens() {
 		return this.maxTokens;
+	}
+
+	public static Builder builder() {
+		return new Builder();
+	}
+
+	public static class Builder {
+
+		private int maxTokens = DEFAULT_MAX_TOKENS;
+
+		private TokenCountEstimator tokenCountEstimator = new JTokkitTokenCountEstimator();
+
+		private Builder() {
+		}
+
+		public Builder maxTokens(int maxTokens) {
+			this.maxTokens = maxTokens;
+			return this;
+		}
+
+		public Builder tokenCountEstimator(TokenCountEstimator tokenCountEstimator) {
+			this.tokenCountEstimator = tokenCountEstimator;
+			return this;
+		}
+
+		public TokenCountCompactionStrategy build() {
+			return new TokenCountCompactionStrategy(this.maxTokens, this.tokenCountEstimator);
+		}
+
 	}
 
 }

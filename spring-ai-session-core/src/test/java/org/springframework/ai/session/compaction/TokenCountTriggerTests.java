@@ -62,7 +62,10 @@ class TokenCountTriggerTests {
 	@Test
 	void firesWhenTokenCountReachesThreshold() {
 		// "hello"(5) + "world"(5) = 10 tokens, threshold = 10 → fires (>=)
-		TokenCountTrigger trigger = new TokenCountTrigger(10, CHAR_ESTIMATOR);
+		TokenCountTrigger trigger = TokenCountTrigger.builder()
+			.threshold(10)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 		CompactionRequest request = requestWith(turn("hello", "world"));
 
 		assertThat(trigger.shouldCompact(request)).isTrue();
@@ -71,7 +74,10 @@ class TokenCountTriggerTests {
 	@Test
 	void firesWhenTokenCountExceedsThreshold() {
 		// "hello"(5) + "world!"(6) = 11 tokens, threshold = 10
-		TokenCountTrigger trigger = new TokenCountTrigger(10, CHAR_ESTIMATOR);
+		TokenCountTrigger trigger = TokenCountTrigger.builder()
+			.threshold(10)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 		CompactionRequest request = requestWith(turn("hello", "world!"));
 
 		assertThat(trigger.shouldCompact(request)).isTrue();
@@ -80,7 +86,10 @@ class TokenCountTriggerTests {
 	@Test
 	void doesNotFireWhenTokenCountBelowThreshold() {
 		// "hi"(2) + "ok"(2) = 4 tokens, threshold = 10
-		TokenCountTrigger trigger = new TokenCountTrigger(10, CHAR_ESTIMATOR);
+		TokenCountTrigger trigger = TokenCountTrigger.builder()
+			.threshold(10)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 		CompactionRequest request = requestWith(turn("hi", "ok"));
 
 		assertThat(trigger.shouldCompact(request)).isFalse();
@@ -88,7 +97,10 @@ class TokenCountTriggerTests {
 
 	@Test
 	void doesNotFireOnEmptySession() {
-		TokenCountTrigger trigger = new TokenCountTrigger(10, CHAR_ESTIMATOR);
+		TokenCountTrigger trigger = TokenCountTrigger.builder()
+			.threshold(10)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 		CompactionRequest request = requestWith(List.of());
 
 		assertThat(trigger.shouldCompact(request)).isFalse();
@@ -97,7 +109,10 @@ class TokenCountTriggerTests {
 	@Test
 	void countsTokensAcrossAllEvents() {
 		// Two turns: "ab"(2)+"cd"(2) + "ef"(2)+"gh"(2) = 8 tokens, threshold = 7
-		TokenCountTrigger trigger = new TokenCountTrigger(7, CHAR_ESTIMATOR);
+		TokenCountTrigger trigger = TokenCountTrigger.builder()
+			.threshold(7)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 		CompactionRequest request = requestWith(turn("ab", "cd"), turn("ef", "gh"));
 
 		assertThat(trigger.shouldCompact(request)).isTrue();
@@ -105,24 +120,30 @@ class TokenCountTriggerTests {
 
 	@Test
 	void zeroThresholdIsRejected() {
-		assertThatIllegalArgumentException().isThrownBy(() -> new TokenCountTrigger(0, CHAR_ESTIMATOR))
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> TokenCountTrigger.builder().threshold(0).tokenCountEstimator(CHAR_ESTIMATOR).build())
 			.withMessageContaining("threshold must be greater than 0");
 	}
 
 	@Test
 	void negativeThresholdIsRejected() {
-		assertThatIllegalArgumentException().isThrownBy(() -> new TokenCountTrigger(-1, CHAR_ESTIMATOR));
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> TokenCountTrigger.builder().threshold(-1).tokenCountEstimator(CHAR_ESTIMATOR).build());
 	}
 
 	@Test
 	void nullEstimatorIsRejected() {
-		assertThatIllegalArgumentException().isThrownBy(() -> new TokenCountTrigger(100, null))
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> TokenCountTrigger.builder().threshold(100).tokenCountEstimator(null).build())
 			.withMessageContaining("tokenCountEstimator must not be null");
 	}
 
 	@Test
 	void getThresholdReturnsConfiguredValue() {
-		TokenCountTrigger trigger = new TokenCountTrigger(500, CHAR_ESTIMATOR);
+		TokenCountTrigger trigger = TokenCountTrigger.builder()
+			.threshold(500)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
 		assertThat(trigger.getThreshold()).isEqualTo(500);
 	}
 

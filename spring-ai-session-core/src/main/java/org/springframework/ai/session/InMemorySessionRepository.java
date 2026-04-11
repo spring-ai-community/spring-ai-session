@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.springframework.ai.session.internal;
+package org.springframework.ai.session;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -24,10 +24,6 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-import org.springframework.ai.session.EventFilter;
-import org.springframework.ai.session.Session;
-import org.springframework.ai.session.SessionEvent;
-import org.springframework.ai.session.SessionRepository;
 import org.springframework.util.Assert;
 
 /**

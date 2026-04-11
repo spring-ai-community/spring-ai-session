@@ -29,8 +29,6 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
-import org.springframework.ai.session.internal.DefaultSessionService;
-import org.springframework.ai.session.internal.InMemorySessionRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -43,7 +41,9 @@ class DefaultSessionServiceTests {
 
 	@BeforeEach
 	void setUp() {
-		this.service = new DefaultSessionService(InMemorySessionRepository.builder().build());
+		this.service = DefaultSessionService.builder()
+			.sessionRepository(InMemorySessionRepository.builder().build())
+			.build();
 	}
 
 	@Test
@@ -110,7 +110,7 @@ class DefaultSessionServiceTests {
 		}
 
 		CompactionResult result = this.service.compact(session.id(), req -> true,
-				new SlidingWindowCompactionStrategy(2));
+				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
 		assertThat(result.eventsRemoved()).isEqualTo(3);
 		assertThat(result.compactedEvents()).hasSize(2);
@@ -128,7 +128,7 @@ class DefaultSessionServiceTests {
 
 		// Trigger never fires — no compaction, no repository write
 		CompactionResult result = this.service.compact(session.id(), req -> false,
-				new SlidingWindowCompactionStrategy(10));
+				SlidingWindowCompactionStrategy.builder().maxEvents(10).build());
 
 		assertThat(result.archivedEvents()).isEmpty();
 		assertThat(result.eventsRemoved()).isZero();
@@ -142,7 +142,7 @@ class DefaultSessionServiceTests {
 
 		// Trigger fires but window is larger than event count — strategy returns no-op
 		CompactionResult result = this.service.compact(session.id(), req -> true,
-				new SlidingWindowCompactionStrategy(10));
+				SlidingWindowCompactionStrategy.builder().maxEvents(10).build());
 
 		assertThat(result.archivedEvents()).isEmpty();
 		assertThat(result.eventsRemoved()).isZero();
@@ -160,7 +160,7 @@ class DefaultSessionServiceTests {
 		// Session-object overload skips the internal findById() round-trip but must
 		// produce an identical result to the sessionId overload.
 		CompactionResult result = this.service.compact(session.id(), req -> true,
-				new SlidingWindowCompactionStrategy(2));
+				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
 		assertThat(result.eventsRemoved()).isEqualTo(3);
 		assertThat(result.compactedEvents()).hasSize(2);
@@ -211,7 +211,8 @@ class DefaultSessionServiceTests {
 				catch (InterruptedException e) {
 					Thread.currentThread().interrupt();
 				}
-				results[idx] = this.service.compact(session.id(), req -> true, new SlidingWindowCompactionStrategy(2));
+				results[idx] = this.service.compact(session.id(), req -> true,
+						SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 			});
 		}
 

@@ -134,7 +134,7 @@ SessionMemoryAdvisor sessionMemoryAdvisor(SessionService sessionService) {
         .defaultUserId("alice")
         // Compact when 20 turns accumulate, keeping the last 10 events
         .compactionTrigger(new TurnCountTrigger(20))
-        .compactionStrategy(new SlidingWindowCompactionStrategy(10))
+        .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
         .build();
 }
 

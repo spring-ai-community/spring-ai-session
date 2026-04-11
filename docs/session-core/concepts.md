@@ -271,6 +271,8 @@ org.springframework.ai.session          (Java package — unchanged from upstrea
 ├── SessionRepository.java              – persistence SPI
 ├── CreateSessionRequest.java           – builder for session creation parameters
 ├── EventFilter.java                    – composable criteria for event retrieval
+├── DefaultSessionService.java          – default SessionService implementation
+├── InMemorySessionRepository.java      – ConcurrentHashMap-backed repository
 │
 ├── advisor/
 │   └── SessionMemoryAdvisor.java       – ChatClient advisor with auto-compaction
@@ -287,11 +289,7 @@ org.springframework.ai.session          (Java package — unchanged from upstrea
 │   ├── TurnWindowCompactionStrategy.java
 │   ├── TokenCountCompactionStrategy.java
 │   └── RecursiveSummarizationCompactionStrategy.java
-│
-├── internal/
-│   ├── DefaultSessionService.java      – default SessionService implementation
-│   └── InMemorySessionRepository.java  – ConcurrentHashMap-backed repository
-│
+││
 └── tool/
     └── SessionEventTools.java          – @Tool conversation_search (Recall Storage)
 ```

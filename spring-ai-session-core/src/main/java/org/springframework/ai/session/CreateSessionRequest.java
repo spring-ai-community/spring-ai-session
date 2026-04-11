@@ -40,12 +40,12 @@ public final class CreateSessionRequest {
 
 	private final Map<String, Object> metadata;
 
-	private CreateSessionRequest(Builder builder) {
-		Assert.hasText(builder.userId, "userId must not be null or empty");
-		this.id = builder.id;
-		this.userId = builder.userId;
-		this.timeToLive = builder.timeToLive;
-		this.metadata = Map.copyOf(builder.metadata);
+	private CreateSessionRequest(String id, String userId, Duration timeToLive, Map<String, Object> metadata) {
+		Assert.hasText(userId, "userId must not be null or empty");
+		this.id = id;
+		this.userId = userId;
+		this.timeToLive = timeToLive;
+		this.metadata = Map.copyOf(metadata);
 	}
 
 	/**
@@ -111,7 +111,7 @@ public final class CreateSessionRequest {
 		}
 
 		public CreateSessionRequest build() {
-			return new CreateSessionRequest(this);
+			return new CreateSessionRequest(this.id, this.userId, this.timeToLive, this.metadata);
 		}
 
 	}

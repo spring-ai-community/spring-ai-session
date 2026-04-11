@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.springframework.ai.session.internal;
+package org.springframework.ai.session;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -24,12 +24,6 @@ import java.util.UUID;
 
 import org.jspecify.annotations.Nullable;
 
-import org.springframework.ai.session.CreateSessionRequest;
-import org.springframework.ai.session.EventFilter;
-import org.springframework.ai.session.Session;
-import org.springframework.ai.session.SessionEvent;
-import org.springframework.ai.session.SessionRepository;
-import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionRequest;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -46,7 +40,7 @@ public class DefaultSessionService implements SessionService {
 
 	private final SessionRepository sessionRepository;
 
-	public DefaultSessionService(SessionRepository sessionRepository) {
+	private DefaultSessionService(SessionRepository sessionRepository) {
 		Assert.notNull(sessionRepository, "sessionRepository must not be null");
 		this.sessionRepository = sessionRepository;
 	}
@@ -139,5 +133,24 @@ public class DefaultSessionService implements SessionService {
 
 		return result;
 	}
+
+	public static Builder builder() {
+		return new Builder();
+	}
+
+	public static class Builder {
+
+		private SessionRepository sessionRepository;
+
+		public Builder sessionRepository(SessionRepository sessionRepository) {
+			this.sessionRepository = sessionRepository;
+			return this;
+		}
+
+		public DefaultSessionService build() {
+			return new DefaultSessionService(this.sessionRepository);
+		}
+
+	}	
 
 }

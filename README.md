@@ -74,12 +74,12 @@ spring-ai-session/
 **3. Wire a `SessionMemoryAdvisor` into your `ChatClient`:**
 
 ```java
-SessionService sessionService = new DefaultSessionService(InMemorySessionRepository.builder().build());
+SessionService sessionService = DefaultSessionService.builder().sessionRepository(InMemorySessionRepository.builder().build()).build();
 
 SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
     .defaultUserId("alice")
     .compactionTrigger(new TurnCountTrigger(20))
-    .compactionStrategy(new SlidingWindowCompactionStrategy(10))
+    .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
     .build();
 
 ChatClient client = ChatClient.builder(chatModel)

@@ -38,23 +38,13 @@ public final class TokenCountTrigger implements CompactionTrigger {
 	private final TokenCountEstimator tokenCountEstimator;
 
 	/**
-	 * Creates a trigger with the given threshold, using
-	 * {@link JTokkitTokenCountEstimator} to count tokens.
-	 * @param threshold minimum total token count that triggers compaction. Must be
-	 * positive.
-	 */
-	public TokenCountTrigger(int threshold) {
-		this(threshold, new JTokkitTokenCountEstimator());
-	}
-
-	/**
 	 * Creates a trigger with the given threshold and token count estimator.
 	 * @param threshold minimum total token count that triggers compaction. Must be
 	 * positive.
 	 * @param tokenCountEstimator estimator used to measure each event's token cost. Must
 	 * not be {@code null}.
 	 */
-	public TokenCountTrigger(int threshold, TokenCountEstimator tokenCountEstimator) {
+	private TokenCountTrigger(int threshold, TokenCountEstimator tokenCountEstimator) {
 		Assert.isTrue(threshold > 0, "threshold must be greater than 0");
 		Assert.notNull(tokenCountEstimator, "tokenCountEstimator must not be null");
 		this.threshold = threshold;
@@ -75,5 +65,34 @@ public final class TokenCountTrigger implements CompactionTrigger {
 	public int getThreshold() {
 		return this.threshold;
 	}
+
+	public static Builder builder() {
+		return new Builder();
+	}
+
+	public static class Builder {
+
+		private int threshold;
+
+		private TokenCountEstimator tokenCountEstimator;
+
+		private Builder() {
+		}
+
+		public Builder threshold(int threshold) {
+			this.threshold = threshold;
+			return this;
+		}
+
+		public Builder tokenCountEstimator(TokenCountEstimator tokenCountEstimator) {
+			this.tokenCountEstimator = tokenCountEstimator;
+			return this;
+		}
+
+		public TokenCountTrigger build() {
+			return new TokenCountTrigger(this.threshold, this.tokenCountEstimator);
+		}
+
+	}	
 
 }

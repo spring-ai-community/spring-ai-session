@@ -38,7 +38,7 @@ class SlidingWindowCompactionStrategyTests {
 
 	@Test
 	void eventsUnderLimitNoCompaction() {
-		SlidingWindowCompactionStrategy strategy = new SlidingWindowCompactionStrategy(5);
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(5).build();
 		List<SessionEvent> events = buildRealEvents(3);
 		CompactionRequest context = contextFor(events);
 
@@ -51,7 +51,7 @@ class SlidingWindowCompactionStrategyTests {
 
 	@Test
 	void eventsAtExactLimitNoCompaction() {
-		SlidingWindowCompactionStrategy strategy = new SlidingWindowCompactionStrategy(3);
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(3).build();
 		List<SessionEvent> events = buildRealEvents(3);
 		CompactionRequest context = contextFor(events);
 
@@ -63,7 +63,7 @@ class SlidingWindowCompactionStrategyTests {
 
 	@Test
 	void eventsOverLimitKeepsLastMaxEvents() {
-		SlidingWindowCompactionStrategy strategy = new SlidingWindowCompactionStrategy(3);
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(3).build();
 		List<SessionEvent> events = buildRealEvents(5);
 		CompactionRequest context = contextFor(events);
 
@@ -80,7 +80,7 @@ class SlidingWindowCompactionStrategyTests {
 
 	@Test
 	void syntheticEventsAlwaysPreservedAndPlacedFirst() {
-		SlidingWindowCompactionStrategy strategy = new SlidingWindowCompactionStrategy(3);
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(3).build();
 
 		List<SessionEvent> events = new ArrayList<>();
 		// One summary turn = 2 synthetic events (USER shadow + ASSISTANT summary)
@@ -119,7 +119,7 @@ class SlidingWindowCompactionStrategyTests {
 
 	@Test
 	void eventsRemovedCountIsCorrect() {
-		SlidingWindowCompactionStrategy strategy = new SlidingWindowCompactionStrategy(2);
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(2).build();
 		List<SessionEvent> events = buildRealEvents(7);
 		CompactionRequest context = contextFor(events);
 
@@ -132,13 +132,14 @@ class SlidingWindowCompactionStrategyTests {
 
 	@Test
 	void maxEventsZeroIsRejected() {
-		assertThatThrownBy(() -> new SlidingWindowCompactionStrategy(0)).isInstanceOf(IllegalArgumentException.class)
+		assertThatThrownBy(() -> SlidingWindowCompactionStrategy.builder().maxEvents(0).build())
+			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("maxEvents must be greater than 0");
 	}
 
 	@Test
 	void nullEventsIsRejected() {
-		SlidingWindowCompactionStrategy strategy = new SlidingWindowCompactionStrategy(5);
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(5).build();
 		assertThatThrownBy(() -> strategy.compact(null)).isInstanceOf(IllegalArgumentException.class);
 	}
 
@@ -149,7 +150,7 @@ class SlidingWindowCompactionStrategyTests {
 		// Raw cutIndex = 6 - 3 = 3 → real[3] = a2 (ASSISTANT — not a turn start)
 		// Snap forward: real[3]=a2(ASSISTANT) → real[4]=u3(USER) → cutIndex=4
 		// Kept: [u3, a3], Archived: [u1, a1, u2, a2]
-		SlidingWindowCompactionStrategy strategy = new SlidingWindowCompactionStrategy(3);
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(3).build();
 
 		List<SessionEvent> events = new ArrayList<>();
 		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build());
@@ -173,7 +174,7 @@ class SlidingWindowCompactionStrategyTests {
 	@Test
 	void keptWindowAlwaysStartsAtUserMessage() {
 		// Any compacted result that is non-empty must begin with a USER event
-		SlidingWindowCompactionStrategy strategy = new SlidingWindowCompactionStrategy(2);
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(2).build();
 
 		List<SessionEvent> events = new ArrayList<>();
 		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("q1")).build());

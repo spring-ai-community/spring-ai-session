@@ -28,8 +28,6 @@ import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.compaction.TokenCountCompactionStrategy;
 import org.springframework.ai.session.compaction.TurnWindowCompactionStrategy;
-import org.springframework.ai.session.internal.DefaultSessionService;
-import org.springframework.ai.session.internal.InMemorySessionRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -182,7 +180,7 @@ class SessionMemoryIT {
 		}
 
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
-				new SlidingWindowCompactionStrategy(4));
+				SlidingWindowCompactionStrategy.builder().maxEvents(4).build());
 
 		assertThat(result.eventsRemoved()).isPositive();
 		assertThat(result.compactedEvents()).hasSizeLessThanOrEqualTo(4);
@@ -204,7 +202,7 @@ class SessionMemoryIT {
 		}
 
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
-				new TurnWindowCompactionStrategy(2));
+				TurnWindowCompactionStrategy.builder().maxTurns(2).build());
 
 		assertThat(result.eventsRemoved()).isPositive();
 
@@ -226,7 +224,7 @@ class SessionMemoryIT {
 
 		// Very small token budget forces compaction
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
-				new TokenCountCompactionStrategy(20));
+				TokenCountCompactionStrategy.builder().maxTokens(20).build());
 
 		assertThat(result.eventsRemoved()).isPositive();
 		assertThat(result.compactedEvents().size()).isLessThan(10);
@@ -245,7 +243,7 @@ class SessionMemoryIT {
 
 		// Large window — no compaction needed
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
-				new SlidingWindowCompactionStrategy(100));
+				SlidingWindowCompactionStrategy.builder().maxEvents(100).build());
 
 		assertThat(result.eventsRemoved()).isEqualTo(0);
 		assertThat(result.compactedEvents()).hasSize(2);
@@ -276,7 +274,7 @@ class SessionMemoryIT {
 
 		// Compact aggressively — only 1 real event slot
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
-				new SlidingWindowCompactionStrategy(1));
+				SlidingWindowCompactionStrategy.builder().maxEvents(1).build());
 
 		// Synthetic events must survive compaction
 		long syntheticCount = result.compactedEvents().stream().filter(SessionEvent::isSynthetic).count();
@@ -368,7 +366,7 @@ class SessionMemoryIT {
 
 		@Bean
 		SessionService sessionService(SessionRepository sessionRepository) {
-			return new DefaultSessionService(sessionRepository);
+			return DefaultSessionService.builder().sessionRepository(sessionRepository).build();
 		}
 
 	}

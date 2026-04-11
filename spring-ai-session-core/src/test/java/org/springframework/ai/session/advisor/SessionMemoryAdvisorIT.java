@@ -40,8 +40,8 @@ import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.compaction.TurnCountTrigger;
-import org.springframework.ai.session.internal.DefaultSessionService;
-import org.springframework.ai.session.internal.InMemorySessionRepository;
+import org.springframework.ai.session.DefaultSessionService;
+import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -182,7 +182,7 @@ class SessionMemoryAdvisorIT {
 		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.defaultSessionId(this.sessionId)
 			.compactionTrigger(new TurnCountTrigger(2))
-			.compactionStrategy(new SlidingWindowCompactionStrategy(2))
+			.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(2).build())
 			.build();
 
 		AdvisorChain chain = mock(AdvisorChain.class);
@@ -321,7 +321,7 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void builderRejectsOnlyStrategyWithoutTrigger() {
 		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService)
-			.compactionStrategy(new SlidingWindowCompactionStrategy(5))
+			.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(5).build())
 			.build()).isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("compactionTrigger and compactionStrategy must be set together");
 	}
@@ -358,7 +358,7 @@ class SessionMemoryAdvisorIT {
 
 		@Bean
 		SessionService sessionService(SessionRepository sessionRepository) {
-			return new DefaultSessionService(sessionRepository);
+			return DefaultSessionService.builder().sessionRepository(sessionRepository).build();
 		}
 
 		@Bean
