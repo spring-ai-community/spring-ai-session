@@ -22,13 +22,13 @@
     <parent>
         <groupId>org.springaicommunity</groupId>
         <artifactId>spring-ai-session-parent</artifactId>
-        <version>0.2.0</version>
+        <version>0.2.1-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <groupId>org.springaicommunity</groupId>
     <artifactId>spring-ai-session-jdbc</artifactId>
-    <version>0.2.0</version>
+    <version>0.2.1-SNAPSHOT</version>
 
     <name>Spring AI Session JDBC</name>
     <description>JDBC-backed SessionRepository implementation for Spring AI Session</description>
