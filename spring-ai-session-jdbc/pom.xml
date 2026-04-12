@@ -44,7 +44,7 @@
     <dependencies>
         <dependency>
             <groupId>org.springaicommunity</groupId>
-            <artifactId>spring-ai-session-core</artifactId>
+            <artifactId>spring-ai-session-management</artifactId>
             <version>${project.version}</version>
         </dependency>
 

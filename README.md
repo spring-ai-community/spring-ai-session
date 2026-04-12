@@ -20,7 +20,7 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 
 ```
 spring-ai-session/
-├── spring-ai-session-core/                              # Core SPI, compaction framework, SessionMemoryAdvisor
+├── spring-ai-session-management/                              # Core SPI, compaction framework, SessionMemoryAdvisor
 ├── spring-ai-session-jdbc/                              # JDBC-backed SessionRepository (PostgreSQL, MySQL, H2)
 ├── spring-ai-session-bom/                               # Bill of Materials for version management
 └── auto-configurations/
@@ -35,7 +35,7 @@ spring-ai-session/
 
 | Module | Artifact | Description |
 |--------|----------|-------------|
-| **Session Core** | `spring-ai-session-core` | `Session`, `SessionEvent`, `SessionService`, `SessionRepository` SPI, compaction framework, `SessionMemoryAdvisor` |
+| **Session Management** | `spring-ai-session-management` | `Session`, `SessionEvent`, `SessionService`, `SessionRepository` SPI, compaction framework, `SessionMemoryAdvisor` |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
@@ -66,13 +66,13 @@ spring-ai-session/
 <!-- Core only (in-memory repository) -->
 <dependency>
     <groupId>org.springaicommunity</groupId>
-    <artifactId>spring-ai-session-core</artifactId>
+    <artifactId>spring-ai-session-management</artifactId>
 </dependency>
 
-<!-- Or JDBC auto-configuration (Spring Boot) -->
+<!-- Or JDBC starter (Spring Boot, recommended) -->
 <dependency>
     <groupId>org.springaicommunity</groupId>
-    <artifactId>spring-ai-autoconfigure-session-jdbc</artifactId>
+    <artifactId>spring-ai-starter-session-jdbc</artifactId>
 </dependency>
 ```
 
@@ -108,18 +108,18 @@ Full reference documentation is available at:
 Topics covered:
 
 - [Getting Started](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/getting-started/) — setup options (in-memory, JDBC auto-config, JDBC manual)
-- [Core Concepts](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/concepts/) — `Session`, `SessionEvent`, turns, and architecture
-- [Event Filtering](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/event-filtering/) — composable `EventFilter` API
-- [Context Compaction](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/compaction/) — triggers, strategies, turn-boundary safety
-- [ChatClient Integration](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/chat-client/) — `SessionMemoryAdvisor` setup and options
-- [Multi-Agent Branch Isolation](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/multi-agent/) — sharing sessions across parallel agents
-- [Recall Storage](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-core/recall-storage/) — keyword search over the full verbatim history
+- [Session Concepts](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/concepts/) — `Session`, `SessionEvent`, turns, and architecture
+- [Event Filtering](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/event-filtering/) — composable `EventFilter` API
+- [Context Compaction](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/compaction/) — triggers, strategies, turn-boundary safety
+- [ChatClient Integration](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/chat-client/) — `SessionMemoryAdvisor` setup and options
+- [Multi-Agent Branch Isolation](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/multi-agent/) — sharing sessions across parallel agents
+- [Recall Storage](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/recall-storage/) — keyword search over the full verbatim history
 - [Session JDBC](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-jdbc/) — JDBC repository setup, schema, and design notes
 
 ## Requirements
 
 - Java 17+
-- Spring AI `2.0.0-SNAPSHOT`
+- Spring AI `2.0.0-M4+`
 - Spring Boot `4.0.2+`
 - Maven 3.6+
 

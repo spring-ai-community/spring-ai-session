@@ -3,7 +3,7 @@
 ## Requirements
 
 - Java 17+
-- Spring AI `2.0.0-SNAPSHOT`
+- Spring AI `2.0.0-M4+`
 - Spring Boot `4.0.2+`
 
 ---
@@ -32,12 +32,12 @@ Import the BOM so all module versions stay in sync:
 
 === "In-memory (no persistence)"
 
-    Add the core module:
+    Add the session management module:
 
     ```xml
     <dependency>
         <groupId>org.springaicommunity</groupId>
-        <artifactId>spring-ai-session-core</artifactId>
+        <artifactId>spring-ai-session-management</artifactId>
     </dependency>
     ```
 
@@ -174,7 +174,7 @@ Spring AI Session is available from the Spring snapshot repository:
 
 ## Next steps
 
-- [Core Concepts](session-core/concepts.md) — understand `Session`, `SessionEvent`, and turns
-- [Context Compaction](session-core/compaction.md) — configure triggers and strategies
-- [Multi-Agent Branch Isolation](session-core/multi-agent.md) — share sessions across agents safely
+- [Session Concepts](session-management/concepts.md) — understand `Session`, `SessionEvent`, and turns
+- [Context Compaction](session-management/compaction.md) — configure triggers and strategies
+- [Multi-Agent Branch Isolation](session-management/multi-agent.md) — share sessions across agents safely
 - [Session JDBC](session-jdbc/index.md) — persistent JDBC-backed repository

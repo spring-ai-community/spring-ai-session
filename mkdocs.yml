@@ -39,13 +39,13 @@ theme:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
-  - Session Core:
-      - Core Concepts: session-core/concepts.md
-      - Event Filtering: session-core/event-filtering.md
-      - Context Compaction: session-core/compaction.md
-      - ChatClient Integration: session-core/chat-client.md
-      - Multi-Agent Branch Isolation: session-core/multi-agent.md
-      - Recall Storage: session-core/recall-storage.md
+  - Session Management:
+      - Session Concepts: session-management/concepts.md
+      - Event Filtering: session-management/event-filtering.md
+      - Context Compaction: session-management/compaction.md
+      - ChatClient Integration: session-management/chat-client.md
+      - Multi-Agent Branch Isolation: session-management/multi-agent.md
+      - Recall Storage: session-management/recall-storage.md
   - Session JDBC:
       - Overview & Setup: session-jdbc/index.md
       - Auto-configuration: session-jdbc/auto-configuration.md

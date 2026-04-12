@@ -27,11 +27,11 @@
     </parent>
 
     <groupId>org.springaicommunity</groupId>
-    <artifactId>spring-ai-session-core</artifactId>
+    <artifactId>spring-ai-session-management</artifactId>
     <version>0.2.0-SNAPSHOT</version>
 
-    <name>Spring AI Session Core</name>
-    <description>Spring AI Session Core - conversation management with compaction strategies</description>
+    <name>Spring AI Session Management</name>
+    <description>Spring AI Session Management - conversation management with compaction strategies</description>
 
     <url>https://github.com/spring-ai-community/spring-ai-session</url>
 

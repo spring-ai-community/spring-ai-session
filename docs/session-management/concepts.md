@@ -1,4 +1,4 @@
-# Core Concepts
+# Session Concepts
 
 Spring AI Session introduces four closely related concepts that together describe how a
 conversation is stored, structured, and managed over time.

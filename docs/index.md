@@ -26,9 +26,11 @@ Spring AI Session solves this with three ideas working together:
 
 | Module | Artifact | Description |
 |--------|----------|-------------|
-| **Session Core** | `spring-ai-session-core` | Core SPI: `Session`, `SessionEvent`, `SessionService`, `SessionRepository`, compaction framework, `SessionMemoryAdvisor` |
+| **Session Management** | `spring-ai-session-management` | Core SPI: `Session`, `SessionEvent`, `SessionService`, `SessionRepository`, compaction framework, `SessionMemoryAdvisor` |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, H2, and MariaDB |
+| **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
+| **Session JDBC Starter** | `spring-ai-starter-session-jdbc` | Spring Boot starter — one dependency for a fully wired JDBC session setup |
 | **Session BOM** | `spring-ai-session-bom` | Bill of Materials for managing all module versions together |
 
 ---
@@ -90,7 +92,7 @@ String answer = client.prompt().user("What is Spring AI?").call().content();
 ## Requirements
 
 - Java 17+
-- Spring AI `2.0.0-SNAPSHOT`
+- Spring AI `2.0.0-M4+`
 - Spring Boot `4.0.2+`
 
 ---

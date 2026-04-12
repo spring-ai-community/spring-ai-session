@@ -143,5 +143,5 @@ an in-process scan.
 ## See also
 
 - [Auto-configuration](auto-configuration.md) — let Spring Boot wire everything automatically
-- [Core Concepts](../session-core/concepts.md) — `SessionRepository` SPI details
-- [Context Compaction](../session-core/compaction.md) — optimistic-lock compaction with JDBC
+- [Session Concepts](../session-management/concepts.md) — `SessionRepository` SPI details
+- [Context Compaction](../session-management/compaction.md) — optimistic-lock compaction with JDBC
