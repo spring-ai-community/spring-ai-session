@@ -20,6 +20,8 @@ Spring AI Session solves this with three ideas working together:
    swap the default in-memory store for JDBC, Redis, or any other backend without
    changing application code.
 
+![Spring AI Session API Classes](./images/spring-ai-session-api-classes.png)
+
 ---
 
 ## Modules

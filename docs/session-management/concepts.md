@@ -174,42 +174,7 @@ unit.
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────┐
-│              SessionMemoryAdvisor           │  ← ChatClient integration
-└─────────────────────┬───────────────────────┘
-                      │ uses
-┌─────────────────────▼───────────────────────┐
-│                SessionService               │  ← primary API
-│  create / find / delete / compact           │
-└──────────┬──────────────────────┬───────────┘
-           │                      │
-┌──────────▼──────────┐  ┌────────▼───────────────────────────────┐
-│  SessionRepository  │  │        Compaction Framework            │
-│  (persistence SPI)  │  │  Trigger ──► Strategy ──► Result       │
-│                     │  │                                        │
-│  save               │  │  CompactionRequest(session, events,    │
-│  findById           │  │    eventCount, turnCount)              │
-│  findByUserId       │  │                                        │
-│  findExpiredIds     │  │  Events are fetched from the           │
-│  delete             │  │  repository and passed explicitly      │
-│  appendEvent        │  │  — no events on Session itself         │
-│  replaceEvents      │  └────────────────────────────────────────┘
-│  replaceEvents(CAS) │
-│  getEventVersion    │
-│  findEvents         │
-└──────────┬──────────┘
-           │
-┌──────────▼─────────────────────────────────────┐
-│         InMemorySessionRepository              │
-│  ConcurrentHashMap<id, SessionData>            │
-│  SessionData = (Session, List<Event>, version) │
-│  All mutations are atomic via compute()        │
-│                                                │
-│  Swap for JDBC, Redis, etc. by implementing    │
-│  SessionRepository                             │
-└────────────────────────────────────────────────┘
-```
+![Spring AI Session API Classes](../images/spring-ai-session-api-classes.png)
 
 **Why `Session` carries no events**
 
