@@ -20,9 +20,9 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 
 ```
 spring-ai-session/
-├── spring-ai-session-management/                              # Core SPI, compaction framework, SessionMemoryAdvisor
-├── spring-ai-session-jdbc/                              # JDBC-backed SessionRepository (PostgreSQL, MySQL, H2)
-├── spring-ai-session-bom/                               # Bill of Materials for version management
+├── spring-ai-session-bom/                               # Bill of Materials for version 
+├── spring-ai-session-management/                        # Core SPI, compaction framework, SessionMemoryAdvisor
+├── spring-ai-session-jdbc/                              # JDBC-backed SessionRepository (PostgreSQL, MySQL, H2) management
 └── auto-configurations/
     └── session/
         ├── spring-ai-autoconfigure-session/             # Spring Boot auto-configuration for DefaultSessionService
@@ -52,7 +52,7 @@ spring-ai-session/
         <dependency>
             <groupId>org.springaicommunity</groupId>
             <artifactId>spring-ai-session-bom</artifactId>
-            <version>0.1.0-SNAPSHOT</version>
+            <version>0.3.0-SNAPSHOT</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
