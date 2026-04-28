@@ -2,7 +2,7 @@
 
 `spring-ai-session-jdbc` provides a JDBC-backed implementation of `SessionRepository`
 that stores session data in two relational tables. It supports PostgreSQL, MySQL, MariaDB,
-and H2 out of the box.
+Oracle, and H2 out of the box.
 
 ---
 
@@ -40,6 +40,7 @@ DDL scripts are bundled on the classpath. Run the one matching your database:
 | PostgreSQL | `org/springframework/ai/session/jdbc/schema-postgresql.sql` |
 | H2 | `org/springframework/ai/session/jdbc/schema-h2.sql` |
 | MySQL / MariaDB | `org/springframework/ai/session/jdbc/schema-mysql.sql` |
+| Oracle | `org/springframework/ai/session/jdbc/schema-oracle.sql` |
 
 Apply the schema with Spring Boot's SQL initialisation:
 
@@ -116,6 +117,7 @@ List<SessionEvent> events = sessions.findEvents(session.id(), EventFilter.builde
 | PostgreSQL | `PostgresJdbcSessionRepositoryDialect` |
 | H2 | `H2JdbcSessionRepositoryDialect` |
 | MySQL / MariaDB | `MysqlJdbcSessionRepositoryDialect` |
+| Oracle | `OracleJdbcSessionRepositoryDialect` |
 
 Other databases default to the PostgreSQL dialect. Open an issue or contribute a dialect
 implementation for additional databases.

@@ -17,6 +17,7 @@
 package org.springframework.ai.session.jdbc;
 
 import java.sql.DatabaseMetaData;
+import java.util.List;
 
 import javax.sql.DataSource;
 
@@ -40,6 +41,7 @@ import org.springframework.jdbc.support.JdbcUtils;
  * @see PostgresJdbcSessionRepositoryDialect
  * @see H2JdbcSessionRepositoryDialect
  * @see MysqlJdbcSessionRepositoryDialect
+ * @see OracleJdbcSessionRepositoryDialect
  */
 public interface JdbcSessionRepositoryDialect {
 
@@ -72,6 +74,21 @@ public interface JdbcSessionRepositoryDialect {
 	String getKeywordFilterFragment();
 
 	/**
+	 * Ordering + limiting clause used when {@link org.springframework.ai.session.EventFilter#lastN()}
+	 * is provided.
+	 */
+	default String getLastNClause() {
+		return "ORDER BY e.timestamp DESC LIMIT ? ";
+	}
+
+	/**
+	 * Ordering + pagination clause used when
+	 * {@link org.springframework.ai.session.EventFilter#pageSize()} is provided.
+	 */
+	default String getPagedClause() {
+		return "ORDER BY e.timestamp ASC LIMIT ? OFFSET ? ";
+	}
+	/**
 	 * Detects the best-matching dialect for the given {@link DataSource}.
 	 */
 	static JdbcSessionRepositoryDialect from(DataSource dataSource) {
@@ -91,6 +108,7 @@ public interface JdbcSessionRepositoryDialect {
 			case "PostgreSQL" -> new PostgresJdbcSessionRepositoryDialect();
 			case "H2" -> new H2JdbcSessionRepositoryDialect();
 			case "MySQL", "MariaDB" -> new MysqlJdbcSessionRepositoryDialect();
+			case "Oracle" -> new OracleJdbcSessionRepositoryDialect();
 			default -> {
 				logger.warn("No specific dialect for '{}'; defaulting to PostgreSQL dialect.", productName);
 				yield new PostgresJdbcSessionRepositoryDialect();

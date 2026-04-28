@@ -16,6 +16,8 @@
 
 package org.springframework.ai.session.jdbc;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -27,14 +29,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import javax.sql.DataSource;
-
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import tools.jackson.core.JacksonException;
-import tools.jackson.core.type.TypeReference;
-import tools.jackson.databind.json.JsonMapper;
+
+import oracle.jdbc.provider.oson.OsonFactory;
+import oracle.sql.json.OracleJsonDatum;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -49,100 +52,49 @@ import org.springframework.ai.session.SessionRepository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import javax.sql.DataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.Assert;
 
 /**
- * JDBC-backed implementation of {@link SessionRepository}.
- *
- * <h2>Schema</h2>
- * <p>
- * Two tables are required:
- * <ul>
- * <li>{@code AI_SESSION} — session metadata (id, user_id, TTL, metadata JSON,
- * event_version)</li>
- * <li>{@code AI_SESSION_EVENT} — append-only event log (FK → AI_SESSION)</li>
- * </ul>
- * SQL DDL scripts for supported databases are bundled under
- * {@code classpath:org/springframework/ai/session/jdbc/}.
- *
- * <h2>Message serialization</h2>
- * <p>
- * Each {@link SessionEvent}'s wrapped {@link Message} is stored across three columns:
- * <ul>
- * <li>{@code message_type} — the {@link MessageType} name</li>
- * <li>{@code message_content} — plain text ({@code message.getText()})</li>
- * <li>{@code message_data} — JSON blob for type-specific structured data
- * ({@link AssistantMessage.ToolCall} list or {@link ToolResponseMessage.ToolResponse}
- * list)</li>
- * </ul>
- *
- * <h2>Optimistic concurrency (CAS)</h2>
- * <p>
- * The {@code event_version} column in {@code AI_SESSION} is incremented atomically on
- * every {@link #appendEvent} and {@link #replaceEvents} call. The CAS variant of
- * {@code replaceEvents} guards compaction by issuing a conditional
- * {@code UPDATE … WHERE event_version = ?} first; if zero rows are updated the swap is
- * abandoned and {@code false} is returned.
- *
- * <h2>Thread safety</h2>
- * <p>
- * All mutating operations are wrapped in a {@link TransactionTemplate}. The class is
- * thread-safe as long as the underlying {@link DataSource} is.
- *
- * @author Christian Tzolov
- * @since 2.0.0
+ * Oracle-specific {@link SessionRepository} that binds JSON columns as OSON
+ * {@code byte[]} payloads.
  */
-public final class JdbcSessionRepository implements SessionRepository {
+public class OracleJdbcSessionRepository implements SessionRepository {
 
-	private static final Logger logger = LoggerFactory.getLogger(JdbcSessionRepository.class);
+	private static final Logger logger = LoggerFactory.getLogger(OracleJdbcSessionRepository.class);
 
-	// @formatter:off
+	private static final String SELECT_SESSION_BY_ID = "SELECT id, user_id, created_at, expires_at, metadata, event_version"
+			+ " FROM AI_SESSION WHERE id = ?";
 
-	private static final String SELECT_SESSION_BY_ID =
-		"SELECT id, user_id, created_at, expires_at, metadata, event_version"
-		+ " FROM AI_SESSION WHERE id = ?";
+	private static final String SELECT_SESSIONS_BY_USER = "SELECT id, user_id, created_at, expires_at, metadata, event_version"
+			+ " FROM AI_SESSION WHERE user_id = ?";
 
-	private static final String SELECT_SESSIONS_BY_USER =
-		"SELECT id, user_id, created_at, expires_at, metadata, event_version"
-		+ " FROM AI_SESSION WHERE user_id = ?";
+	private static final String SELECT_EXPIRED_SESSION_IDS = "SELECT id FROM AI_SESSION WHERE expires_at IS NOT NULL AND expires_at < ?";
 
-	private static final String SELECT_EXPIRED_SESSION_IDS =
-		"SELECT id FROM AI_SESSION WHERE expires_at IS NOT NULL AND expires_at < ?";
+	private static final String DELETE_SESSION = "DELETE FROM AI_SESSION WHERE id = ?";
 
-	private static final String DELETE_SESSION =
-		"DELETE FROM AI_SESSION WHERE id = ?";
+	private static final String INSERT_EVENT = "INSERT INTO AI_SESSION_EVENT"
+			+ " (id, session_id, timestamp, message_type, message_content, message_data,"
+			+ "  synthetic, branch, metadata)"
+			+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-	private static final String INSERT_EVENT =
-		"INSERT INTO AI_SESSION_EVENT"
-		+ " (id, session_id, timestamp, message_type, message_content, message_data,"
-		+ "  synthetic, branch, metadata)"
-		+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	private static final String INCREMENT_EVENT_VERSION = "UPDATE AI_SESSION SET event_version = event_version + 1 WHERE id = ?";
 
-	private static final String INCREMENT_EVENT_VERSION =
-		"UPDATE AI_SESSION SET event_version = event_version + 1 WHERE id = ?";
+	private static final String CAS_INCREMENT_EVENT_VERSION = "UPDATE AI_SESSION SET event_version = event_version + 1"
+			+ " WHERE id = ? AND event_version = ?";
 
-	private static final String CAS_INCREMENT_EVENT_VERSION =
-		"UPDATE AI_SESSION SET event_version = event_version + 1"
-		+ " WHERE id = ? AND event_version = ?";
+	private static final String GET_EVENT_VERSION = "SELECT event_version FROM AI_SESSION WHERE id = ?";
 
-	private static final String GET_EVENT_VERSION =
-		"SELECT event_version FROM AI_SESSION WHERE id = ?";
+	private static final String COUNT_SESSION = "SELECT COUNT(*) FROM AI_SESSION WHERE id = ?";
 
-	private static final String COUNT_SESSION =
-		"SELECT COUNT(*) FROM AI_SESSION WHERE id = ?";
+	private static final String DELETE_EVENTS = "DELETE FROM AI_SESSION_EVENT WHERE session_id = ?";
 
-	private static final String DELETE_EVENTS =
-		"DELETE FROM AI_SESSION_EVENT WHERE session_id = ?";
-
-	private static final String SELECT_EVENTS_BASE =
-		"SELECT e.id, e.session_id, e.timestamp, e.message_type, e.message_content,"
-		+ "       e.message_data, e.synthetic, e.branch, e.metadata"
-		+ " FROM AI_SESSION_EVENT e"
-		+ " WHERE e.session_id = ? ";
-
-	// @formatter:on
+	private static final String SELECT_EVENTS_BASE = "SELECT e.id, e.session_id, e.timestamp, e.message_type, e.message_content,"
+			+ "       e.message_data, e.synthetic, e.branch, e.metadata"
+			+ " FROM AI_SESSION_EVENT e"
+			+ " WHERE e.session_id = ? ";
 
 	private final JdbcTemplate jdbcTemplate;
 
@@ -150,39 +102,43 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 	private final JdbcSessionRepositoryDialect dialect;
 
-	private final JsonMapper jsonMapper;
+	private final JsonMapper osonMapper;
 
-	private JdbcSessionRepository(JdbcTemplate jdbcTemplate, JdbcSessionRepositoryDialect dialect,
-			PlatformTransactionManager txManager, JsonMapper jsonMapper) {
+	private final RowMapper<Session> sessionRowMapper = new SessionRowMapper();
+
+	private final RowMapper<SessionEvent> sessionEventRowMapper = new SessionEventRowMapper();
+
+	private OracleJdbcSessionRepository(JdbcTemplate jdbcTemplate, JdbcSessionRepositoryDialect dialect,
+										PlatformTransactionManager txManager, JsonMapper jsonMapper) {
+		Assert.notNull(jdbcTemplate, "jdbcTemplate must not be null");
+		Assert.notNull(dialect, "dialect must not be null");
+		Assert.notNull(txManager, "txManager must not be null");
+		Assert.notNull(jsonMapper, "objectMapper must not be null");
 		this.jdbcTemplate = jdbcTemplate;
 		this.dialect = dialect;
 		this.transactionTemplate = new TransactionTemplate(txManager);
-		this.jsonMapper = jsonMapper;
+		this.osonMapper = jsonMapper;
 	}
-
-	// -------------------------------------------------------------------------
-	// SessionRepository — session lifecycle
-	// -------------------------------------------------------------------------
 
 	@Override
 	public Session save(Session session) {
 		Assert.notNull(session, "session must not be null");
 		this.jdbcTemplate.update(this.dialect.getUpsertSessionSql(), session.id(), session.userId(),
-				toTimestamp(session.createdAt()), toTimestamp(session.expiresAt()), toJson(session.metadata()));
+				toTimestamp(session.createdAt()), toTimestamp(session.expiresAt()), toJsonValue(session.metadata()));
 		return session;
 	}
 
 	@Override
 	public Optional<Session> findById(String sessionId) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
-		List<Session> results = this.jdbcTemplate.query(SELECT_SESSION_BY_ID, new SessionRowMapper(), sessionId);
+		List<Session> results = this.jdbcTemplate.query(SELECT_SESSION_BY_ID, this.sessionRowMapper, sessionId);
 		return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
 	}
 
 	@Override
 	public List<Session> findByUserId(String userId) {
 		Assert.hasText(userId, "userId must not be null or empty");
-		return this.jdbcTemplate.query(SELECT_SESSIONS_BY_USER, new SessionRowMapper(), userId);
+		return this.jdbcTemplate.query(SELECT_SESSIONS_BY_USER, this.sessionRowMapper, userId);
 	}
 
 	@Override
@@ -196,10 +152,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		this.jdbcTemplate.update(DELETE_SESSION, sessionId);
 	}
-
-	// -------------------------------------------------------------------------
-	// SessionRepository — event log
-	// -------------------------------------------------------------------------
 
 	@Override
 	public void appendEvent(SessionEvent event) {
@@ -232,8 +184,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 		Assert.notNull(events, "events must not be null");
 		requireSessionExists(sessionId);
 		Boolean success = this.transactionTemplate.execute(status -> {
-			// Atomically claim the version slot. If another writer already changed it,
-			// 0 rows are updated and we bail out without touching the event log.
 			int updated = this.jdbcTemplate.update(CAS_INCREMENT_EVENT_VERSION, sessionId, expectedVersion);
 			if (updated == 0) {
 				return false;
@@ -256,7 +206,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 	public List<SessionEvent> findEvents(String sessionId, EventFilter filter) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(filter, "filter must not be null");
-
 		StringBuilder sql = new StringBuilder(SELECT_EVENTS_BASE);
 		List<Object> params = new ArrayList<>();
 		params.add(sessionId);
@@ -281,8 +230,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 			params.add(false);
 		}
 		if (filter.branch() != null) {
-			// Visibility: null branch (root events) OR exact match OR caller is a
-			// descendant (filterBranch starts with eventBranch + '.')
 			sql.append("AND (e.branch IS NULL OR e.branch = ? OR ? LIKE e.branch || '.%') ");
 			params.add(filter.branch());
 			params.add(filter.branch());
@@ -299,33 +246,27 @@ public final class JdbcSessionRepository implements SessionRepository {
 		else if (filter.pageSize() != null) {
 			int page = filter.page() != null ? filter.page() : 0;
 			sql.append(this.dialect.getPagedClause());
-			params.add(filter.pageSize());
 			params.add((long) page * filter.pageSize());
+			params.add(filter.pageSize());
 		}
 		else {
 			sql.append("ORDER BY e.timestamp ASC ");
 		}
 
-		List<SessionEvent> result = this.jdbcTemplate.query(sql.toString(), new SessionEventRowMapper(),
+		List<SessionEvent> result = this.jdbcTemplate.query(sql.toString(), this.sessionEventRowMapper,
 				params.toArray());
-
 		if (filter.lastN() != null) {
 			result = new ArrayList<>(result);
 			Collections.reverse(result);
 		}
-
 		return Collections.unmodifiableList(result);
 	}
-
-	// -------------------------------------------------------------------------
-	// Internal helpers
-	// -------------------------------------------------------------------------
 
 	private void insertEvent(SessionEvent event) {
 		Message msg = event.getMessage();
 		this.jdbcTemplate.update(INSERT_EVENT, event.getId(), event.getSessionId(), toTimestamp(event.getTimestamp()),
 				msg.getMessageType().name(), msg.getText(), messageDataToJson(msg), event.isSynthetic(),
-				event.getBranch(), toJson(event.getMetadata()));
+				event.getBranch(), toJsonValue(event.getMetadata()));
 	}
 
 	private void requireSessionExists(String sessionId) {
@@ -335,67 +276,60 @@ public final class JdbcSessionRepository implements SessionRepository {
 		}
 	}
 
-	@Nullable private Timestamp toTimestamp(@Nullable Instant instant) {
+	@Nullable
+	private Timestamp toTimestamp(@Nullable Instant instant) {
 		return instant != null ? Timestamp.from(instant) : null;
 	}
 
-	@Nullable private String toJson(@Nullable Object value) {
+	private byte @Nullable [] toJsonValue(@Nullable Object value) {
 		if (value == null) {
 			return null;
 		}
 		try {
-			return this.jsonMapper.writeValueAsString(value);
+			return toOsonBytes(value);
 		}
-		catch (JacksonException ex) {
-			throw new IllegalStateException("Failed to serialize value to JSON", ex);
+		catch (IOException ex) {
+			throw new IllegalStateException("Failed to serialize value to Oracle OSON", ex);
 		}
 	}
 
-	private Map<String, Object> fromJsonMap(@Nullable String json) {
-		if (json == null || json.isBlank()) {
+	private Map<String, Object> fromJsonMap(byte @Nullable [] json) {
+		if (json == null || json.length == 0) {
 			return Map.of();
 		}
 		try {
-			return this.jsonMapper.readValue(json, new TypeReference<Map<String, Object>>() {
+			return this.osonMapper.readValue(json, new TypeReference<Map<String, Object>>() {
 			});
 		}
-		catch (JacksonException ex) {
+		catch (IOException ex) {
 			logger.warn("Failed to deserialize metadata JSON; returning empty map", ex);
 			return new HashMap<>();
 		}
 	}
 
-	/**
-	 * Serializes type-specific {@link Message} payload to JSON:
-	 * <ul>
-	 * <li>{@link AssistantMessage} with tool calls → JSON array of tool calls</li>
-	 * <li>{@link ToolResponseMessage} → JSON array of tool responses</li>
-	 * <li>All other types → {@code null}</li>
-	 * </ul>
-	 */
-	@Nullable private String messageDataToJson(Message message) {
+	private byte @Nullable [] messageDataToJson(Message message) {
 		if (message instanceof AssistantMessage am && am.hasToolCalls()) {
-			return toJson(am.getToolCalls());
+			return toJsonValue(am.getToolCalls());
 		}
 		if (message instanceof ToolResponseMessage trm) {
-			return toJson(trm.getResponses());
+			return toJsonValue(trm.getResponses());
 		}
 		return null;
 	}
 
-	private Message toMessage(MessageType type, @Nullable String content, @Nullable String messageData) {
+	private Message toMessage(MessageType type, @Nullable String content, byte @Nullable [] messageData) {
 		return switch (type) {
 			case USER -> new UserMessage(content != null ? content : "");
 			case SYSTEM -> new SystemMessage(content != null ? content : "");
 			case ASSISTANT -> {
-				if (messageData != null && !messageData.isBlank()) {
+				if (hasJsonContent(messageData)) {
 					List<AssistantMessage.ToolCall> toolCalls = parseToolCalls(messageData);
 					yield AssistantMessage.builder().content(content).toolCalls(toolCalls).build();
 				}
 				yield new AssistantMessage(content != null ? content : "");
 			}
 			case TOOL -> {
-				if (messageData != null && !messageData.isBlank()) {
+				if (hasJsonContent(messageData)) {
 					List<ToolResponseMessage.ToolResponse> responses = parseToolResponses(messageData);
 					yield ToolResponseMessage.builder().responses(responses).build();
 				}
@@ -404,36 +338,45 @@ public final class JdbcSessionRepository implements SessionRepository {
 		};
 	}
 
-	private List<AssistantMessage.ToolCall> parseToolCalls(String json) {
+	private List<AssistantMessage.ToolCall> parseToolCalls(byte[] json) {
 		try {
-			return this.jsonMapper.readValue(json, new TypeReference<List<AssistantMessage.ToolCall>>() {
+			return this.osonMapper.readValue(json, new TypeReference<List<AssistantMessage.ToolCall>>() {
 			});
 		}
-		catch (JacksonException ex) {
+		catch (IOException ex) {
 			logger.warn("Failed to deserialize tool calls from JSON; returning empty list", ex);
 			return List.of();
 		}
 	}
 
-	private List<ToolResponseMessage.ToolResponse> parseToolResponses(String json) {
+	private List<ToolResponseMessage.ToolResponse> parseToolResponses(byte[] json) {
 		try {
-			return this.jsonMapper.readValue(json, new TypeReference<List<ToolResponseMessage.ToolResponse>>() {
+			return this.osonMapper.readValue(json, new TypeReference<List<ToolResponseMessage.ToolResponse>>() {
 			});
 		}
-		catch (JacksonException ex) {
+		catch (IOException ex) {
 			logger.warn("Failed to deserialize tool responses from JSON; returning empty list", ex);
 			return List.of();
 		}
 	}
 
-	/** Returns a new {@link Builder}. */
-	public static Builder builder() {
-		return new Builder();
+	private boolean hasJsonContent(byte @Nullable [] json) {
+		return json != null && json.length > 0;
 	}
 
-	// -------------------------------------------------------------------------
-	// Row mappers
-	// -------------------------------------------------------------------------
+	private byte[] toOsonBytes(Object value) throws IOException {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		try (JsonGenerator generator = this.osonMapper.getFactory().createGenerator(out)) {
+			this.osonMapper.writeValue(generator, value);
+			generator.flush();
+		}
+		return out.toByteArray();
+	}
+
+	private byte @Nullable [] getJsonColumnValue(ResultSet rs, String columnLabel) throws SQLException {
+		OracleJsonDatum datum = rs.getObject(columnLabel, OracleJsonDatum.class);
+		return datum != null ? datum.getBytes() : null;
+	}
 
 	private class SessionRowMapper implements RowMapper<Session> {
 
@@ -441,10 +384,10 @@ public final class JdbcSessionRepository implements SessionRepository {
 		public Session mapRow(ResultSet rs, int rowNum) throws SQLException {
 			Timestamp expiresAt = rs.getTimestamp("expires_at");
 			Session.Builder builder = Session.builder()
-				.id(rs.getString("id"))
-				.userId(rs.getString("user_id"))
-				.createdAt(rs.getTimestamp("created_at").toInstant())
-				.metadata(fromJsonMap(rs.getString("metadata")));
+					.id(rs.getString("id"))
+					.userId(rs.getString("user_id"))
+					.createdAt(rs.getTimestamp("created_at").toInstant())
+					.metadata(fromJsonMap(getJsonColumnValue(rs, "metadata")));
 			if (expiresAt != null) {
 				builder.expiresAt(expiresAt.toInstant());
 			}
@@ -458,37 +401,40 @@ public final class JdbcSessionRepository implements SessionRepository {
 		@Override
 		public SessionEvent mapRow(ResultSet rs, int rowNum) throws SQLException {
 			MessageType messageType = MessageType.valueOf(rs.getString("message_type"));
-			Message message = toMessage(messageType, rs.getString("message_content"), rs.getString("message_data"));
+			Message message = toMessage(messageType, rs.getString("message_content"),
+					getJsonColumnValue(rs, "message_data"));
 
 			// Merge the dedicated synthetic column back into the metadata map so that
 			// SessionEvent.isSynthetic() returns the correct value.
-			Map<String, Object> metadata = new HashMap<>(fromJsonMap(rs.getString("metadata")));
+			Map<String, Object> metadata = fromJsonMap(getJsonColumnValue(rs, "metadata"));
 			if (rs.getBoolean("synthetic")) {
 				metadata.put(SessionEvent.METADATA_SYNTHETIC, true);
 			}
 
 			return SessionEvent.builder()
-				.id(rs.getString("id"))
-				.sessionId(rs.getString("session_id"))
-				.timestamp(rs.getTimestamp("timestamp").toInstant())
-				.message(message)
-				.branch(rs.getString("branch"))
-				.metadata(metadata)
-				.build();
+					.id(rs.getString("id"))
+					.sessionId(rs.getString("session_id"))
+					.timestamp(rs.getTimestamp("timestamp").toInstant())
+					.message(message)
+					.branch(rs.getString("branch"))
+					.metadata(metadata)
+					.build();
 		}
 
 	}
 
-	// -------------------------------------------------------------------------
-	// Builder
-	// -------------------------------------------------------------------------
+	/** Returns a new {@link Builder}. */
+	public static Builder builder() {
+		return new Builder();
+	}
 
 	/**
-	 * Builder for {@link JdbcSessionRepository}.
+	 * Builder for {@link OracleJdbcSessionRepository}.
 	 *
 	 * <p>
 	 * Minimum required: either {@link #dataSource(DataSource)} or
-	 * {@link #jdbcTemplate(JdbcTemplate)}. All other fields default to sensible values.
+	 * {@link #jdbcTemplate(JdbcTemplate)}. Dialect defaults to
+	 * {@link OracleJdbcSessionRepositoryDialect}.
 	 */
 	public static final class Builder {
 
@@ -500,7 +446,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 		@Nullable private PlatformTransactionManager transactionManager;
 
-		private JsonMapper jsonMapper = JsonMapper.builder().build();
+		private JsonMapper jsonMapper = new JsonMapper(new OsonFactory());
 
 		private Builder() {
 		}
@@ -518,8 +464,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 		}
 
 		/**
-		 * Overrides the auto-detected SQL dialect. When omitted,
-		 * {@link JdbcSessionRepositoryDialect#from(DataSource)} is used.
+		 * Overrides the SQL dialect. Defaults to
+		 * {@link OracleJdbcSessionRepositoryDialect}.
 		 */
 		public Builder dialect(JdbcSessionRepositoryDialect dialect) {
 			this.dialect = dialect;
@@ -532,24 +478,21 @@ public final class JdbcSessionRepository implements SessionRepository {
 			return this;
 		}
 
-		/**
-		 * Overrides the {@link JsonMapper} used for metadata and message-data
-		 * serialization. Defaults to {@code JsonMapper.builder().build()}.
-		 */
-		public Builder jsonMapper(JsonMapper jsonMapper) {
-			this.jsonMapper = jsonMapper;
+		/** Overrides the OSON {@link JsonMapper}. */
+		public Builder jsonMapper(JsonMapper objectMapper) {
+			this.jsonMapper = objectMapper;
 			return this;
 		}
 
 		/** Builds the repository. */
-		public JdbcSessionRepository build() {
+		public OracleJdbcSessionRepository build() {
 			DataSource ds = resolveDataSource();
 			JdbcTemplate jt = this.jdbcTemplate != null ? this.jdbcTemplate : new JdbcTemplate(ds);
 			JdbcSessionRepositoryDialect d = this.dialect != null ? this.dialect
-					: JdbcSessionRepositoryDialect.from(ds);
+					: new OracleJdbcSessionRepositoryDialect();
 			PlatformTransactionManager txm = this.transactionManager != null ? this.transactionManager
 					: new DataSourceTransactionManager(ds);
-			return new JdbcSessionRepository(jt, d, txm, this.jsonMapper);
+			return new OracleJdbcSessionRepository(jt, d, txm, this.jsonMapper);
 		}
 
 		private DataSource resolveDataSource() {

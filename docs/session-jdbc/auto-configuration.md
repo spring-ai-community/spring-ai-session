@@ -47,8 +47,12 @@ spring:
 | Value | Behaviour |
 |---|---|
 | `embedded` | Initialise schema only for embedded databases (H2). Default. |
-| `always` | Always run the DDL script on startup. Useful for PostgreSQL/MySQL in dev. |
+| `always` | Always run the DDL script on startup. Useful for PostgreSQL/MySQL/Oracle in dev. |
 | `never` | Never run the DDL script. Manage schema externally (Flyway, Liquibase, etc.). |
+
+When Oracle is detected, auto-configuration uses `OracleJdbcSessionRepository`
+(OSON-aware JSON binding) when Oracle OSON JDBC classes are on the classpath.
+For Oracle projects, include `ojdbc11` and `ojdbc-provider-jackson-oson`.
 
 ---
 
