@@ -27,8 +27,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
-import org.springframework.ai.session.SessionRepository;
-import org.springframework.ai.session.jdbc.OracleJdbcSessionRepository;
+import org.springframework.ai.session.jdbc.JdbcSessionRepository;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration;
@@ -60,17 +59,26 @@ class JdbcSessionRepositoryOracleAutoConfigurationIT {
 				"spring.datasource.password=" + ORACLE_CONTAINER.getPassword(),
 				JdbcSessionRepositoryProperties.CONFIG_PREFIX + ".initialize-schema=always");
 
+	/**
+	 * Stops the shared Oracle container when all tests are complete.
+	 */
 	@AfterAll
 	static void stopContainer() {
 		ORACLE_CONTAINER.stop();
 	}
 
+	/**
+	 * Verifies that schema initialization is auto-configured by default.
+	 */
 	@Test
 	void schemaInitializerIsCreated() {
 		this.contextRunner
 			.run(context -> assertThat(context).hasSingleBean(JdbcSessionRepositorySchemaInitializer.class));
 	}
 
+	/**
+	 * Verifies that schema initialization can be disabled through properties.
+	 */
 	@Test
 	void schemaInitializerNotCreatedWhenDisabled() {
 		this.contextRunner
@@ -78,18 +86,25 @@ class JdbcSessionRepositoryOracleAutoConfigurationIT {
 			.run(context -> assertThat(context).doesNotHaveBean(JdbcSessionRepositorySchemaInitializer.class));
 	}
 
+	/**
+	 * Verifies that Oracle auto-configuration provides a
+	 * {@link JdbcSessionRepository}.
+	 */
 	@Test
 	void repositoryBeanIsCreated() {
 		this.contextRunner.run(context -> {
 
-			assertThat(context).hasSingleBean(OracleJdbcSessionRepository.class);
+			assertThat(context).hasSingleBean(JdbcSessionRepository.class);
 		});
 	}
 
+	/**
+	 * Verifies that sessions can be saved and loaded in Oracle.
+	 */
 	@Test
 	void saveAndFindSession() {
 		this.contextRunner.run(context -> {
-			var repo = context.getBean(OracleJdbcSessionRepository.class);
+			var repo = context.getBean(JdbcSessionRepository.class);
 			String sessionId = UUID.randomUUID().toString();
 			Session session = Session.builder().id(sessionId).userId("user-oracle").build();
 
@@ -100,10 +115,13 @@ class JdbcSessionRepositoryOracleAutoConfigurationIT {
 		});
 	}
 
+	/**
+	 * Verifies that ordered chat events can be appended and retrieved from Oracle.
+	 */
 	@Test
 	void appendAndFindEvents() {
 		this.contextRunner.run(context -> {
-			var repo = context.getBean(OracleJdbcSessionRepository.class);
+			var repo = context.getBean(JdbcSessionRepository.class);
 			String sessionId = UUID.randomUUID().toString();
 			repo.save(Session.builder().id(sessionId).userId("user-oracle-events").build());
 
@@ -130,10 +148,13 @@ class JdbcSessionRepositoryOracleAutoConfigurationIT {
 		});
 	}
 
+	/**
+	 * Verifies that deleting a session removes associated state from Oracle.
+	 */
 	@Test
 	void deleteSessionCascadesToEvents() {
 		this.contextRunner.run(context -> {
-			var repo = context.getBean(OracleJdbcSessionRepository.class);
+			var repo = context.getBean(JdbcSessionRepository.class);
 			String sessionId = UUID.randomUUID().toString();
 			repo.save(Session.builder().id(sessionId).userId("user-oracle-delete").build());
 
@@ -150,10 +171,13 @@ class JdbcSessionRepositoryOracleAutoConfigurationIT {
 		});
 	}
 
+	/**
+	 * Verifies that sessions can be queried by user identifier in Oracle.
+	 */
 	@Test
 	void findByUserId() {
 		this.contextRunner.run(context -> {
-			var repo = context.getBean(OracleJdbcSessionRepository.class);
+			var repo = context.getBean(JdbcSessionRepository.class);
 			String userId = "user-oracle-multi-" + UUID.randomUUID();
 			repo.save(Session.builder().id(UUID.randomUUID().toString()).userId(userId).build());
 			repo.save(Session.builder().id(UUID.randomUUID().toString()).userId(userId).build());

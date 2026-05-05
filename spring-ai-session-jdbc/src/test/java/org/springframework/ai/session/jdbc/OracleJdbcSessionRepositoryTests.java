@@ -55,8 +55,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Oracle integration tests for {@link JdbcSessionRepository}.
  */
 @SpringJUnitConfig
-@Sql(scripts = { "classpath:org/springframework/ai/session/jdbc/cleanup-oracle.sql",
-		"classpath:org/springframework/ai/session/jdbc/schema-oracle.sql" }, executionPhase = ExecutionPhase.BEFORE_TEST_CLASS)
+@Sql(scripts = "classpath:org/springframework/ai/session/jdbc/schema-oracle.sql",
+		executionPhase = ExecutionPhase.BEFORE_TEST_CLASS)
 @ContextConfiguration(classes = OracleJdbcSessionRepositoryTests.TestConfig.class)
 class OracleJdbcSessionRepositoryTests {
 
@@ -83,6 +83,10 @@ class OracleJdbcSessionRepositoryTests {
 	// -------------------------------------------------------------------------
 
 	@Test
+	/**
+	 * Verifies a saved session can be read back by id with the expected user binding.
+	 */
+	
 	void saveAndFindByIdRoundTrip() {
 		Session session = buildSession("user-1");
 		this.repository.save(session);
@@ -94,6 +98,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies session expiry and metadata values are persisted and restored unchanged.
+	 */
+	
 	void savePreservesExpiresAtAndMetadata() {
 		Instant expiry = Instant.ofEpochMilli(Instant.now().plusSeconds(3600).toEpochMilli());
 		Session session = Session.builder()
@@ -111,6 +119,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies save behaves like an upsert for session data without resetting event version.
+	 */
+	
 	void saveUpsertUpdatesMetadataButPreservesEventVersion() {
 		Session session = buildSession("user-upsert");
 		this.repository.save(session);
@@ -132,11 +144,19 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies lookup by id returns an empty result when the session does not exist.
+	 */
+	
 	void findByIdReturnsEmptyWhenNotFound() {
 		assertThat(this.repository.findById("no-such-id")).isEmpty();
 	}
 
 	@Test
+	/**
+	 * Verifies user-based lookup returns only sessions owned by that user.
+	 */
+	
 	void findByUserIdReturnsAllSessionsForUser() {
 		this.repository.save(buildSession("alice"));
 		this.repository.save(buildSession("alice"));
@@ -147,6 +167,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies deleting a session also removes its associated events.
+	 */
+	
 	void deleteRemovesSessionAndCascadesToEvents() {
 		Session session = buildSession("user-del");
 		this.repository.save(session);
@@ -160,6 +184,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies expiry scanning returns only sessions that are already expired.
+	 */
+	
 	void findExpiredSessionIdsReturnsOnlyExpiredOnes() {
 		Session active = buildSession("user-active");
 		Session expired = Session.builder()
@@ -180,6 +208,10 @@ class OracleJdbcSessionRepositoryTests {
 	// -------------------------------------------------------------------------
 
 	@Test
+	/**
+	 * Verifies appending an event to a missing session fails with a clear error.
+	 */
+	
 	void appendEventThrowsWhenSessionNotFound() {
 		SessionEvent event = SessionEvent.builder().sessionId("ghost-session").message(new UserMessage("hi")).build();
 		assertThatThrownBy(() -> this.repository.appendEvent(event)).isInstanceOf(IllegalArgumentException.class)
@@ -187,6 +219,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies events are read back in ascending timestamp (chronological) order.
+	 */
+	
 	void appendedEventsAreReturnedInChronologicalOrder() {
 		Session session = buildSession("user-order");
 		this.repository.save(session);
@@ -207,6 +243,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies last-N filtering keeps only the newest N events while preserving order.
+	 */
+	
 	void findEventsLastNReturnsOnlyLastNInChronologicalOrder() {
 		Session session = buildSession("user-lastn");
 		this.repository.save(session);
@@ -227,6 +267,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies real-only filtering excludes events marked as synthetic.
+	 */
+	
 	void findEventsRealOnlyExcludesSynthetic() {
 		Session session = buildSession("user-synth");
 		this.repository.save(session);
@@ -250,6 +294,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies event retrieval can be restricted to a specific message type.
+	 */
+	
 	void findEventsFilterByMessageType() {
 		Session session = buildSession("user-types");
 		this.repository.save(session);
@@ -268,6 +316,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies keyword search is case-insensitive and matches expected events.
+	 */
+	
 	void findEventsKeywordSearch() {
 		Session session = buildSession("user-kw");
 		this.repository.save(session);
@@ -285,6 +337,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies from/to time boundaries return only events inside the requested window.
+	 */
+	
 	void findEventsFilterByTimeRange() {
 		Session session = buildSession("user-time");
 		this.repository.save(session);
@@ -308,6 +364,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies paged retrieval returns stable chunks in chronological order.
+	 */
+	
 	void findEventsPagination() {
 		Session session = buildSession("user-page");
 		this.repository.save(session);
@@ -337,6 +397,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies event retrieval for an unknown session returns an empty list.
+	 */
+	
 	void findEventsReturnsEmptyListForNonExistentSession() {
 		assertThat(this.repository.findEvents("ghost", EventFilter.all())).isEmpty();
 	}
@@ -346,6 +410,10 @@ class OracleJdbcSessionRepositoryTests {
 	// -------------------------------------------------------------------------
 
 	@Test
+	/**
+	 * Verifies assistant messages containing tool calls round-trip correctly.
+	 */
+	
 	void assistantMessageWithToolCallsRoundTrip() {
 		Session session = buildSession("user-tc");
 		this.repository.save(session);
@@ -365,6 +433,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies tool response messages round-trip with response payload intact.
+	 */
+	
 	void toolResponseMessageRoundTrip() {
 		Session session = buildSession("user-tr");
 		this.repository.save(session);
@@ -387,6 +459,10 @@ class OracleJdbcSessionRepositoryTests {
 	// -------------------------------------------------------------------------
 
 	@Test
+	/**
+	 * Verifies event version starts at zero and increments per appended event.
+	 */
+	
 	void getEventVersionStartsAtZeroAndIncrementsOnAppend() {
 		Session session = buildSession("user-ver");
 		this.repository.save(session);
@@ -403,6 +479,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies replacing events increments optimistic-lock event version.
+	 */
+	
 	void replaceEventsIncrementsVersion() {
 		Session session = buildSession("user-rv");
 		this.repository.save(session);
@@ -415,6 +495,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies compare-and-set replacement succeeds when expected version matches.
+	 */
+	
 	void replaceEventsWithCorrectVersionSucceeds() {
 		Session session = buildSession("user-cas-ok");
 		this.repository.save(session);
@@ -435,6 +519,10 @@ class OracleJdbcSessionRepositoryTests {
 	}
 
 	@Test
+	/**
+	 * Verifies compare-and-set replacement fails when expected version is stale.
+	 */
+	
 	void replaceEventsWithStaleVersionFails() {
 		Session session = buildSession("user-cas-fail");
 		this.repository.save(session);
@@ -458,6 +546,10 @@ class OracleJdbcSessionRepositoryTests {
 	// -------------------------------------------------------------------------
 
 	@Test
+	/**
+	 * Verifies branch filtering isolates peer-agent branches while keeping shared history.
+	 */
+	
 	void findEventsWithBranchFilterIsolatesPeerAgents() {
 		Session session = buildSession("user-branch");
 		this.repository.save(session);
@@ -514,8 +606,8 @@ class OracleJdbcSessionRepositoryTests {
 		}
 
 		@Bean
-		OracleJdbcSessionRepository jdbcSessionRepository(DataSource dataSource) {
-			return OracleJdbcSessionRepository.builder()
+		JdbcSessionRepository jdbcSessionRepository(DataSource dataSource) {
+			return JdbcSessionRepository.builder()
 				.dataSource(dataSource)
 				.dialect(new OracleJdbcSessionRepositoryDialect())
 				.build();

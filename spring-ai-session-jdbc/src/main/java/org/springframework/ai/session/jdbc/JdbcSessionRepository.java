@@ -299,8 +299,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 		else if (filter.pageSize() != null) {
 			int page = filter.page() != null ? filter.page() : 0;
 			sql.append(this.dialect.getPagedClause());
-			params.add(filter.pageSize());
-			params.add((long) page * filter.pageSize());
+			this.dialect.addPagingParameters(params, page, filter.pageSize());
 		}
 		else {
 			sql.append("ORDER BY e.timestamp ASC ");

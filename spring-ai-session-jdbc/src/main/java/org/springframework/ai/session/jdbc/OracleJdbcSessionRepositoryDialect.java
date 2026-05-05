@@ -69,15 +69,33 @@ public class OracleJdbcSessionRepositoryDialect implements JdbcSessionRepository
 		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ?";
 	}
 
+	/**
+	 * SQL clause for retrieving the most recent {@code N} events.
+	 *
+	 * <p>
+	 * Events are ordered descending by timestamp so callers can reverse them back to
+	 * ascending order when needed.
+	 */
 	@Override
 	public String getLastNClause() {
 		return "ORDER BY e.timestamp DESC FETCH FIRST ? ROWS ONLY ";
 	}
 
+	/**
+	 * SQL clause for page-based event retrieval in ascending timestamp order.
+	 *
+	 * <p>
+	 * Expects two bound parameters: row offset, then page size.
+	 */
 	@Override
 	public String getPagedClause() {
 		return "ORDER BY e.timestamp ASC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY ";
 	}
 
+	@Override
+	public void addPagingParameters(List<Object> params, int page, int pageSize) {
+		params.add((long) page * pageSize);
+		params.add(pageSize);
+	}
 
 }

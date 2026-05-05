@@ -18,14 +18,8 @@ package org.springaicommunity.session.jdbc.autoconfigure;
 
 import javax.sql.DataSource;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.jdbc.JdbcSessionRepository;
 import org.springframework.ai.session.jdbc.JdbcSessionRepositoryDialect;
-import org.springframework.ai.session.jdbc.OracleJdbcSessionRepository;
-import org.springframework.ai.session.jdbc.OracleJdbcSessionRepositoryDialect;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -42,40 +36,15 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * @since 2.0.0
  */
 @AutoConfiguration
-@ConditionalOnClass({JdbcSessionRepository.class, DataSource.class, JdbcTemplate.class })
+@ConditionalOnClass({ JdbcSessionRepository.class, DataSource.class, JdbcTemplate.class })
 @EnableConfigurationProperties(JdbcSessionRepositoryProperties.class)
 public class JdbcSessionRepositoryAutoConfiguration {
 
-	private static final Logger logger = LoggerFactory.getLogger(JdbcSessionRepositoryAutoConfiguration.class);
-
 	@Bean
 	@ConditionalOnMissingBean
-	SessionRepository jdbcSessionRepository(DataSource dataSource) {
+	JdbcSessionRepository jdbcSessionRepository(DataSource dataSource) {
 		JdbcSessionRepositoryDialect dialect = JdbcSessionRepositoryDialect.from(dataSource);
-		if (!(dialect instanceof OracleJdbcSessionRepositoryDialect)) {
-			return JdbcSessionRepository.builder().dataSource(dataSource).dialect(dialect).build();
-		}
-		if (!oracleOsonClassesPresent()) {
-			logger.warn("Oracle dialect detected but OSON classes are missing; using generic JdbcSessionRepository");
-			return JdbcSessionRepository.builder().dataSource(dataSource).dialect(dialect).build();
-		}
-		return OracleJdbcSessionRepository.builder().dataSource(dataSource).dialect(dialect).build();
-	}
-
-	private static boolean oracleOsonClassesPresent() {
-		ClassLoader classLoader = JdbcSessionRepositoryAutoConfiguration.class.getClassLoader();
-		return classPresent("oracle.jdbc.provider.oson.OsonFactory", classLoader)
-				&& classPresent("oracle.sql.json.OracleJsonDatum", classLoader);
-	}
-
-	private static boolean classPresent(String className, ClassLoader classLoader) {
-		try {
-			Class.forName(className, false, classLoader);
-			return true;
-		}
-		catch (ClassNotFoundException ex) {
-			return false;
-		}
+		return JdbcSessionRepository.builder().dataSource(dataSource).dialect(dialect).build();
 	}
 
 	@Bean

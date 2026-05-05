@@ -88,6 +88,19 @@ public interface JdbcSessionRepositoryDialect {
 	default String getPagedClause() {
 		return "ORDER BY e.timestamp ASC LIMIT ? OFFSET ? ";
 	}
+
+	/**
+	 * Adds paging bind parameters to the event query in the order expected by
+	 * {@link #getPagedClause()}.
+	 * @param params SQL parameter list to append to
+	 * @param page zero-based page index
+	 * @param pageSize page size
+	 */
+	default void addPagingParameters(List<Object> params, int page, int pageSize) {
+		params.add(pageSize);
+		params.add((long) page * pageSize);
+	}
+
 	/**
 	 * Detects the best-matching dialect for the given {@link DataSource}.
 	 */

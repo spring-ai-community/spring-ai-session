@@ -1,17 +1,9 @@
 # Oracle JDBC Session Support
 
-This module now includes Oracle support for the JDBC-backed Spring AI
+This module includes Oracle support for the JDBC-backed Spring AI
 `SessionRepository`.
 
 ## What Was Added
-
-- `OracleJdbcSessionRepository`
-  - Oracle-specific repository implementation.
-  - Stores and reads JSON columns using Oracle OSON-aware JDBC binding.
-  - Uses `JsonMapper` with `OsonFactory` by default.
-  - Supports the same session and event operations as the generic JDBC repository:
-    save, find, delete, append events, replace events, optimistic event replacement,
-    event version lookup, filtering, paging, branch filtering, and keyword search.
 
 - `OracleJdbcSessionRepositoryDialect`
   - Adds Oracle SQL dialect support.
@@ -32,27 +24,14 @@ This module now includes Oracle support for the JDBC-backed Spring AI
   - `JdbcSessionRepositoryDialect.from(DataSource)` now detects Oracle and returns
     `OracleJdbcSessionRepositoryDialect`.
 
-- Auto-configuration support
-  - When Oracle is detected, JDBC session auto-configuration creates
-    `OracleJdbcSessionRepository` if the Oracle OSON classes are available.
-  - If the OSON classes are missing, it falls back to the generic
-    `JdbcSessionRepository` and logs a warning.
-
 - Maven dependencies
-  - Adds optional Oracle JDBC dependencies:
+  - Oracle JDBC dependency:
     - `com.oracle.database.jdbc:ojdbc11`
-    - `com.oracle.database.jdbc:ojdbc-provider-jackson-oson`
-    - `javax.json:javax.json-api`
-  - Adds Oracle wallet/security dependencies:
+  - `ojdbc-provider-jackson-oson` is not required for this module.
+  - Optional Oracle wallet/security dependencies when needed:
     - `oraclepki`
     - `osdt_core`
     - `osdt_cert`
-
-- Tests
-  - Adds Oracle repository integration tests covering session lifecycle, event
-    append/replace behavior, filters, paging, expiration lookup, delete behavior, and
-    optimistic version checks.
-  - Adds Oracle auto-configuration integration coverage using an Oracle container.
 
 ## Schema Setup
 
@@ -62,48 +41,45 @@ Run the bundled Oracle schema before using the repository:
 @src/main/resources/org/springframework/ai/session/jdbc/schema-oracle.sql
 ```
 
-With Spring Boot SQL initialization, configure:
+With Spring Boot SQL initialization:
 
 ```properties
 spring.sql.init.mode=always
 spring.sql.init.schema-locations=classpath:org/springframework/ai/session/jdbc/schema-oracle.sql
 ```
 
-For managed environments, the same schema can be applied with Flyway, Liquibase, or
-your normal database migration process.
-
 ## Required Dependencies
 
-For Oracle projects, include the Oracle JDBC driver and OSON provider:
+For Oracle projects, include the Oracle JDBC driver:
 
 ```xml
 <dependency>
     <groupId>com.oracle.database.jdbc</groupId>
     <artifactId>ojdbc11</artifactId>
 </dependency>
-<dependency>
-    <groupId>com.oracle.database.jdbc</groupId>
-    <artifactId>ojdbc-provider-jackson-oson</artifactId>
-</dependency>
 ```
 
-If you connect with an Oracle wallet, also include the Oracle security dependencies
+If you connect with an Oracle wallet, also include Oracle security dependencies
 required by your runtime.
 
 ## Manual Repository Usage
 
 ```java
-SessionRepository repository = OracleJdbcSessionRepository.builder()
+SessionRepository repository = JdbcSessionRepository.builder()
         .dataSource(dataSource)
+        .dialect(new OracleJdbcSessionRepositoryDialect())
         .build();
 ```
 
-The builder defaults to `OracleJdbcSessionRepositoryDialect` and an OSON-backed
-`JsonMapper`.
-
 ## Test Configuration
 
-Oracle integration tests run with Testcontainers using Oracle Free:
+Run all tests:
+
+```bash
+mvn test
+```
+
+Run only Oracle integration tests:
 
 ```bash
 mvn -Dtest=OracleJdbcSessionRepositoryTests test
@@ -115,8 +91,19 @@ Requirements:
 Docker must be running
 ```
 
+If you are using Podman, set `DOCKER_HOST` to the Podman machine socket before
+running tests:
+
+```bash
+export DOCKER_HOST=unix:///var/folders/p0/lzh773mj2tz6x70bbwj_wgsm0000gn/T/podman/podman-machine-default-api.sock
+```
+
+If IntelliJ fails with `Illegal character in path ... unix:///tmp/podman.sock`,
+update the run configuration environment to use the same `DOCKER_HOST` value as
+your terminal.
+
 ## Notes
 
 - Oracle support expects Oracle Database JSON column support.
-- JSON values are bound as Oracle OSON payloads in the Oracle-specific repository.
-- `event_version` is only changed by event mutations, not by session upserts.
+- JSON values use Oracle `JSON` columns defined in `schema-oracle.sql`.
+- `event_version` is changed by event mutations, not by session upserts.
