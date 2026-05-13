@@ -1,7 +1,64 @@
 # Oracle JDBC Session Support
 
-This module now includes Oracle support for the JDBC-backed Spring AI
-`SessionRepository`.
+This guide is for projects that use `OracleJdbcSessionRepository` as the Spring AI
+`SessionRepository` implementation on Oracle.
+
+## Step-by-Step: Use Oracle Implementation
+
+1. Add Oracle dependencies to your application.
+
+```xml
+<dependency>
+    <groupId>com.oracle.database.jdbc</groupId>
+    <artifactId>ojdbc11</artifactId>
+</dependency>
+<dependency>
+    <groupId>com.oracle.database.jdbc</groupId>
+    <artifactId>ojdbc-provider-jackson-oson</artifactId>
+</dependency>
+```
+
+2. Configure an Oracle datasource.
+
+```properties
+spring.datasource.url=jdbc:oracle:thin:@//localhost:1521/FREEPDB1
+spring.datasource.username=app_user
+spring.datasource.password=app_password
+spring.datasource.driver-class-name=oracle.jdbc.OracleDriver
+```
+
+3. Create the Spring AI session tables in your target Oracle schema.
+
+```sql
+@src/main/resources/org/springframework/ai/session/jdbc/schema-oracle.sql
+```
+
+If your Oracle dump import does not include `AI_SESSION` and `AI_SESSION_EVENT`, run
+`schema-oracle.sql` after importing the dump.
+
+4. Choose one repository wiring approach.
+
+Use `OracleJdbcSessionRepository` (recommended for Oracle OSON-aware JSON handling):
+
+```java
+SessionRepository repository = OracleJdbcSessionRepository.builder()
+        .dataSource(dataSource)
+        .build();
+```
+
+Or use generic `JdbcSessionRepository` with explicit Oracle dialect:
+
+```java
+SessionRepository repository = JdbcSessionRepository.builder()
+        .dataSource(dataSource)
+        .dialect(new OracleJdbcSessionRepositoryDialect())
+        .build();
+```
+
+5. Run a quick smoke test.
+- Save a session and read it by ID.
+- Append events and fetch with `EventFilter.all()`.
+- Delete the session and confirm related events are removed.
 
 ## What Was Added
 
@@ -53,53 +110,6 @@ This module now includes Oracle support for the JDBC-backed Spring AI
     append/replace behavior, filters, paging, expiration lookup, delete behavior, and
     optimistic version checks.
   - Adds Oracle auto-configuration integration coverage using an Oracle container.
-
-## Schema Setup
-
-Run the bundled Oracle schema before using the repository:
-
-```sql
-@src/main/resources/org/springframework/ai/session/jdbc/schema-oracle.sql
-```
-
-With Spring Boot SQL initialization, configure:
-
-```properties
-spring.sql.init.mode=always
-spring.sql.init.schema-locations=classpath:org/springframework/ai/session/jdbc/schema-oracle.sql
-```
-
-For managed environments, the same schema can be applied with Flyway, Liquibase, or
-your normal database migration process.
-
-## Required Dependencies
-
-For Oracle projects, include the Oracle JDBC driver and OSON provider:
-
-```xml
-<dependency>
-    <groupId>com.oracle.database.jdbc</groupId>
-    <artifactId>ojdbc11</artifactId>
-</dependency>
-<dependency>
-    <groupId>com.oracle.database.jdbc</groupId>
-    <artifactId>ojdbc-provider-jackson-oson</artifactId>
-</dependency>
-```
-
-If you connect with an Oracle wallet, also include the Oracle security dependencies
-required by your runtime.
-
-## Manual Repository Usage
-
-```java
-SessionRepository repository = OracleJdbcSessionRepository.builder()
-        .dataSource(dataSource)
-        .build();
-```
-
-The builder defaults to `OracleJdbcSessionRepositoryDialect` and an OSON-backed
-`JsonMapper`.
 
 ## Test Configuration
 
