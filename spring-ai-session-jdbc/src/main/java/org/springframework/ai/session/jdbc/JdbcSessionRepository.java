@@ -283,7 +283,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 		if (filter.branch() != null) {
 			// Visibility: null branch (root events) OR exact match OR caller is a
 			// descendant (filterBranch starts with eventBranch + '.')
-			sql.append("AND (e.branch IS NULL OR e.branch = ? OR ? LIKE e.branch || '.%') ");
+			sql.append(this.dialect.getBranchFilterFragment());
 			params.add(filter.branch());
 			params.add(filter.branch());
 		}

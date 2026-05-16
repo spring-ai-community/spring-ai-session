@@ -40,9 +40,14 @@ public class MysqlJdbcSessionRepositoryDialect implements JdbcSessionRepositoryD
 	@Override
 	public String getKeywordFilterFragment() {
 		// MySQL LIKE is case-insensitive for most collations; LOWER() is still applied
-		// for
-		// safety with binary collations.
+		// for safety with binary collations.
 		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ?";
+	}
+
+	@Override
+	public String getBranchFilterFragment() {
+		// || is logical OR in MySQL/MariaDB; use CONCAT() for string concatenation.
+		return "AND (e.branch IS NULL OR e.branch = ? OR ? LIKE CONCAT(e.branch, '.%')) ";
 	}
 
 }

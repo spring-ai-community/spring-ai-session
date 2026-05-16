@@ -72,6 +72,22 @@ public interface JdbcSessionRepositoryDialect {
 	String getKeywordFilterFragment();
 
 	/**
+	 * Branch visibility filter fragment for multi-agent event isolation. The clause
+	 * matches events that are visible to the given branch: root events (null branch),
+	 * exact branch match, or ancestor branches (the caller is a descendant).
+	 *
+	 * <p>
+	 * The fragment must be a complete {@code AND (...)} clause with two {@code ?}
+	 * placeholders, both bound to the filter branch value. The default implementation
+	 * uses {@code ||} for string concatenation (PostgreSQL / H2). MySQL/MariaDB must
+	 * override this with {@code CONCAT()} because {@code ||} is logical OR in those
+	 * databases.
+	 */
+	default String getBranchFilterFragment() {
+		return "AND (e.branch IS NULL OR e.branch = ? OR ? LIKE e.branch || '.%') ";
+	}
+
+	/**
 	 * Detects the best-matching dialect for the given {@link DataSource}.
 	 */
 	static JdbcSessionRepositoryDialect from(DataSource dataSource) {

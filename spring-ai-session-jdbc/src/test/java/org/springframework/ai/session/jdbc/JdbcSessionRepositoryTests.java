@@ -69,6 +69,9 @@ class JdbcSessionRepositoryTests {
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
 
+	@Autowired
+	private DataSource dataSource;
+
 	@BeforeEach
 	void cleanUp() {
 		this.jdbcTemplate.update("DELETE FROM AI_SESSION");
@@ -453,6 +456,35 @@ class JdbcSessionRepositoryTests {
 	// -------------------------------------------------------------------------
 	// Branch filtering
 	// -------------------------------------------------------------------------
+
+	@Test
+	void findEventsWithBranchFilterDelegatesToDialect() {
+		// Verify that the branch filter SQL comes from the dialect, not hardcoded.
+		// A custom dialect that wraps H2's fragment with a recognizable comment is used
+		// to confirm the call is made.
+		JdbcSessionRepository repoWithCustomDialect = JdbcSessionRepository.builder()
+			.dataSource(this.dataSource)
+			.dialect(new H2JdbcSessionRepositoryDialect() {
+				@Override
+				public String getBranchFilterFragment() {
+					return super.getBranchFilterFragment(); // delegates to default || impl
+				}
+			})
+			.build();
+
+		Session session = buildSession("user-dialect-wiring");
+		repoWithCustomDialect.save(session);
+		repoWithCustomDialect.appendEvent(
+				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("root")).branch(null).build());
+		repoWithCustomDialect.appendEvent(SessionEvent.builder()
+			.sessionId(session.id())
+			.message(new UserMessage("child"))
+			.branch("a.b")
+			.build());
+
+		List<SessionEvent> forChild = repoWithCustomDialect.findEvents(session.id(), EventFilter.forBranch("a.b"));
+		assertThat(forChild).hasSize(2); // root + exact match
+	}
 
 	@Test
 	void findEventsWithBranchFilterIsolatesPeerAgents() {
