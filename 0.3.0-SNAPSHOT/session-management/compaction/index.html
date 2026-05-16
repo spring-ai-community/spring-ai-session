@@ -675,6 +675,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#token-accounting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token accounting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#slidingwindowcompactionstrategy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1049,6 +1060,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#token-accounting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token accounting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#slidingwindowcompactionstrategy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1248,6 +1270,38 @@ compaction should run based on the current <code>CompactionRequest</code>.</p>
 <p>Strategies implement <code>CompactionStrategy</code> (a <code>@FunctionalInterface</code>) and define what to
 do with the event history. Each strategy receives a <code>CompactionRequest</code> containing the
 session metadata and the full event list.</p>
+<h3 id="token-accounting">Token accounting<a class="headerlink" href="#token-accounting" title="Permanent link">&para;</a></h3>
+<p>All four strategies estimate the token cost of archived events using the same event
+formatter. Tool calls and tool responses contribute their full formatted representation —
+not just the raw <code>getText()</code> content, which is <code>null</code> for both types.</p>
+<table>
+<thead>
+<tr>
+<th>Message type</th>
+<th>Formatted as</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>UserMessage</code> / <code>AssistantMessage</code> / <code>SystemMessage</code></td>
+<td><code>User: &lt;text&gt;</code> / <code>Assistant: &lt;text&gt;</code> / <code>System: &lt;text&gt;</code></td>
+</tr>
+<tr>
+<td><code>AssistantMessage</code> with tool calls</td>
+<td><code>Assistant [tool calls: name(args), ...]</code></td>
+</tr>
+<tr>
+<td><code>ToolResponseMessage</code></td>
+<td><code>Tool [responses: name -&gt; data, ...]</code></td>
+</tr>
+</tbody>
+</table>
+<p>This ensures <code>tokensEstimatedSaved</code> in <code>CompactionResult</code> accurately reflects the full
+cost of removed events, including tool-heavy turns.</p>
+<p><code>RecursiveSummarizationCompactionStrategy</code> uses the same formatter when building the
+summarization prompt sent to the LLM, and exposes an <code>eventFormatter</code> builder option to
+override it (see below).</p>
+<hr />
 <h3 id="slidingwindowcompactionstrategy">SlidingWindowCompactionStrategy<a class="headerlink" href="#slidingwindowcompactionstrategy" title="Permanent link">&para;</a></h3>
 <p>Keeps the last <code>N</code> <strong>real</strong> events. Simple, predictable, no LLM call required. Synthetic
 summary events are always preserved and placed first; they do not count against the
@@ -1294,10 +1348,11 @@ newest to oldest.</p>
 <p><strong>Algorithm</strong></p>
 <ol>
 <li>Separate synthetic events (their token cost is deducted from the budget first).</li>
-<li>Walk real events from newest to oldest, accumulating token cost. Stop at the first
-   event that would exceed the remaining budget. This produces a <strong>contiguous suffix</strong> —
-   skipping individual oversize events would create non-contiguous gaps that break
-   conversation coherence.</li>
+<li>Walk real events from newest to oldest, accumulating token cost (estimated via the
+   shared event formatter — see <a href="#token-accounting">Token accounting</a> above). Stop at the
+   first event that would exceed the remaining budget. This produces a <strong>contiguous
+   suffix</strong> — skipping individual oversize events would create non-contiguous gaps that
+   break conversation coherence.</li>
 <li>Drop any leading kept events that are not <code>USER</code> messages (turn-boundary safety).</li>
 <li>Return: <code>[synthetics] + [kept events]</code>.</li>
 </ol>
@@ -1313,7 +1368,8 @@ can build on it — creating a rolling, recursive compressed history.</p>
 </span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">        </span><span class="p">.</span><span class="na">systemPrompt</span><span class="p">(</span><span class="s">&quot;...&quot;</span><span class="p">)</span><span class="w">           </span><span class="c1">// optional custom system prompt</span>
 </span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">        </span><span class="p">.</span><span class="na">shadowPrompt</span><span class="p">(</span><span class="s">&quot;...&quot;</span><span class="p">)</span><span class="w">           </span><span class="c1">// optional custom USER shadow prompt</span>
 </span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">        </span><span class="p">.</span><span class="na">tokenCountEstimator</span><span class="p">(</span><span class="n">myEst</span><span class="p">)</span><span class="w">   </span><span class="c1">// custom estimator (default: JTokkitTokenCountEstimator)</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">        </span><span class="p">.</span><span class="na">eventFormatter</span><span class="p">(</span><span class="n">myFormatter</span><span class="p">)</span><span class="w">  </span><span class="c1">// optional custom event-to-text renderer (see below)</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </span></code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Builder validation</p>
@@ -1332,6 +1388,20 @@ callback to react programmatically:</p>
 </span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">            </span><span class="c1">// retry, alert, increment a metric, etc.</span>
 </span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">        </span><span class="p">})</span>
 </span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span></code></pre></div>
+<p><strong>Custom event formatter</strong></p>
+<p>The strategy uses the shared event formatter (see <a href="#token-accounting">Token accounting</a>)
+when building the summarization prompt, so tool call names, arguments, and response data
+are all visible to the LLM. Override it via <code>eventFormatter</code> for domain-specific rendering
+or multilingual summaries:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="w"> </span><span class="n">strategy</span><span class="w"> </span><span class="o">=</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">    </span><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatClient</span><span class="p">)</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">        </span><span class="p">.</span><span class="na">maxEventsToKeep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">        </span><span class="p">.</span><span class="na">eventFormatter</span><span class="p">(</span><span class="n">event</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">getMessageType</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="n">TOOL</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="s">&quot;Tool result: &quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">event</span><span class="p">.</span><span class="na">getMessage</span><span class="p">().</span><span class="na">getText</span><span class="p">();</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">            </span><span class="k">default</span><span class="w">   </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="p">.</span><span class="na">formatEvent</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">        </span><span class="p">})</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </span></code></pre></div>
 <p><strong>Algorithm</strong></p>
 <ol>
@@ -1352,8 +1422,8 @@ predecessors without starting from scratch.</p>
 <p>If a raw cut point lands on an <code>ASSISTANT</code> or <code>TOOL</code> event in the middle of a turn, it
 is advanced forward to the next <code>USER</code> message. This prevents keeping a tool result or
 assistant reply without the user message that originated its turn.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Before snap:  [u1, a1, u2, a2, | a3, u3, a3]   ← cut lands on a3 (middle of turn 2)
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>After snap:   [u1, a1, u2, a2, a3, | u3, a3]   ← cut moved to u3 (turn start)
+<div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>Before snap:  [u1, a1, u2, a2, | a3, u3, a3]   ← cut lands on a3 (middle of turn 2)
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>After snap:   [u1, a1, u2, a2, a3, | u3, a3]   ← cut moved to u3 (turn start)
 </span></code></pre></div>
 <hr />
 <h2 id="choosing-a-strategy">Choosing a strategy<a class="headerlink" href="#choosing-a-strategy" title="Permanent link">&para;</a></h2>
