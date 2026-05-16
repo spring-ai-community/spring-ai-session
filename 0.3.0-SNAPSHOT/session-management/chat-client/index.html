@@ -1061,8 +1061,8 @@ no manual history loading or appending required in application code.</p>
 <h2 id="what-the-advisor-does">What the advisor does<a class="headerlink" href="#what-the-advisor-does" title="Permanent link">&para;</a></h2>
 <p>On every request the advisor:</p>
 <ol>
-<li>Looks up the session by the <code>SESSION_ID_CONTEXT_KEY</code> value in the advisor context
-   (falls back to <code>defaultSessionId</code>). If the session does not exist, it is created
+<li>Resolves the session ID from <code>SESSION_ID_CONTEXT_KEY</code> in the advisor context — this
+   key <strong>must</strong> be present on every request. If the session does not exist, it is created
    automatically using the <code>USER_ID_CONTEXT_KEY</code> value (or <code>defaultUserId</code>) and the
    resolved session ID.</li>
 <li>Retrieves the session's event history (filtered by the configured <code>eventFilter</code>,
@@ -1080,21 +1080,26 @@ no manual history loading or appending required in application code.</p>
 <hr />
 <h2 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultSessionId</span><span class="p">(</span><span class="s">&quot;session-123&quot;</span><span class="p">)</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultUserId</span><span class="p">(</span><span class="s">&quot;alice&quot;</span><span class="p">)</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="c1">// Compact when 20 turns accumulate, using LLM summarization to retain context</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="p">.</span><span class="na">compactionTrigger</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">TurnCountTrigger</span><span class="p">(</span><span class="mi">20</span><span class="p">))</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="p">.</span><span class="na">compactionStrategy</span><span class="p">(</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">        </span><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatClient</span><span class="p">)</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">            </span><span class="p">.</span><span class="na">maxEventsToKeep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">            </span><span class="p">.</span><span class="na">build</span><span class="p">()</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="n">ChatClient</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ChatClient</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatModel</span><span class="p">)</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultAdvisors</span><span class="p">(</span><span class="n">advisor</span><span class="p">)</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultUserId</span><span class="p">(</span><span class="s">&quot;alice&quot;</span><span class="p">)</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="c1">// Compact when 20 turns accumulate, using LLM summarization to retain context</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="p">.</span><span class="na">compactionTrigger</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">TurnCountTrigger</span><span class="p">(</span><span class="mi">20</span><span class="p">))</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="p">.</span><span class="na">compactionStrategy</span><span class="p">(</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">        </span><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatClient</span><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">            </span><span class="p">.</span><span class="na">maxEventsToKeep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">            </span><span class="p">.</span><span class="na">build</span><span class="p">()</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">ChatClient</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ChatClient</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatModel</span><span class="p">)</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultAdvisors</span><span class="p">(</span><span class="n">advisor</span><span class="p">)</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </span></code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Session ID is required on every request</p>
+<p><code>SESSION_ID_CONTEXT_KEY</code> must be set in the advisor context on every call.
+Omitting it throws <code>IllegalStateException</code>. This is intentional — a shared fallback
+session ID would silently merge history across different users.</p>
+</div>
 <div class="admonition warning">
 <p class="admonition-title">Trigger and strategy must be set together</p>
 <p>Setting only one of <code>compactionTrigger</code> or <code>compactionStrategy</code> throws
@@ -1110,7 +1115,7 @@ no manual history loading or appending required in application code.</p>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
 <p>If no session exists for the given ID, the advisor creates one automatically using the
-<code>defaultUserId</code>.</p>
+<code>USER_ID_CONTEXT_KEY</code> value from the request context, falling back to <code>defaultUserId</code>.</p>
 <hr />
 <h2 id="context-keys">Context keys<a class="headerlink" href="#context-keys" title="Permanent link">&para;</a></h2>
 <table>
