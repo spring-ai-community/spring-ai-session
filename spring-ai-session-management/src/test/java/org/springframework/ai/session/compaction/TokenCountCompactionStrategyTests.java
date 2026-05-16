@@ -22,6 +22,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.content.MediaContent;
 import org.springframework.ai.session.Session;
@@ -76,12 +77,11 @@ class TokenCountCompactionStrategyTests {
 
 	@Test
 	void archivesEventsExceedingBudget() {
-		// Each event costs exactly its text length in tokens.
-		// Budget = 4 tokens. Turn1 = "u1"(2) + "a1"(2) = 4 tokens.
-		// Turn2 = "u2"(2) + "a2"(2) = 4 tokens.
-		// Total = 8 tokens; budget = 4 → keep only the newest 4 tokens (turn2).
+		// CHAR_ESTIMATOR counts formatted-text characters (formatEvent output), not raw
+		// getText() lengths. "User: u1"(8) + "Assistant: a1"(13) = 21 per turn.
+		// Budget = 25 → turn2 fits (21 ≤ 25) but turn1+turn2 does not (42 > 25).
 		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(4)
+			.maxTokens(25)
 			.tokenCountEstimator(CHAR_ESTIMATOR)
 			.build();
 		CompactionRequest request = requestWith(turn("u1", "a1"), turn("u2", "a2"));
@@ -98,26 +98,24 @@ class TokenCountCompactionStrategyTests {
 	 * Verifies that scanning stops at the first oversize event so the kept window is a
 	 * contiguous suffix, not a sparse selection of individually-fitting events.
 	 * <p>
-	 * Events (newest-to-oldest scan): u2(2) fits; a1_huge(24) exceeds budget → stop.
-	 * Kept: [u2]. Archived: [u1, a1_huge]. u2 is a USER event so no turn-boundary snap is
-	 * needed.
+	 * Formatted costs: "User: u2"(8) fits in budget 10; "Assistant: a1_very_large_text_here"(34)
+	 * would exceed it → scan stops. Kept: [u2]. Archived: [u1, a1_huge]. u2 is a USER
+	 * event so no turn-boundary snap is needed.
 	 */
 	@Test
 	void stopsAtFirstOversizeEventKeepsContiguousSuffix() {
 		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(6)
+			.maxTokens(10)
 			.tokenCountEstimator(CHAR_ESTIMATOR)
 			.build();
 
 		List<SessionEvent> events = new ArrayList<>();
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build()); // 2
-																											// tokens
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build()); // 8 tokens
 		events.add(SessionEvent.builder()
 			.sessionId(SESSION_ID)
 			.message(new AssistantMessage("a1_very_large_text_here"))
-			.build()); // 24 tokens — stops scan
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u2")).build()); // 2
-																											// tokens
+			.build()); // 34 tokens — stops scan
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u2")).build()); // 8 tokens
 
 		CompactionResult result = strategy.compact(requestWith(events));
 
@@ -250,6 +248,45 @@ class TokenCountCompactionStrategyTests {
 
 		assertThat(result.compactedEvents()).isEmpty();
 		assertThat(result.archivedEvents()).isEmpty();
+	}
+
+	// --- tool call / tool response token counting ---
+
+	@Test
+	void toolEventsCountTowardBudget() {
+		// Budget = 40 chars (CHAR_ESTIMATOR: 1 char = 1 token).
+		// Formatted tool-call and tool-response texts are ~45-55 chars each, which
+		// pushes the total over the 40-token limit and forces archiving turn 1.
+		// Before the fix, both events returned null from getText() and cost 0 tokens,
+		// so the entire session was kept without archiving anything.
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(40)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
+
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(
+				SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("What's the weather?")).build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(AssistantMessage.builder()
+				.toolCalls(List
+					.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"location\":\"Paris\"}")))
+				.build())
+			.build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(ToolResponseMessage.builder()
+				.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "{\"temp\":\"22C\"}")))
+				.build())
+			.build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("Thanks")).build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("You're welcome")).build());
+
+		CompactionResult result = strategy.compact(requestWith(events));
+
+		assertThat(result.archivedEvents()).isNotEmpty();
+		assertThat(result.tokensEstimatedSaved()).isGreaterThan(0);
 	}
 
 	// --- helpers ---

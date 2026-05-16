@@ -114,9 +114,7 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 		compacted.addAll(kept);
 
 		int tokensArchived = archived.stream()
-			.map(e -> e.getMessage().getText())
-			.filter(t -> t != null)
-			.mapToInt(this.tokenCountEstimator::estimate)
+			.mapToInt(e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e)))
 			.sum();
 
 		return new CompactionResult(compacted, archived, tokensArchived);

@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -114,9 +115,12 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 	@Nullable private final Consumer<CompactionRequest> onSummarizationFailure;
 
+	private final Function<SessionEvent, String> eventFormatter;
+
 	private RecursiveSummarizationCompactionStrategy(ChatClient chatClient, int maxEventsToKeep, int overlapSize,
 			String systemPrompt, String shadowPrompt, TokenCountEstimator tokenCountEstimator,
-			@Nullable Consumer<CompactionRequest> onSummarizationFailure) {
+			@Nullable Consumer<CompactionRequest> onSummarizationFailure,
+			Function<SessionEvent, String> eventFormatter) {
 		Assert.notNull(chatClient, "chatClient must not be null");
 		Assert.isTrue(maxEventsToKeep > 0, "maxEventsToKeep must be greater than 0");
 		Assert.isTrue(overlapSize >= 0, "overlapSize must be >= 0");
@@ -124,6 +128,7 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		Assert.hasText(systemPrompt, "systemPrompt must not be empty");
 		Assert.hasText(shadowPrompt, "shadowPrompt must not be empty");
 		Assert.notNull(tokenCountEstimator, "tokenCountEstimator must not be null");
+		Assert.notNull(eventFormatter, "eventFormatter must not be null");
 		this.chatClient = chatClient;
 		this.maxEventsToKeep = maxEventsToKeep;
 		this.overlapSize = overlapSize;
@@ -131,6 +136,7 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		this.shadowPrompt = shadowPrompt;
 		this.tokenCountEstimator = tokenCountEstimator;
 		this.onSummarizationFailure = onSummarizationFailure;
+		this.eventFormatter = eventFormatter;
 	}
 
 	@Override
@@ -215,9 +221,7 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		List<SessionEvent> archived = new ArrayList<>(toArchive);
 
 		int tokensArchived = toArchive.stream()
-			.map(e -> e.getMessage().getText())
-			.filter(t -> t != null)
-			.mapToInt(this.tokenCountEstimator::estimate)
+			.mapToInt(e -> this.tokenCountEstimator.estimate(this.eventFormatter.apply(e)))
 			.sum();
 
 		return new CompactionResult(compacted, archived, tokensArchived);
@@ -248,26 +252,19 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		}
 
 		prompt.append("=== CONVERSATION TO SUMMARIZE ===\n");
-		eventsToSummarize.forEach(e -> prompt.append(formatEvent(e)).append("\n"));
+		eventsToSummarize.forEach(e -> prompt.append(this.eventFormatter.apply(e)).append("\n"));
 
 		if (!overlapEvents.isEmpty()) {
 			prompt.append("\n=== UPCOMING CONTEXT (do not summarize — for continuity only) ===\n");
-			overlapEvents.forEach(e -> prompt.append(formatEvent(e)).append("\n"));
+			overlapEvents.forEach(e -> prompt.append(this.eventFormatter.apply(e)).append("\n"));
 		}
 
 		prompt.append("\nPlease write the summary now:");
 		return prompt.toString();
 	}
 
-	private static String formatEvent(SessionEvent event) {
-		String role = switch (event.getMessageType()) {
-			case USER -> "User";
-			case ASSISTANT -> "Assistant";
-			case SYSTEM -> "System";
-			case TOOL -> "Tool";
-		};
-		String text = event.getMessage().getText();
-		return role + ": " + (text != null ? text : "[no text content]");
+	public static String formatEvent(SessionEvent event) {
+		return CompactionUtils.formatEvent(event);
 	}
 
 	// --- Builder ---
@@ -291,6 +288,8 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		private TokenCountEstimator tokenCountEstimator = new JTokkitTokenCountEstimator();
 
 		@Nullable private Consumer<CompactionRequest> onSummarizationFailure;
+
+		private Function<SessionEvent, String> eventFormatter = RecursiveSummarizationCompactionStrategy::formatEvent;
 
 		private Builder(ChatClient chatClient) {
 			Assert.notNull(chatClient, "chatClient must not be null");
@@ -362,13 +361,25 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 			return this;
 		}
 
+		/**
+		 * Overrides the function used to render a {@link SessionEvent} as a line of text in
+		 * the summarization prompt and for token counting. Defaults to the built-in
+		 * formatter which handles plain text, tool calls, and tool responses.
+		 */
+		public Builder eventFormatter(Function<SessionEvent, String> eventFormatter) {
+			Assert.notNull(eventFormatter, "eventFormatter must not be null");
+			this.eventFormatter = eventFormatter;
+			return this;
+		}
+
 		public RecursiveSummarizationCompactionStrategy build() {
 			if (this.overlapSize >= this.maxEventsToKeep) {
 				throw new IllegalArgumentException("overlapSize (" + this.overlapSize
 						+ ") must be less than maxEventsToKeep (" + this.maxEventsToKeep + ")");
 			}
 			return new RecursiveSummarizationCompactionStrategy(this.chatClient, this.maxEventsToKeep, this.overlapSize,
-					this.systemPrompt, this.shadowPrompt, this.tokenCountEstimator, this.onSummarizationFailure);
+					this.systemPrompt, this.shadowPrompt, this.tokenCountEstimator, this.onSummarizationFailure,
+					this.eventFormatter);
 		}
 
 	}

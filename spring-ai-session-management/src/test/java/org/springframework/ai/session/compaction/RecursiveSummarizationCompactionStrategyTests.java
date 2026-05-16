@@ -27,9 +27,12 @@ import org.mockito.Answers;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.content.MediaContent;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.tokenizer.TokenCountEstimator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -419,7 +422,121 @@ class RecursiveSummarizationCompactionStrategyTests {
 		assertThat(strategy).isNotNull();
 	}
 
+	// --- tool call / tool response formatting ---
+
+	@Test
+	void toolCallNamesAndArgumentsAppearInFormattedOutput() {
+		List<String> estimatedTexts = new ArrayList<>();
+		TokenCountEstimator capturingEstimator = capturingEstimator(estimatedTexts);
+
+		RecursiveSummarizationCompactionStrategy strategy = RecursiveSummarizationCompactionStrategy
+			.builder(this.chatClient)
+			.maxEventsToKeep(2)
+			.overlapSize(0)
+			.tokenCountEstimator(capturingEstimator)
+			.build();
+
+		strategy.compact(contextFor(buildToolCallSession()));
+
+		// The capturing estimator receives the output of formatEvent() for each archived
+		// event, so tool call names and arguments must appear in at least one entry.
+		assertThat(estimatedTexts).anyMatch(t -> t.contains("get_weather"));
+		assertThat(estimatedTexts).anyMatch(t -> t.contains("Paris"));
+	}
+
+	@Test
+	void toolResponseContentAppearsInFormattedOutput() {
+		List<String> estimatedTexts = new ArrayList<>();
+
+		RecursiveSummarizationCompactionStrategy strategy = RecursiveSummarizationCompactionStrategy
+			.builder(this.chatClient)
+			.maxEventsToKeep(2)
+			.overlapSize(0)
+			.tokenCountEstimator(capturingEstimator(estimatedTexts))
+			.build();
+
+		strategy.compact(contextFor(buildToolCallSession()));
+
+		assertThat(estimatedTexts).anyMatch(t -> t.contains("22C"));
+	}
+
+	@Test
+	void tokensEstimatedSavedIsPositiveWhenArchivingToolEvents() {
+		RecursiveSummarizationCompactionStrategy strategy = RecursiveSummarizationCompactionStrategy
+			.builder(this.chatClient)
+			.maxEventsToKeep(2)
+			.overlapSize(0)
+			.build();
+
+		CompactionResult result = strategy.compact(contextFor(buildToolCallSession()));
+
+		assertThat(result.tokensEstimatedSaved()).isGreaterThan(0);
+	}
+
+	@Test
+	void customEventFormatterIsApplied() {
+		List<String> estimatedTexts = new ArrayList<>();
+
+		RecursiveSummarizationCompactionStrategy strategy = RecursiveSummarizationCompactionStrategy
+			.builder(this.chatClient)
+			.maxEventsToKeep(2)
+			.overlapSize(0)
+			.tokenCountEstimator(capturingEstimator(estimatedTexts))
+			.eventFormatter(e -> "CUSTOM[" + e.getMessageType() + "]")
+			.build();
+
+		strategy.compact(contextFor(buildRealEvents(4)));
+
+		assertThat(estimatedTexts).isNotEmpty();
+		assertThat(estimatedTexts).allMatch(t -> t.startsWith("CUSTOM["));
+	}
+
 	// --- helpers ---
+
+	/**
+	 * Turn 1 (archived when maxEventsToKeep=2): user question + assistant tool call +
+	 * tool response. Turn 2 (active window): plain user+assistant exchange.
+	 */
+	private List<SessionEvent> buildToolCallSession() {
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("What's the weather?")).build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(AssistantMessage.builder()
+				.toolCalls(List.of(
+						new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"location\":\"Paris\"}")))
+				.build())
+			.build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(ToolResponseMessage.builder()
+				.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "{\"temp\":\"22C\"}")))
+				.build())
+			.build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("Thanks")).build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("You're welcome")).build());
+		return events;
+	}
+
+	private static TokenCountEstimator capturingEstimator(List<String> sink) {
+		return new TokenCountEstimator() {
+			@Override
+			public int estimate(String text) {
+				sink.add(text);
+				return text.length();
+			}
+
+			@Override
+			public int estimate(MediaContent content) {
+				return 0;
+			}
+
+			@Override
+			public int estimate(Iterable<MediaContent> messages) {
+				return 0;
+			}
+		};
+	}
 
 	private List<SessionEvent> buildRealEvents(int count) {
 		List<SessionEvent> events = new ArrayList<>();
