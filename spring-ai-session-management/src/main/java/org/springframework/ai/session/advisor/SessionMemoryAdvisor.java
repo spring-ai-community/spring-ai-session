@@ -138,6 +138,17 @@ public final class SessionMemoryAdvisor implements BaseAdvisor {
 			String userId = getUserId(request.context());
 			session = this.sessionService.create(CreateSessionRequest.builder().id(sessionId).userId(userId).build());
 		}
+		else {
+			// Enforce ownership when the caller explicitly identifies a user via
+			// USER_ID_CONTEXT_KEY. Skipped when no per-request user ID is set so that
+			// callers that rely solely on defaultUserId are not broken.
+			Object userIdValue = request.context().get(USER_ID_CONTEXT_KEY);
+			if (userIdValue instanceof String requestUserId && !requestUserId.isBlank()
+					&& !requestUserId.equals(session.userId())) {
+				throw new IllegalStateException("Session '" + sessionId + "' does not belong to user '"
+						+ requestUserId + "'. Access denied.");
+			}
+		}
 
 		// 2. Retrieve history applying the configured filter (default: all events)
 

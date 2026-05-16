@@ -217,6 +217,41 @@ class SessionMemoryAdvisorIT {
 		instructions.subList(2, instructions.size()).forEach(m -> assertThat(m).isNotInstanceOf(SystemMessage.class));
 	}
 
+	// --- Ownership enforcement ---
+
+	@Test
+	void beforeAllowsAccessWhenUserIdMatchesSessionOwner() {
+		// Session was created with userId "test-user" in @BeforeEach.
+		// A request that carries the same user ID must succeed.
+		ChatClientRequest request = buildRequestWithUserId(this.sessionId, "hello", "test-user");
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		// Must not throw
+		this.advisor.before(request, chain);
+	}
+
+	@Test
+	void beforeDeniesAccessWhenUserIdDoesNotMatchSessionOwner() {
+		// Session belongs to "test-user". A different user must be rejected.
+		ChatClientRequest request = buildRequestWithUserId(this.sessionId, "hello", "other-user");
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		assertThatThrownBy(() -> this.advisor.before(request, chain))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("does not belong to user");
+	}
+
+	@Test
+	void beforeSkipsOwnershipCheckWhenNoUserIdInContext() {
+		// Backward-compat: callers that don't set USER_ID_CONTEXT_KEY must still be able
+		// to access existing sessions.
+		ChatClientRequest request = buildRequest(this.sessionId, "hello");
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		// Must not throw even though session.userId() is "test-user"
+		this.advisor.before(request, chain);
+	}
+
 	// --- historyFilter ---
 
 	@Test
@@ -322,6 +357,15 @@ class SessionMemoryAdvisorIT {
 		return ChatClientRequest.builder()
 			.prompt(prompt)
 			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
+			.build();
+	}
+
+	private static ChatClientRequest buildRequestWithUserId(String sessionId, String userText, String userId) {
+		Prompt prompt = new Prompt(List.of(new UserMessage(userText)));
+		return ChatClientRequest.builder()
+			.prompt(prompt)
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId,
+					SessionMemoryAdvisor.USER_ID_CONTEXT_KEY, userId))
 			.build();
 	}
 

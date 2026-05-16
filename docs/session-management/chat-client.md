@@ -13,7 +13,9 @@ On every request the advisor:
 1. Resolves the session ID from `SESSION_ID_CONTEXT_KEY` in the advisor context — this
    key **must** be present on every request. If the session does not exist, it is created
    automatically using the `USER_ID_CONTEXT_KEY` value (or `defaultUserId`) and the
-   resolved session ID.
+   resolved session ID. If the session already exists and `USER_ID_CONTEXT_KEY` is set,
+   the advisor validates that the requesting user owns the session and throws
+   `IllegalStateException` on mismatch.
 2. Retrieves the session's event history (filtered by the configured `eventFilter`,
    default `EventFilter.all()`) and **prepends** it to the prompt messages. If the
    request context contains an `EVENT_FILTER_CONTEXT_KEY` value, it is merged with the
@@ -73,6 +75,27 @@ String response = client.prompt()
 If no session exists for the given ID, the advisor creates one automatically using the
 `USER_ID_CONTEXT_KEY` value from the request context, falling back to `defaultUserId`.
 
+!!! note "Ownership enforcement"
+    When `USER_ID_CONTEXT_KEY` is present and the session already exists, the advisor
+    checks that the supplied user ID matches `session.userId()`. A mismatch throws
+    `IllegalStateException` — this prevents one user from reading or appending to
+    another user's session if session IDs are ever guessable or shared.
+
+    The check is **skipped** when `USER_ID_CONTEXT_KEY` is absent so that callers
+    which rely solely on `defaultUserId` (or do their own authorization upstream) are
+    not affected.
+
+    ```java
+    client.prompt()
+        .user("Hello!")
+        .advisors(a -> a
+            .param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "session-abc")
+            .param(SessionMemoryAdvisor.USER_ID_CONTEXT_KEY, "alice")  // enforced
+        )
+        .call()
+        .content();
+    ```
+
 ---
 
 ## Context keys
@@ -80,7 +103,7 @@ If no session exists for the given ID, the advisor creates one automatically usi
 | Key constant | String value | Purpose |
 |---|---|---|
 | `SESSION_ID_CONTEXT_KEY` | `"chat_memory_session_id"` | Routes the request to a session |
-| `USER_ID_CONTEXT_KEY` | `"chat_memory_user_id"` | Used when auto-creating a session |
+| `USER_ID_CONTEXT_KEY` | `"chat_memory_user_id"` | Used when auto-creating a session; also enforces ownership on existing sessions when set |
 | `EVENT_FILTER_CONTEXT_KEY` | `"chat_memory_event_filter_id"` | Per-request `EventFilter` merged with the advisor-level filter |
 
 ---

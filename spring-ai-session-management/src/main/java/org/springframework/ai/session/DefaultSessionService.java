@@ -128,7 +128,11 @@ public class DefaultSessionService implements SessionService {
 		CompactionResult result = strategy.compact(request);
 
 		if (!result.archivedEvents().isEmpty()) {
-			this.sessionRepository.replaceEvents(session.id(), result.compactedEvents(), version);
+			boolean replaced = this.sessionRepository.replaceEvents(session.id(), result.compactedEvents(), version);
+			if (!replaced) {
+				// CAS rejected — a concurrent writer already mutated the log; skip silently.
+				return new CompactionResult(events, List.of(), 0);
+			}
 		}
 
 		return result;
