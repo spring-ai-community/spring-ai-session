@@ -22,6 +22,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
@@ -243,6 +244,36 @@ class TurnWindowCompactionStrategyTests {
 		CompactionResult result = strategy.compact(request);
 
 		assertThat(result.tokensEstimatedSaved()).isGreaterThanOrEqualTo(0);
+	}
+
+	@Test
+	void tokensEstimatedSavedIsPositiveWhenArchivingTurnWithToolEvents() {
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(1).build();
+
+		// Turn 1 (archived): user question + assistant tool call + tool response
+		List<SessionEvent> toolTurn = new ArrayList<>();
+		toolTurn.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(new UserMessage("What's the weather?"))
+			.build());
+		toolTurn.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(AssistantMessage.builder()
+				.toolCalls(List
+					.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"location\":\"Paris\"}")))
+				.build())
+			.build());
+		toolTurn.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(ToolResponseMessage.builder()
+				.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "{\"temp\":\"22C\"}")))
+				.build())
+			.build());
+
+		CompactionResult result = strategy.compact(requestWith(toolTurn, turn("Thanks", "You're welcome")));
+
+		assertThat(result.archivedEvents()).isNotEmpty();
+		assertThat(result.tokensEstimatedSaved()).isGreaterThan(0);
 	}
 
 	// --- helpers ---

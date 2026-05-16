@@ -83,6 +83,27 @@ Strategies implement `CompactionStrategy` (a `@FunctionalInterface`) and define 
 do with the event history. Each strategy receives a `CompactionRequest` containing the
 session metadata and the full event list.
 
+### Token accounting
+
+All four strategies estimate the token cost of archived events using the same event
+formatter. Tool calls and tool responses contribute their full formatted representation —
+not just the raw `getText()` content, which is `null` for both types.
+
+| Message type | Formatted as |
+|---|---|
+| `UserMessage` / `AssistantMessage` / `SystemMessage` | `User: <text>` / `Assistant: <text>` / `System: <text>` |
+| `AssistantMessage` with tool calls | `Assistant [tool calls: name(args), ...]` |
+| `ToolResponseMessage` | `Tool [responses: name -> data, ...]` |
+
+This ensures `tokensEstimatedSaved` in `CompactionResult` accurately reflects the full
+cost of removed events, including tool-heavy turns.
+
+`RecursiveSummarizationCompactionStrategy` uses the same formatter when building the
+summarization prompt sent to the LLM, and exposes an `eventFormatter` builder option to
+override it (see below).
+
+---
+
 ### SlidingWindowCompactionStrategy
 
 Keeps the last `N` **real** events. Simple, predictable, no LLM call required. Synthetic
@@ -141,10 +162,11 @@ TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEst
 **Algorithm**
 
 1. Separate synthetic events (their token cost is deducted from the budget first).
-2. Walk real events from newest to oldest, accumulating token cost. Stop at the first
-   event that would exceed the remaining budget. This produces a **contiguous suffix** —
-   skipping individual oversize events would create non-contiguous gaps that break
-   conversation coherence.
+2. Walk real events from newest to oldest, accumulating token cost (estimated via the
+   shared event formatter — see [Token accounting](#token-accounting) above). Stop at the
+   first event that would exceed the remaining budget. This produces a **contiguous
+   suffix** — skipping individual oversize events would create non-contiguous gaps that
+   break conversation coherence.
 3. Drop any leading kept events that are not `USER` messages (turn-boundary safety).
 4. Return: `[synthetics] + [kept events]`.
 
@@ -163,6 +185,7 @@ RecursiveSummarizationCompactionStrategy strategy =
         .systemPrompt("...")           // optional custom system prompt
         .shadowPrompt("...")           // optional custom USER shadow prompt
         .tokenCountEstimator(myEst)   // custom estimator (default: JTokkitTokenCountEstimator)
+        .eventFormatter(myFormatter)  // optional custom event-to-text renderer (see below)
         .build();
 ```
 
@@ -183,6 +206,24 @@ RecursiveSummarizationCompactionStrategy strategy =
         .onSummarizationFailure(req -> {
             log.error("Compaction failed for session {}", req.session().id());
             // retry, alert, increment a metric, etc.
+        })
+        .build();
+```
+
+**Custom event formatter**
+
+The strategy uses the shared event formatter (see [Token accounting](#token-accounting))
+when building the summarization prompt, so tool call names, arguments, and response data
+are all visible to the LLM. Override it via `eventFormatter` for domain-specific rendering
+or multilingual summaries:
+
+```java
+RecursiveSummarizationCompactionStrategy strategy =
+    RecursiveSummarizationCompactionStrategy.builder(chatClient)
+        .maxEventsToKeep(10)
+        .eventFormatter(event -> switch (event.getMessageType()) {
+            case TOOL -> "Tool result: " + event.getMessage().getText();
+            default   -> RecursiveSummarizationCompactionStrategy.formatEvent(event);
         })
         .build();
 ```

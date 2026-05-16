@@ -81,9 +81,7 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 		List<SessionEvent> real = events.stream().filter(e -> !e.isSynthetic()).toList();
 
 		int syntheticTokens = synthetic.stream()
-			.map(e -> e.getMessage().getText())
-			.filter(t -> t != null)
-			.mapToInt(t -> this.tokenCountEstimator.estimate(t))
+			.mapToInt(e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e)))
 			.sum();
 
 		int remainingBudget = this.maxTokens - syntheticTokens;
@@ -95,8 +93,7 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 		int cutIndex = real.size();
 		int usedTokens = 0;
 		for (int i = real.size() - 1; i >= 0; i--) {
-			String text = real.get(i).getMessage().getText();
-			int tokens = (text != null) ? this.tokenCountEstimator.estimate(text) : 0;
+			int tokens = this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(real.get(i)));
 			if (usedTokens + tokens <= remainingBudget) {
 				usedTokens += tokens;
 				cutIndex = i;
@@ -125,9 +122,7 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 		compacted.addAll(kept);
 
 		int tokensRemoved = archived.stream()
-			.map(e -> e.getMessage().getText())
-			.filter(t -> t != null)
-			.mapToInt(t -> this.tokenCountEstimator.estimate(t))
+			.mapToInt(e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e)))
 			.sum();
 
 		return new CompactionResult(compacted, archived, tokensRemoved);

@@ -100,9 +100,7 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 		compacted.addAll(keptReal);
 
 		int tokensRemoved = removedReal.stream()
-			.map(e -> e.getMessage().getText())
-			.filter(t -> t != null)
-			.mapToInt(this.tokenCountEstimator::estimate)
+			.mapToInt(e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e)))
 			.sum();
 
 		return new CompactionResult(compacted, removedReal, tokensRemoved);

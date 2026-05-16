@@ -22,6 +22,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
@@ -190,6 +191,35 @@ class SlidingWindowCompactionStrategyTests {
 			SessionEvent first = result.compactedEvents().get(0);
 			assertThat(first.isSynthetic() || first.getMessage() instanceof UserMessage).isTrue();
 		}
+	}
+
+	@Test
+	void tokensEstimatedSavedIsPositiveWhenArchivingToolEvents() {
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(2).build();
+
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(
+				SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("What's the weather?")).build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(AssistantMessage.builder()
+				.toolCalls(List
+					.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"location\":\"Paris\"}")))
+				.build())
+			.build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(ToolResponseMessage.builder()
+				.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "{\"temp\":\"22C\"}")))
+				.build())
+			.build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("Thanks")).build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("You're welcome")).build());
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		assertThat(result.archivedEvents()).isNotEmpty();
+		assertThat(result.tokensEstimatedSaved()).isGreaterThan(0);
 	}
 
 	private List<SessionEvent> buildRealEvents(int count) {

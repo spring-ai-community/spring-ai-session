@@ -17,8 +17,11 @@
 package org.springframework.ai.session.compaction;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.session.SessionEvent;
 
 /**
@@ -30,6 +33,50 @@ import org.springframework.ai.session.SessionEvent;
 final class CompactionUtils {
 
 	private CompactionUtils() {
+	}
+
+	/**
+	 * Renders a {@link SessionEvent} as a single line of text suitable for token
+	 * estimation and LLM summarization prompts.
+	 *
+	 * <p>
+	 * Handles all Spring AI message types:
+	 * <ul>
+	 * <li>Plain user / assistant / system messages → {@code "Role: text"}</li>
+	 * <li>{@link AssistantMessage} with tool calls → {@code "Assistant [tool calls: name(args), ...]"}</li>
+	 * <li>{@link ToolResponseMessage} → {@code "Tool [responses: name -> data, ...]"}</li>
+	 * </ul>
+	 * @param event the session event to format
+	 * @return a non-null, non-empty string representing the event
+	 */
+	static String formatEvent(SessionEvent event) {
+		String role = switch (event.getMessageType()) {
+			case USER -> "User";
+			case ASSISTANT -> "Assistant";
+			case SYSTEM -> "System";
+			case TOOL -> "Tool";
+		};
+
+		if (event.getMessage() instanceof AssistantMessage am && am.hasToolCalls()) {
+			String calls = am.getToolCalls()
+				.stream()
+				.map(tc -> tc.name() + "(" + tc.arguments() + ")")
+				.collect(Collectors.joining(", "));
+			String text = am.getText();
+			return (text != null && !text.isBlank()) ? role + ": " + text + " [tool calls: " + calls + "]"
+					: role + " [tool calls: " + calls + "]";
+		}
+
+		if (event.getMessage() instanceof ToolResponseMessage trm) {
+			String responses = trm.getResponses()
+				.stream()
+				.map(r -> r.name() + " -> " + r.responseData())
+				.collect(Collectors.joining(", "));
+			return role + " [responses: " + responses + "]";
+		}
+
+		String text = event.getMessage().getText();
+		return role + ": " + (text != null ? text : "[no text content]");
 	}
 
 	/**
