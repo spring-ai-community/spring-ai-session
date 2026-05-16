@@ -10,29 +10,27 @@
       
       
       
-        <link rel="canonical" href="https://spring-ai-community.github.io/spring-ai-session/0.3.0-SNAPSHOT/">
+        <link rel="canonical" href="https://spring-ai-community.github.io/spring-ai-session/0.3.0-SNAPSHOT/migration/">
       
       
-      
-        <link rel="next" href="getting-started/">
       
       
         
       
       
-      <link rel="icon" href="assets/images/favicon.png">
+      <link rel="icon" href="../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Spring AI Session</title>
+        <title>Migration Guide - Spring AI Session</title>
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -51,7 +49,7 @@
       
     
     
-    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -76,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#spring-ai-session" class="md-skip">
+        <a href="#migration-guide" class="md-skip">
           Skip to content
         </a>
       
@@ -96,7 +94,7 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="." title="Spring AI Session" class="md-header__button md-logo" aria-label="Spring AI Session" data-md-component="logo">
+    <a href=".." title="Spring AI Session" class="md-header__button md-logo" aria-label="Spring AI Session" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -116,7 +114,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Home
+              Migration Guide
             
           </span>
         </div>
@@ -221,11 +219,9 @@
   
   
   
-    
   
-  
-    <li class="md-tabs__item md-tabs__item--active">
-      <a href="." class="md-tabs__link">
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
         
   
   
@@ -244,7 +240,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="getting-started/" class="md-tabs__link">
+      <a href="../getting-started/" class="md-tabs__link">
         
   
   
@@ -265,7 +261,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="session-management/concepts/" class="md-tabs__link">
+        <a href="../session-management/concepts/" class="md-tabs__link">
           
   
   
@@ -287,7 +283,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="session-jdbc/" class="md-tabs__link">
+        <a href="../session-jdbc/" class="md-tabs__link">
           
   
   
@@ -329,7 +325,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="." title="Spring AI Session" class="md-nav__button md-logo" aria-label="Spring AI Session" data-md-component="logo">
+    <a href=".." title="Spring AI Session" class="md-nav__button md-logo" aria-label="Spring AI Session" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -356,37 +352,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Home
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="." class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
         
   
   
@@ -402,81 +371,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#modules" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Modules
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#key-features" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key Features
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#quick-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Quick Example
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#links" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Links
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -488,7 +382,7 @@
   
   
     <li class="md-nav__item">
-      <a href="getting-started/" class="md-nav__link">
+      <a href="../getting-started/" class="md-nav__link">
         
   
   
@@ -581,7 +475,7 @@
   
   
     <li class="md-nav__item">
-      <a href="session-management/concepts/" class="md-nav__link">
+      <a href="../session-management/concepts/" class="md-nav__link">
         
   
   
@@ -609,7 +503,7 @@
   
   
     <li class="md-nav__item">
-      <a href="session-management/event-filtering/" class="md-nav__link">
+      <a href="../session-management/event-filtering/" class="md-nav__link">
         
   
   
@@ -637,7 +531,7 @@
   
   
     <li class="md-nav__item">
-      <a href="session-management/compaction/" class="md-nav__link">
+      <a href="../session-management/compaction/" class="md-nav__link">
         
   
   
@@ -665,7 +559,7 @@
   
   
     <li class="md-nav__item">
-      <a href="session-management/chat-client/" class="md-nav__link">
+      <a href="../session-management/chat-client/" class="md-nav__link">
         
   
   
@@ -693,7 +587,7 @@
   
   
     <li class="md-nav__item">
-      <a href="session-management/multi-agent/" class="md-nav__link">
+      <a href="../session-management/multi-agent/" class="md-nav__link">
         
   
   
@@ -721,7 +615,7 @@
   
   
     <li class="md-nav__item">
-      <a href="session-management/recall-storage/" class="md-nav__link">
+      <a href="../session-management/recall-storage/" class="md-nav__link">
         
   
   
@@ -781,7 +675,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="session-jdbc/" class="md-nav__link ">
+            <a href="../session-jdbc/" class="md-nav__link ">
               
   
   
@@ -825,7 +719,7 @@
   
   
     <li class="md-nav__item">
-      <a href="session-jdbc/auto-configuration/" class="md-nav__link">
+      <a href="../session-jdbc/auto-configuration/" class="md-nav__link">
         
   
   
@@ -880,57 +774,30 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#modules" class="md-nav__link">
+  <a href="#upgrading-to-030" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Modules
+        Upgrading to 0.3.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Upgrading to 0.3.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#breaking-sessionmemoryadvisorbuilderdefaultsessionid-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: SessionMemoryAdvisor.Builder.defaultSessionId() removed
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#key-features" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key Features
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#quick-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Quick Example
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#links" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Links
-      
-    </span>
-  </a>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -962,138 +829,49 @@
   
 
 
-<h1 id="spring-ai-session">Spring AI Session<a class="headerlink" href="#spring-ai-session" title="Permanent link">&para;</a></h1>
-<p><strong>Spring AI Session</strong> is a structured, event-sourced conversation memory layer for
-<a href="https://docs.spring.io/spring-ai/reference/">Spring AI</a> applications.</p>
-<p>Most AI frameworks store conversation history as a flat list of messages. That works for
-short, simple conversations — but as sessions grow, you hit a hard limit: the model's
-context window. The naive solution is to truncate the oldest messages, but that breaks
-tool-call sequences, discards coherent turns mid-conversation, and throws away context
-the model may still need.</p>
-<p>Spring AI Session solves this with three ideas working together:</p>
-<ol>
-<li><strong>Structured events</strong> — every message is a <code>SessionEvent</code> with a unique id, timestamp,
-   session ownership, and optional branch label for multi-agent hierarchies.</li>
-<li><strong>Turn-aware compaction</strong> — configurable triggers fire when the history grows too large,
-   and pluggable strategies decide what to keep, always respecting turn boundaries so the
-   model never sees an orphaned tool result or a half-finished exchange.</li>
-<li><strong>Persistent repositories</strong> — a clean SPI (<code>SessionRepository</code>) makes it trivial to
-   swap the default in-memory store for JDBC, Redis, or any other backend without
-   changing application code.</li>
-</ol>
-<p><img alt="Spring AI Session API Classes" src="images/spring-ai-session-api-classes.png" /></p>
-<hr />
-<h2 id="modules">Modules<a class="headerlink" href="#modules" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Module</th>
-<th>Artifact</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Session Management</strong></td>
-<td><code>spring-ai-session-management</code></td>
-<td>Core SPI: <code>Session</code>, <code>SessionEvent</code>, <code>SessionService</code>, <code>SessionRepository</code>, compaction framework, <code>SessionMemoryAdvisor</code></td>
-</tr>
-<tr>
-<td><strong>Session JDBC</strong></td>
-<td><code>spring-ai-session-jdbc</code></td>
-<td>JDBC-backed <code>SessionRepository</code> for PostgreSQL, MySQL, H2, and MariaDB</td>
-</tr>
-<tr>
-<td><strong>Session Auto-configuration</strong></td>
-<td><code>spring-ai-autoconfigure-session</code></td>
-<td>Spring Boot auto-configuration for <code>DefaultSessionService</code> (repository-agnostic)</td>
-</tr>
-<tr>
-<td><strong>Session JDBC Auto-configuration</strong></td>
-<td><code>spring-ai-autoconfigure-session-jdbc</code></td>
-<td>Spring Boot auto-configuration for the JDBC repository</td>
-</tr>
-<tr>
-<td><strong>Session JDBC Starter</strong></td>
-<td><code>spring-ai-starter-session-jdbc</code></td>
-<td>Spring Boot starter — one dependency for a fully wired JDBC session setup</td>
-</tr>
-<tr>
-<td><strong>Session BOM</strong></td>
-<td><code>spring-ai-session-bom</code></td>
-<td>Bill of Materials for managing all module versions together</td>
-</tr>
-</tbody>
-</table>
-<hr />
-<h2 id="key-features">Key Features<a class="headerlink" href="#key-features" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>Event-sourced conversation log</strong> — append-only, immutable <code>SessionEvent</code> records
-  wrapping Spring AI <code>Message</code> types</li>
-<li><strong>Composable event filtering</strong> — filter by message type, time range, keyword, branch,
-  last-N, or pagination</li>
-<li><strong>Four compaction strategies</strong> out of the box:<ul>
-<li><code>SlidingWindowCompactionStrategy</code> — keep the last N real events</li>
-<li><code>TurnWindowCompactionStrategy</code> — keep the last N complete turns</li>
-<li><code>TokenCountCompactionStrategy</code> — keep a token-budget-bounded suffix</li>
-<li><code>RecursiveSummarizationCompactionStrategy</code> — LLM-powered rolling summary</li>
-</ul>
-</li>
-<li><strong>Two compaction triggers</strong>: turn count and token count (composable with OR semantics)</li>
-<li><strong>Turn-boundary safety</strong> — the kept window always starts at a <code>USER</code> message; no orphaned
-  tool results or split turn sequences</li>
-<li><strong>Optimistic concurrency</strong> — compare-and-swap <code>replaceEvents</code> makes compaction safe under
-  concurrent requests without locking</li>
-<li><strong>Multi-agent branch isolation</strong> — dot-separated branch labels let peer sub-agents share
-  one session while hiding each other's events</li>
-<li><strong>Recall storage tool</strong> — <code>SessionEventTools</code> gives the model a <code>conversation_search</code>
-  tool to keyword-search the full verbatim history even after compaction</li>
-<li><strong>Spring Boot auto-configuration</strong> for the JDBC repository (schema init, dialect
-  detection, <code>JdbcSessionRepository</code> bean)</li>
-</ul>
-<hr />
-<h2 id="quick-example">Quick Example<a class="headerlink" href="#quick-example" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1">// 1. Create the service</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">SessionService</span><span class="w"> </span><span class="n">service</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">DefaultSessionService</span><span class="p">(</span><span class="n">InMemorySessionRepository</span><span class="p">.</span><span class="na">builder</span><span class="p">().</span><span class="na">build</span><span class="p">());</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1">// 2. Create a session</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">Session</span><span class="w"> </span><span class="n">session</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">service</span><span class="p">.</span><span class="na">create</span><span class="p">(</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="n">CreateSessionRequest</span><span class="p">.</span><span class="na">builder</span><span class="p">().</span><span class="na">userId</span><span class="p">(</span><span class="s">&quot;alice&quot;</span><span class="p">).</span><span class="na">build</span><span class="p">()</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">);</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1">// 3. Wire it into a ChatClient</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">service</span><span class="p">)</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultUserId</span><span class="p">(</span><span class="s">&quot;alice&quot;</span><span class="p">)</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="p">.</span><span class="na">compactionTrigger</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">TurnCountTrigger</span><span class="p">(</span><span class="mi">20</span><span class="p">))</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="p">.</span><span class="na">compactionStrategy</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">SlidingWindowCompactionStrategy</span><span class="p">(</span><span class="mi">10</span><span class="p">))</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="n">ChatClient</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ChatClient</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatModel</span><span class="p">)</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultAdvisors</span><span class="p">(</span><span class="n">advisor</span><span class="p">)</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="c1">// Every call automatically loads history, appends messages, and compacts when needed</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="n">String</span><span class="w"> </span><span class="n">answer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;What is Spring AI?&quot;</span><span class="p">)</span>
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">session</span><span class="p">.</span><span class="na">id</span><span class="p">()))</span>
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
+<h1 id="migration-guide">Migration Guide<a class="headerlink" href="#migration-guide" title="Permanent link">&para;</a></h1>
+<h2 id="upgrading-to-030">Upgrading to 0.3.0<a class="headerlink" href="#upgrading-to-030" title="Permanent link">&para;</a></h2>
+<h3 id="breaking-sessionmemoryadvisorbuilderdefaultsessionid-removed">Breaking: <code>SessionMemoryAdvisor.Builder.defaultSessionId()</code> removed<a class="headerlink" href="#breaking-sessionmemoryadvisorbuilderdefaultsessionid-removed" title="Permanent link">&para;</a></h3>
+<p><strong>What changed</strong></p>
+<p><code>defaultSessionId(String)</code> has been removed from <code>SessionMemoryAdvisor.Builder</code>. The
+advisor no longer falls back to a shared session — <code>SESSION_ID_CONTEXT_KEY</code> is now
+<strong>required</strong> on every request. Omitting it throws <code>IllegalStateException</code>.</p>
+<p><strong>Why</strong></p>
+<p>A single default session ID was shared across all requests to the same advisor instance,
+silently merging conversation history from different users or threads. This is a
+correctness and security issue in any multi-user deployment.</p>
+<p><strong>How to migrate</strong></p>
+<p>Before (0.2.x):</p>
+<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultSessionId</span><span class="p">(</span><span class="s">&quot;my-session-id&quot;</span><span class="p">)</span><span class="w">   </span><span class="c1">// ← removed</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1">// Session ID came from the advisor default — no per-request param needed</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">().</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Hello&quot;</span><span class="p">).</span><span class="na">call</span><span class="p">().</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
-<hr />
-<h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Java 17+</li>
-<li>Spring AI <code>2.0.0-M4+</code></li>
-<li>Spring Boot <code>4.0.2+</code></li>
-</ul>
-<hr />
-<h2 id="links">Links<a class="headerlink" href="#links" title="Permanent link">&para;</a></h2>
-<ul>
-<li><a href="https://github.com/spring-ai-community/spring-ai-session">GitHub</a></li>
-<li><a href="https://github.com/spring-ai-community/spring-ai-session/issues">Issues</a></li>
-<li><a href="https://docs.spring.io/spring-ai/reference/">Spring AI Reference</a></li>
-<li><a href="migration/">Migration Guide</a></li>
-</ul>
+<p>After (0.3.0):</p>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1">// Session ID must be passed on every request</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Hello&quot;</span><span class="p">)</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
+</span></code></pre></div>
+<p>In a typical web application, resolve the session ID from the authenticated principal or
+HTTP session in the controller, then pass it per call:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">&quot;/chat&quot;</span><span class="p">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">String</span><span class="w"> </span><span class="nf">chat</span><span class="p">(</span><span class="nd">@AuthenticationPrincipal</span><span class="w"> </span><span class="n">UserDetails</span><span class="w"> </span><span class="n">user</span><span class="p">,</span><span class="w"> </span><span class="nd">@RequestBody</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">message</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">sessionId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">resolveSessionId</span><span class="p">(</span><span class="n">user</span><span class="p">.</span><span class="na">getUsername</span><span class="p">());</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">chatClient</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">        </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
+</span></code></pre></div>
 
 
 
@@ -1164,10 +942,10 @@ the model may still need.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.instant", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.top", "navigation.path", "navigation.indexes", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": ["latest-snapshot", "latest"], "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.instant.progress", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.top", "navigation.path", "navigation.indexes", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": ["latest-snapshot", "latest"], "provider": "mike"}}</script>
     
     
-      <script src="assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>
