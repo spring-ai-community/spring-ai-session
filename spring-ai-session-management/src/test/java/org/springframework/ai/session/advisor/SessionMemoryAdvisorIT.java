@@ -112,23 +112,14 @@ class SessionMemoryAdvisorIT {
 	}
 
 	@Test
-	void beforeFallsBackToDefaultSessionIdWhenContextKeyAbsent() {
-		// Request without SESSION_ID_CONTEXT_KEY in context — advisor falls back to
-		// its configured defaultSessionId (configured in the test as this.sessionId)
-		SessionMemoryAdvisor advisorWithDefault = SessionMemoryAdvisor.builder(this.sessionService)
-			.defaultSessionId(this.sessionId)
-			.build();
-
-		Prompt prompt = new Prompt(List.of(new UserMessage("hello via default")));
+	void beforeThrowsWhenSessionIdContextKeyAbsent() {
+		Prompt prompt = new Prompt(List.of(new UserMessage("hello")));
 		ChatClientRequest request = ChatClientRequest.builder().prompt(prompt).context(Map.of()).build();
 		AdvisorChain chain = mock(AdvisorChain.class);
 
-		advisorWithDefault.before(request, chain);
-
-		// The user message was appended to the session resolved via defaultSessionId
-		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
-		assertThat(events).hasSize(1);
-		assertThat(events.get(0).getMessage().getText()).isEqualTo("hello via default");
+		assertThatThrownBy(() -> this.advisor.before(request, chain))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("SESSION_ID_CONTEXT_KEY");
 	}
 
 	// --- After hook ---
@@ -180,7 +171,6 @@ class SessionMemoryAdvisorIT {
 	void compactionIsTriggeredAfterThreshold() {
 		// Wire advisor with a very low compaction threshold (1 turn) and small window
 		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
-			.defaultSessionId(this.sessionId)
 			.compactionTrigger(new TurnCountTrigger(2))
 			.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(2).build())
 			.build();
@@ -250,7 +240,6 @@ class SessionMemoryAdvisorIT {
 			.build());
 
 		SessionMemoryAdvisor branchAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
-			.defaultSessionId(this.sessionId)
 			.eventFilter(EventFilter.forBranch("orch.researcher"))
 			.build();
 

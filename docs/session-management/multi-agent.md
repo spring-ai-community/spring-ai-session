@@ -76,9 +76,15 @@ To apply branch isolation automatically inside `SessionMemoryAdvisor`, configure
 
 ```java
 SessionMemoryAdvisor researcherAdvisor = SessionMemoryAdvisor.builder(sessionService)
-    .defaultSessionId(sharedSessionId)
     .eventFilter(EventFilter.forBranch("orch.researcher"))
     .build();
+
+// Pass the shared session ID on every request
+chatClient.prompt()
+    .user(userMessage)
+    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sharedSessionId))
+    .call()
+    .content();
 ```
 
 This ensures the advisor only injects events visible to `orch.researcher` into the

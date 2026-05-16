@@ -58,7 +58,8 @@ import org.springframework.util.Assert;
  *
  * <p>
  * The session is identified by the {@link #SESSION_ID_CONTEXT_KEY} value in the advisor
- * context, falling back to {@code defaultSessionId}.
+ * context. The key must be present on every request; omitting it throws
+ * {@link IllegalStateException} to prevent accidental cross-user session sharing.
  *
  * <p>
  * <strong>Concurrent compaction safety:</strong> If two requests for the same session
@@ -89,8 +90,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor {
 
 	private final SessionService sessionService;
 
-	private final String defaultSessionId;
-
 	private final String defaultUserId;
 
 	private final int order;
@@ -103,11 +102,10 @@ public final class SessionMemoryAdvisor implements BaseAdvisor {
 
 	@Nullable private final CompactionStrategy compactionStrategy;
 
-	private SessionMemoryAdvisor(SessionService sessionService, String defaultSessionId, String defaultUserId,
+	private SessionMemoryAdvisor(SessionService sessionService, String defaultUserId,
 			int order, Scheduler scheduler, EventFilter eventFilter, @Nullable CompactionTrigger compactionTrigger,
 			@Nullable CompactionStrategy compactionStrategy) {
 		this.sessionService = sessionService;
-		this.defaultSessionId = defaultSessionId;
 		this.defaultUserId = defaultUserId;
 		this.order = order;
 		this.scheduler = scheduler;
@@ -129,8 +127,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor {
 	@Override
 	public ChatClientRequest before(ChatClientRequest request, AdvisorChain advisorChain) {
 
-		// 0. Determine the session ID for this request, either from the context or
-		// falling back to the default.
+		// 0. Resolve the session ID — must be present in the request context.
 		String sessionId = getSessionId(request.context());
 
 		// 1. Find or create the session. The Session object is cached in the request
@@ -219,7 +216,12 @@ public final class SessionMemoryAdvisor implements BaseAdvisor {
 
 	private String getSessionId(Map<String, @Nullable Object> context) {
 		Object value = context.get(SESSION_ID_CONTEXT_KEY);
-		return (value instanceof String s && !s.isBlank()) ? s : this.defaultSessionId;
+		if (value instanceof String s && !s.isBlank()) {
+			return s;
+		}
+		throw new IllegalStateException("No session ID found in advisor context. "
+				+ "Set SESSION_ID_CONTEXT_KEY on every request: "
+				+ ".advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))");
 	}
 
 	private String getUserId(Map<String, @Nullable Object> context) {
@@ -234,8 +236,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor {
 	public static final class Builder {
 
 		private final SessionService sessionService;
-
-		private String defaultSessionId = "default";
 
 		private String defaultUserId = "default-user";
 
@@ -252,11 +252,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor {
 		private Builder(SessionService sessionService) {
 			Assert.notNull(sessionService, "sessionService must not be null");
 			this.sessionService = sessionService;
-		}
-
-		public Builder defaultSessionId(String defaultSessionId) {
-			this.defaultSessionId = defaultSessionId;
-			return this;
 		}
 
 		public Builder defaultUserId(String defaultUserId) {
@@ -306,7 +301,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor {
 				throw new IllegalArgumentException(
 						"compactionTrigger and compactionStrategy must be set together — set both or neither");
 			}
-			return new SessionMemoryAdvisor(this.sessionService, this.defaultSessionId, this.defaultUserId, this.order,
+			return new SessionMemoryAdvisor(this.sessionService, this.defaultUserId, this.order,
 					this.scheduler, this.eventFilter, this.compactionTrigger, this.compactionStrategy);
 		}
 

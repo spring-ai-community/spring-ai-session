@@ -75,7 +75,6 @@ Session session = service.create(
 
 // 3. Wire it into a ChatClient
 SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(service)
-    .defaultSessionId(session.id())
     .defaultUserId("alice")
     .compactionTrigger(new TurnCountTrigger(20))
     .compactionStrategy(new SlidingWindowCompactionStrategy(10))
@@ -86,7 +85,11 @@ ChatClient client = ChatClient.builder(chatModel)
     .build();
 
 // Every call automatically loads history, appends messages, and compacts when needed
-String answer = client.prompt().user("What is Spring AI?").call().content();
+String answer = client.prompt()
+    .user("What is Spring AI?")
+    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, session.id()))
+    .call()
+    .content();
 ```
 
 ---

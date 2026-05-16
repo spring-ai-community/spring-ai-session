@@ -10,8 +10,8 @@ no manual history loading or appending required in application code.
 
 On every request the advisor:
 
-1. Looks up the session by the `SESSION_ID_CONTEXT_KEY` value in the advisor context
-   (falls back to `defaultSessionId`). If the session does not exist, it is created
+1. Resolves the session ID from `SESSION_ID_CONTEXT_KEY` in the advisor context — this
+   key **must** be present on every request. If the session does not exist, it is created
    automatically using the `USER_ID_CONTEXT_KEY` value (or `defaultUserId`) and the
    resolved session ID.
 2. Retrieves the session's event history (filtered by the configured `eventFilter`,
@@ -32,7 +32,6 @@ On every request the advisor:
 
 ```java
 SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
-    .defaultSessionId("session-123")
     .defaultUserId("alice")
     // Compact when 20 turns accumulate, using LLM summarization to retain context
     .compactionTrigger(new TurnCountTrigger(20))
@@ -47,6 +46,11 @@ ChatClient client = ChatClient.builder(chatModel)
     .defaultAdvisors(advisor)
     .build();
 ```
+
+!!! warning "Session ID is required on every request"
+    `SESSION_ID_CONTEXT_KEY` must be set in the advisor context on every call.
+    Omitting it throws `IllegalStateException`. This is intentional — a shared fallback
+    session ID would silently merge history across different users.
 
 !!! warning "Trigger and strategy must be set together"
     Setting only one of `compactionTrigger` or `compactionStrategy` throws
@@ -67,7 +71,7 @@ String response = client.prompt()
 ```
 
 If no session exists for the given ID, the advisor creates one automatically using the
-`defaultUserId`.
+`USER_ID_CONTEXT_KEY` value from the request context, falling back to `defaultUserId`.
 
 ---
 
