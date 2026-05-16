@@ -218,11 +218,30 @@ List<Message> history = service.getMessages(session.id());
 // 4. Retrieve as SessionEvent list (for filtering, inspection, compaction)
 List<SessionEvent> events = service.getEvents(session.id());
 
-// 5. Delete
+// 5. Delete a single session
 service.delete(session.id());
+
+// 6. Delete all expired sessions (call from a scheduler)
+int removed = service.deleteExpiredSessions(Instant.now());
 ```
 
 Deleted sessions are removed from the repository entirely — there is no tombstone state.
+
+### Expiry cleanup
+
+Sessions are not automatically swept — `deleteExpiredSessions(Instant)` must be called
+explicitly. Wire it to a scheduler in your application:
+
+```java
+@Scheduled(fixedRate = 3_600_000) // every hour
+void sweepExpiredSessions() {
+    int removed = sessionService.deleteExpiredSessions(Instant.now());
+    log.info("Swept {} expired sessions", removed);
+}
+```
+
+`deleteExpiredSessions` finds all sessions whose `expiresAt` is before the supplied
+instant and deletes them one by one. It returns the count of sessions removed.
 
 ---
 

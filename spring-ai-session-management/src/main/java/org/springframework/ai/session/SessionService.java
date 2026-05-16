@@ -16,6 +16,7 @@
 
 package org.springframework.ai.session;
 
+import java.time.Instant;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
@@ -42,6 +43,22 @@ public interface SessionService {
 	List<Session> findByUserId(String userId);
 
 	void delete(String sessionId);
+
+	/**
+	 * Deletes all sessions whose {@code expiresAt} is before {@code before}. Delegates
+	 * to {@link SessionRepository#findExpiredSessionIds(Instant)} then deletes each one.
+	 * Returns the number of sessions deleted.
+	 * <p>
+	 * This method does not schedule itself — call it from a {@code @Scheduled} method,
+	 * a Quartz job, or any other scheduler:
+	 * <pre>{@code
+	 * @Scheduled(fixedRate = 3_600_000) // every hour
+	 * void sweepExpiredSessions() {
+	 *     sessionService.deleteExpiredSessions(Instant.now());
+	 * }
+	 * }</pre>
+	 */
+	int deleteExpiredSessions(Instant before);
 
 	// Events
 

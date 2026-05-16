@@ -16,6 +16,7 @@
 
 package org.springframework.ai.session;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -230,6 +231,43 @@ class DefaultSessionServiceTests {
 		assertThat(messages).hasSize(2);
 		assertThat(messages.get(0).getText()).isEqualTo("msg-4");
 		assertThat(messages.get(1).getText()).isEqualTo("msg-5");
+	}
+
+	// --- deleteExpiredSessions ---
+
+	@Test
+	void deleteExpiredSessionsRemovesOnlyExpiredSessions() {
+		Session active = this.service.create(CreateSessionRequest.builder()
+			.userId("u1")
+			.timeToLive(java.time.Duration.ofHours(1))
+			.build());
+		Session expired = this.service.create(CreateSessionRequest.builder()
+			.userId("u2")
+			.timeToLive(java.time.Duration.ofSeconds(-1)) // already in the past
+			.build());
+
+		int deleted = this.service.deleteExpiredSessions(Instant.now());
+
+		assertThat(deleted).isEqualTo(1);
+		assertThat(this.service.findById(active.id())).isNotNull();
+		assertThat(this.service.findById(expired.id())).isNull();
+	}
+
+	@Test
+	void deleteExpiredSessionsReturnsZeroWhenNoneExpired() {
+		this.service.create(CreateSessionRequest.builder()
+			.userId("u1")
+			.timeToLive(java.time.Duration.ofHours(1))
+			.build());
+
+		int deleted = this.service.deleteExpiredSessions(Instant.now());
+
+		assertThat(deleted).isZero();
+	}
+
+	@Test
+	void deleteExpiredSessionsReturnsZeroWhenNoSessions() {
+		assertThat(this.service.deleteExpiredSessions(Instant.now())).isZero();
 	}
 
 }
