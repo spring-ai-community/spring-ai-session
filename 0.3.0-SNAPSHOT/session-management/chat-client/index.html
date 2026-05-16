@@ -1064,7 +1064,9 @@ no manual history loading or appending required in application code.</p>
 <li>Resolves the session ID from <code>SESSION_ID_CONTEXT_KEY</code> in the advisor context — this
    key <strong>must</strong> be present on every request. If the session does not exist, it is created
    automatically using the <code>USER_ID_CONTEXT_KEY</code> value (or <code>defaultUserId</code>) and the
-   resolved session ID.</li>
+   resolved session ID. If the session already exists and <code>USER_ID_CONTEXT_KEY</code> is set,
+   the advisor validates that the requesting user owns the session and throws
+   <code>IllegalStateException</code> on mismatch.</li>
 <li>Retrieves the session's event history (filtered by the configured <code>eventFilter</code>,
    default <code>EventFilter.all()</code>) and <strong>prepends</strong> it to the prompt messages. If the
    request context contains an <code>EVENT_FILTER_CONTEXT_KEY</code> value, it is merged with the
@@ -1116,6 +1118,25 @@ session ID would silently merge history across different users.</p>
 </span></code></pre></div>
 <p>If no session exists for the given ID, the advisor creates one automatically using the
 <code>USER_ID_CONTEXT_KEY</code> value from the request context, falling back to <code>defaultUserId</code>.</p>
+<div class="admonition note">
+<p class="admonition-title">Ownership enforcement</p>
+<p>When <code>USER_ID_CONTEXT_KEY</code> is present and the session already exists, the advisor
+checks that the supplied user ID matches <code>session.userId()</code>. A mismatch throws
+<code>IllegalStateException</code> — this prevents one user from reading or appending to
+another user's session if session IDs are ever guessable or shared.</p>
+<p>The check is <strong>skipped</strong> when <code>USER_ID_CONTEXT_KEY</code> is absent so that callers
+which rely solely on <code>defaultUserId</code> (or do their own authorization upstream) are
+not affected.</p>
+<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Hello!&quot;</span><span class="p">)</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session-abc&quot;</span><span class="p">)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">USER_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;alice&quot;</span><span class="p">)</span><span class="w">  </span><span class="c1">// enforced</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
+</span></code></pre></div>
+</div>
 <hr />
 <h2 id="context-keys">Context keys<a class="headerlink" href="#context-keys" title="Permanent link">&para;</a></h2>
 <table>
@@ -1135,7 +1156,7 @@ session ID would silently merge history across different users.</p>
 <tr>
 <td><code>USER_ID_CONTEXT_KEY</code></td>
 <td><code>"chat_memory_user_id"</code></td>
-<td>Used when auto-creating a session</td>
+<td>Used when auto-creating a session; also enforces ownership on existing sessions when set</td>
 </tr>
 <tr>
 <td><code>EVENT_FILTER_CONTEXT_KEY</code></td>
@@ -1148,16 +1169,16 @@ session ID would silently merge history across different users.</p>
 <h2 id="per-request-filter-override">Per-request filter override<a class="headerlink" href="#per-request-filter-override" title="Permanent link">&para;</a></h2>
 <p>Pass an <code>EventFilter</code> via <code>EVENT_FILTER_CONTEXT_KEY</code> to narrow or adjust history
 retrieval on a single call without reconfiguring the advisor:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// Advisor is configured with EventFilter.all() (default).</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1">// This request overrides to see only the last 5 events.</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">String</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Quick summary please&quot;</span><span class="p">)</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">)</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">EVENT_FILTER_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">5</span><span class="p">))</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1">// Advisor is configured with EventFilter.all() (default).</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1">// This request overrides to see only the last 5 events.</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">String</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Quick summary please&quot;</span><span class="p">)</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">)</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">EVENT_FILTER_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">5</span><span class="p">))</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
 <p><code>EventFilter.merge()</code> semantics: every non-null field from the request filter replaces
 the corresponding field from the advisor default; <code>excludeSynthetic</code> is OR-ed so either
