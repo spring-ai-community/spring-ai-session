@@ -21,6 +21,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.SessionEvent;
 
@@ -103,6 +104,57 @@ class CompactionUtilsTests {
 		assertThat(CompactionUtils.snapToTurnStart(events, 2)).isEqualTo(3);
 	}
 
+	// --- empty list ---
+
+	@Test
+	void emptyListReturnsZero() {
+		assertThat(CompactionUtils.snapToTurnStart(List.of(), 0)).isEqualTo(0);
+	}
+
+	// --- sub-agent (non-null branch) events are turn-internal, never turn starts ---
+
+	@Test
+	void cutOnSubAgentUserSnapsToNextRootUser() {
+		// turn 1: u1, a1; sub-agent turn (branch "sub"): u2, a2; turn 2: u3
+		List<SessionEvent> events = List.of(user("u1"), assistant("a1"), user("u2", "sub"), assistant("a2", "sub"),
+				user("u3"));
+
+		// cut at u2 (index 2) — a sub-agent USER, skips the branch and lands on u3 (index 4)
+		assertThat(CompactionUtils.snapToTurnStart(events, 2)).isEqualTo(4);
+	}
+
+	@Test
+	void cutInMiddleOfMultiStepSubAgentTurnSnapsToNextRootUser() {
+		// turn 1: u1, a1; sub-agent turn (branch "sub"): u2, a2 (tool call), t1, a3; turn 2: u3
+		List<SessionEvent> events = List.of(user("u1"), assistant("a1"), user("u2", "sub"), assistantToolCall("sub"),
+				tool("sub"), assistant("a3", "sub"), user("u3"));
+
+		// cut at t1 (index 4) — must skip the rest of the branch and land on u3 (index 6)
+		assertThat(CompactionUtils.snapToTurnStart(events, 4)).isEqualTo(6);
+		// cut at u2 (index 2) — same result
+		assertThat(CompactionUtils.snapToTurnStart(events, 2)).isEqualTo(6);
+	}
+
+	@Test
+	void cutOnPeerBranchUsersSnapsPastAllOfThem() {
+		// peer branch 1: u1, a1; peer branch 2: u2, a2; root turn: u3
+		List<SessionEvent> events = List.of(user("u1", "peer1"), assistant("a1", "peer1"), user("u2", "peer2"),
+				assistant("a2", "peer2"), user("u3"));
+
+		// cut at u1 (index 0) — only null-branch matters, not branch identity; skip both peers, land on u3 (index 4)
+		assertThat(CompactionUtils.snapToTurnStart(events, 0)).isEqualTo(4);
+	}
+
+	// --- no null-branch USER at or after the cut ---
+
+	@Test
+	void onlySubAgentEventsAfterCutReturnsSize() {
+		// sub-agent turn only (branch "sub"): u1, a1 — no root USER to snap to
+		List<SessionEvent> events = List.of(user("u1", "sub"), assistant("a1", "sub"));
+
+		assertThat(CompactionUtils.snapToTurnStart(events, 0)).isEqualTo(2);
+	}
+
 	// --- helpers ---
 
 	private static SessionEvent user(String text) {
@@ -111,6 +163,34 @@ class CompactionUtilsTests {
 
 	private static SessionEvent assistant(String text) {
 		return SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage(text)).build();
+	}
+
+	private static SessionEvent user(String text, String branch) {
+		return SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage(text)).branch(branch).build();
+	}
+
+	private static SessionEvent assistant(String text, String branch) {
+		return SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage(text)).branch(branch).build();
+	}
+
+	private static SessionEvent assistantToolCall(String branch) {
+		return SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(AssistantMessage.builder()
+				.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{}")))
+				.build())
+			.branch(branch)
+			.build();
+	}
+
+	private static SessionEvent tool(String branch) {
+		return SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(ToolResponseMessage.builder()
+				.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "{\"temp\":\"22C\"}")))
+				.build())
+			.branch(branch)
+			.build();
 	}
 
 }
