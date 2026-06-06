@@ -1109,10 +1109,12 @@ session ID would silently merge history across different users.</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">Default advisor order</p>
-<p>The default order is <code>1000</code>, which places <code>SessionMemoryAdvisor</code> after the
-<code>ToolAdvisor</code> (order <code>300</code>). This ensures tool-call events are captured in
-the session history before the tool advisor's <code>before()</code> callback processes them.
-Override with <code>.order(n)</code> if your pipeline requires a different position.</p>
+<p>The default order is <code>Ordered.HIGHEST_PRECEDENCE + 1000</code> (≈ <code>Integer.MIN_VALUE + 1000</code>),
+giving <code>SessionMemoryAdvisor</code> higher precedence than <code>ToolAdvisor</code> (order <code>300</code>).
+Higher precedence means <code>before()</code> runs first and <code>after()</code> runs last, so
+<code>SessionMemoryAdvisor</code> wraps the tool advisor — tool results are fully resolved before
+the session write in <code>after()</code>. Override with <code>.order(n)</code> if your pipeline requires a
+different position.</p>
 </div>
 <hr />
 <h2 id="passing-a-session-id-per-request">Passing a session ID per request<a class="headerlink" href="#passing-a-session-id-per-request" title="Permanent link">&para;</a></h2>
