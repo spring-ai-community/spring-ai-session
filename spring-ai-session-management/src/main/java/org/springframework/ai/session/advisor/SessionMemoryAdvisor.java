@@ -28,11 +28,11 @@ import reactor.core.scheduler.Scheduler;
 import org.springframework.ai.chat.client.ChatClientMessageAggregator;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
-import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
 import org.springframework.ai.chat.client.advisor.api.MemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.session.CreateSessionRequest;
@@ -76,10 +76,12 @@ import org.springframework.util.Assert;
 public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	/**
-	 * Context key used to pass the session ID into the advisor per-request. Set via:
+	 * Context key used to pass the session ID into the advisor per-request. Equals
+	 * {@link org.springframework.ai.chat.memory.ChatMemory#CONVERSATION_ID} so that this
+	 * advisor uses the same context key as the rest of Spring AI's memory API. Set via:
 	 * {@code .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "my-session-id"))}
 	 */
-	public static final String SESSION_ID_CONTEXT_KEY = "chat_memory_session_id";
+	public static final String SESSION_ID_CONTEXT_KEY = ChatMemory.CONVERSATION_ID;
 
 	/**
 	 * Context key used to pass the user ID into the advisor per-request. Set via:
@@ -103,8 +105,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	@Nullable private final CompactionStrategy compactionStrategy;
 
-	private SessionMemoryAdvisor(SessionService sessionService, String defaultUserId,
-			int order, Scheduler scheduler, EventFilter eventFilter, @Nullable CompactionTrigger compactionTrigger,
+	private SessionMemoryAdvisor(SessionService sessionService, String defaultUserId, int order, Scheduler scheduler,
+			EventFilter eventFilter, @Nullable CompactionTrigger compactionTrigger,
 			@Nullable CompactionStrategy compactionStrategy) {
 		this.sessionService = sessionService;
 		this.defaultUserId = defaultUserId;
@@ -146,8 +148,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			Object userIdValue = request.context().get(USER_ID_CONTEXT_KEY);
 			if (userIdValue instanceof String requestUserId && !requestUserId.isBlank()
 					&& !requestUserId.equals(session.userId())) {
-				throw new IllegalStateException("Session '" + sessionId + "' does not belong to user '"
-						+ requestUserId + "'. Access denied.");
+				throw new IllegalStateException(
+						"Session '" + sessionId + "' does not belong to user '" + requestUserId + "'. Access denied.");
 			}
 		}
 
@@ -231,9 +233,9 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		if (value instanceof String s && !s.isBlank()) {
 			return s;
 		}
-		throw new IllegalStateException("No session ID found in advisor context. "
-				+ "Set SESSION_ID_CONTEXT_KEY on every request: "
-				+ ".advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))");
+		throw new IllegalStateException(
+				"No session ID found in advisor context. " + "Set SESSION_ID_CONTEXT_KEY on every request: "
+						+ ".advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))");
 	}
 
 	private String getUserId(Map<String, @Nullable Object> context) {
@@ -251,7 +253,10 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		private String defaultUserId = "default-user";
 
-		private int order = Advisor.DEFAULT_CHAT_MEMORY_PRECEDENCE_ORDER;
+		// Default order 1000 ensures this advisor runs after the ToolAdvisor (order 300),
+		// so tool-call events are captured in the session history before the tool advisor's
+		// before() callback can remove them from the prompt.
+		private int order = 1000;
 
 		private Scheduler scheduler = BaseAdvisor.DEFAULT_SCHEDULER;
 
@@ -313,8 +318,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 				throw new IllegalArgumentException(
 						"compactionTrigger and compactionStrategy must be set together — set both or neither");
 			}
-			return new SessionMemoryAdvisor(this.sessionService, this.defaultUserId, this.order,
-					this.scheduler, this.eventFilter, this.compactionTrigger, this.compactionStrategy);
+			return new SessionMemoryAdvisor(this.sessionService, this.defaultUserId, this.order, this.scheduler,
+					this.eventFilter, this.compactionTrigger, this.compactionStrategy);
 		}
 
 	}

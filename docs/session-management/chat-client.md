@@ -58,6 +58,12 @@ ChatClient client = ChatClient.builder(chatModel)
     Setting only one of `compactionTrigger` or `compactionStrategy` throws
     `IllegalStateException`. Set both or neither.
 
+!!! note "Default advisor order"
+    The default order is `1000`, which places `SessionMemoryAdvisor` after the
+    `ToolAdvisor` (order `300`). This ensures tool-call events are captured in
+    the session history before the tool advisor's `before()` callback processes them.
+    Override with `.order(n)` if your pipeline requires a different position.
+
 ---
 
 ## Passing a session ID per request
@@ -102,7 +108,7 @@ If no session exists for the given ID, the advisor creates one automatically usi
 
 | Key constant | String value | Purpose |
 |---|---|---|
-| `SESSION_ID_CONTEXT_KEY` | `"chat_memory_session_id"` | Routes the request to a session |
+| `SESSION_ID_CONTEXT_KEY` | `"chat_memory_conversation_id"` (= `ChatMemory.CONVERSATION_ID`) | Routes the request to a session |
 | `USER_ID_CONTEXT_KEY` | `"chat_memory_user_id"` | Used when auto-creating a session; also enforces ownership on existing sessions when set |
 | `EVENT_FILTER_CONTEXT_KEY` | `"chat_memory_event_filter_id"` | Per-request `EventFilter` merged with the advisor-level filter |
 
