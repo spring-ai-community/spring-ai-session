@@ -743,6 +743,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Turn-boundary Safety">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#branch-awareness-in-multi-agent-sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Branch-awareness in multi-agent sessions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1128,6 +1145,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Turn-boundary Safety">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#branch-awareness-in-multi-agent-sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Branch-awareness in multi-agent sessions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1316,7 +1350,7 @@ summary events are always preserved and placed first; they do not count against 
 <ol>
 <li>Separate synthetic events (always preserved, placed first in output).</li>
 <li>Keep the last <code>maxEvents</code> real events.</li>
-<li>Snap the cut point forward to the nearest <code>USER</code> message (turn-boundary safety).</li>
+<li>Snap the cut point forward to the nearest root-level <code>USER</code> message (turn-boundary safety).</li>
 <li>Return: <code>[synthetics] + [kept real events]</code>.</li>
 </ol>
 <h3 id="turnwindowcompactionstrategy">TurnWindowCompactionStrategy<a class="headerlink" href="#turnwindowcompactionstrategy" title="Permanent link">&para;</a></h3>
@@ -1353,7 +1387,7 @@ newest to oldest.</p>
    first event that would exceed the remaining budget. This produces a <strong>contiguous
    suffix</strong> — skipping individual oversize events would create non-contiguous gaps that
    break conversation coherence.</li>
-<li>Drop any leading kept events that are not <code>USER</code> messages (turn-boundary safety).</li>
+<li>Drop any leading kept events that are not root-level <code>USER</code> messages (turn-boundary safety).</li>
 <li>Return: <code>[synthetics] + [kept events]</code>.</li>
 </ol>
 <h3 id="recursivesummarizationcompactionstrategy">RecursiveSummarizationCompactionStrategy<a class="headerlink" href="#recursivesummarizationcompactionstrategy" title="Permanent link">&para;</a></h3>
@@ -1418,13 +1452,31 @@ predecessors without starting from scratch.</p>
 <hr />
 <h2 id="turn-boundary-safety">Turn-boundary Safety<a class="headerlink" href="#turn-boundary-safety" title="Permanent link">&para;</a></h2>
 <p>All four strategies share a common safety rule enforced by
-<code>CompactionUtils.snapToTurnStart</code>: the kept window always starts at a <code>USER</code> message.</p>
-<p>If a raw cut point lands on an <code>ASSISTANT</code> or <code>TOOL</code> event in the middle of a turn, it
-is advanced forward to the next <code>USER</code> message. This prevents keeping a tool result or
-assistant reply without the user message that originated its turn.</p>
+<code>CompactionUtils.snapToTurnStart</code>: the kept window always starts at a <strong>root-level</strong>
+<code>USER</code> message — one whose <code>branch</code> is <code>null</code>.</p>
+<p>If a raw cut point lands in the middle of a turn, it is advanced forward to the next
+qualifying event. This prevents keeping a tool result or assistant reply without the user
+message that originated its turn.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>Before snap:  [u1, a1, u2, a2, | a3, u3, a3]   ← cut lands on a3 (middle of turn 2)
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>After snap:   [u1, a1, u2, a2, a3, | u3, a3]   ← cut moved to u3 (turn start)
 </span></code></pre></div>
+<h3 id="branch-awareness-in-multi-agent-sessions">Branch-awareness in multi-agent sessions<a class="headerlink" href="#branch-awareness-in-multi-agent-sessions" title="Permanent link">&para;</a></h3>
+<p>In multi-agent sessions, <code>UserMessage</code> events appear on named branches (e.g.
+<code>branch="orch.researcher"</code>) as well as at the root level. A branched <code>UserMessage</code> is the
+prompt sent <em>to</em> a sub-agent — it is <strong>turn-internal</strong>, not a turn boundary.</p>
+<p>A single root turn can contain an entire sub-agent exchange:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>[branch=null]  USER:      &quot;What&#39;s the weather in Paris?&quot;      ← real turn start
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>[branch=null]  ASSISTANT: [tool call: delegate_to_agent]
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>[branch=&quot;sub&quot;] USER:      &quot;Fetch weather for Paris&quot;           ← internal sub-agent prompt
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>[branch=&quot;sub&quot;] ASSISTANT: [tool call: get_weather]
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>[branch=&quot;sub&quot;] TOOL:      {temp: &quot;22C&quot;}
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>[branch=&quot;sub&quot;] ASSISTANT: &quot;It&#39;s 22°C in Paris&quot;
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>[branch=null]  ASSISTANT: &quot;The weather in Paris is 22°C&quot;
+</span></code></pre></div>
+<p><code>snapToTurnStart</code> skips all branched events regardless of message type, and only stops
+when it finds a <code>USER</code> event with <code>branch == null</code> (i.e. <code>SessionEvent.isRootEvent()</code>).
+This prevents the cut from landing on a sub-agent prompt and leaving the root turn's user
+message in the archived window.</p>
 <hr />
 <h2 id="choosing-a-strategy">Choosing a strategy<a class="headerlink" href="#choosing-a-strategy" title="Permanent link">&para;</a></h2>
 <table>
