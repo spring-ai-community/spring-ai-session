@@ -59,10 +59,12 @@ ChatClient client = ChatClient.builder(chatModel)
     `IllegalStateException`. Set both or neither.
 
 !!! note "Default advisor order"
-    The default order is `1000`, which places `SessionMemoryAdvisor` after the
-    `ToolAdvisor` (order `300`). This ensures tool-call events are captured in
-    the session history before the tool advisor's `before()` callback processes them.
-    Override with `.order(n)` if your pipeline requires a different position.
+    The default order is `Ordered.HIGHEST_PRECEDENCE + 1000` (≈ `Integer.MIN_VALUE + 1000`),
+    giving `SessionMemoryAdvisor` higher precedence than `ToolAdvisor` (order `300`).
+    Higher precedence means `before()` runs first and `after()` runs last, so
+    `SessionMemoryAdvisor` wraps the tool advisor — tool results are fully resolved before
+    the session write in `after()`. Override with `.order(n)` if your pipeline requires a
+    different position.
 
 ---
 
