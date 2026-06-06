@@ -31,6 +31,7 @@ import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
+import org.springframework.ai.chat.client.advisor.api.MemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -72,7 +73,7 @@ import org.springframework.util.Assert;
  * @author Christian Tzolov
  * @since 2.0.0
  */
-public final class SessionMemoryAdvisor implements BaseAdvisor {
+public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	/**
 	 * Context key used to pass the session ID into the advisor per-request. Set via:
