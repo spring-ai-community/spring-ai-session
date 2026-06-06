@@ -250,6 +250,56 @@ class TokenCountCompactionStrategyTests {
 		assertThat(result.archivedEvents()).isEmpty();
 	}
 
+	// --- branch-awareness ---
+
+	@Test
+	void snapSkipsBranchUserEventOnTurnBoundary() {
+		// Events (CHAR_ESTIMATOR costs based on formatEvent output):
+		//   u1-root "User: u1" = 8, a1-root "Assistant: a1" = 13
+		//   u2-sub  "User: u2" = 8, a2-sub  "Assistant: a2" = 13  (branch="sub")
+		//   u3-root "User: u3" = 8, a3-root "Assistant: a3" = 13
+		//
+		// Backwards scan with budget=40:
+		//   a3-root(13) fits, u3-root(8) → 21 fits, a2-sub(13) → 34 fits,
+		//   u2-sub(8)   → 42 > 40, stop  →  rawCutIndex = 3 (a2-sub)
+		//
+		// snapToTurnStart(real, 3):
+		//   idx=3: a2-sub (branch → not root → skip)
+		//   idx=4: u3-root (root USER → stop)
+		// → cutIndex=4, kept=[u3-root, a3-root]
+		//
+		// Without branch-awareness the old snap would have stopped at u2-sub (branch USER),
+		// leaving the kept window starting on a sub-agent message.
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(40)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
+
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a1")).build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(new UserMessage("u2"))
+			.branch("sub")
+			.build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(new AssistantMessage("a2"))
+			.branch("sub")
+			.build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u3")).build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a3")).build());
+
+		CompactionResult result = strategy.compact(requestWith(events));
+
+		// Kept window must start at root USER u3, not branch USER u2
+		assertThat(result.compactedEvents()).hasSize(2);
+		assertThat(result.compactedEvents().get(0).getMessage().getText()).isEqualTo("u3");
+		assertThat(result.compactedEvents().get(1).getMessage().getText()).isEqualTo("a3");
+		assertThat(result.archivedEvents()).hasSize(4); // u1, a1, u2-sub, a2-sub
+	}
+
 	// --- tool call / tool response token counting ---
 
 	@Test

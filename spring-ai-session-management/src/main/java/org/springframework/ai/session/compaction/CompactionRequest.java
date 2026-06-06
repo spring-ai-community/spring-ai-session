@@ -52,7 +52,7 @@ public record CompactionRequest(Session session, List<SessionEvent> events, int 
 		int turnCount = (int) events.stream()
 			.filter(e -> !e.isSynthetic())
 			.filter(e -> e.getMessageType() == MessageType.USER)
-			.filter(e -> e.getBranch() == null)
+			.filter(SessionEvent::isRootEvent)
 			.count();
 		return new CompactionRequest(session, events, eventCount, turnCount);
 	}

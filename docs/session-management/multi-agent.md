@@ -116,3 +116,16 @@ Synthetic summary events produced by `RecursiveSummarizationCompactionStrategy` 
 have `branch = null`. This ensures compaction summaries remain visible to every agent in
 the session after context has been pruned, regardless of which branch was active when
 compaction ran.
+
+---
+
+## Compaction and branches
+
+Compaction strategies are branch-aware. When computing the cut point, `snapToTurnStart`
+only considers root-level (`branch == null`) `USER` events as valid turn boundaries.
+Branched `UserMessage` events represent prompts sent *to* a sub-agent and are
+turn-internal — snapping to one would split the root turn that contains the sub-agent
+exchange.
+
+See [Turn-boundary Safety](compaction.md#turn-boundary-safety) in the compaction reference
+for the full explanation and event-log diagram.

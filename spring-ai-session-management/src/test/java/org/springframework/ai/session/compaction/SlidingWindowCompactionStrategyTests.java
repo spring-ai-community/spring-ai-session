@@ -222,6 +222,71 @@ class SlidingWindowCompactionStrategyTests {
 		assertThat(result.tokensEstimatedSaved()).isGreaterThan(0);
 	}
 
+	// --- branch-awareness ---
+
+	@Test
+	void branchEventsDoNotConsumeMaxEventsSlots() {
+		// real=[u1, a1, sub-q(branch), sub-a(branch), u2, a2] → 4 root events, 2 branch
+		// maxEvents=2 → archive 2 root events (u1, a1); kept window starts at u2.
+		// Branch events between the archived and kept root turns are also archived because
+		// they fall before the snap cut point.
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(2).build();
+
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a1")).build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(new UserMessage("sub-q"))
+			.branch("sub")
+			.build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(new AssistantMessage("sub-a"))
+			.branch("sub")
+			.build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u2")).build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a2")).build());
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		assertThat(result.compactedEvents()).hasSize(2);
+		assertThat(result.compactedEvents().get(0).getMessage().getText()).isEqualTo("u2");
+		assertThat(result.compactedEvents().get(1).getMessage().getText()).isEqualTo("a2");
+		assertThat(result.archivedEvents()).hasSize(4); // u1, a1, sub-q, sub-a
+	}
+
+	@Test
+	void noCompactionWhenRootEventsWithinBudgetDespiteExcessTotalEvents() {
+		// real=[u1, a1, sub-q(branch), sub-a(branch), u2, a2] — 6 total, 4 root events
+		// maxEvents=4 → 4 root events <= 4 slots → no-op (branch events come for free)
+		// Old behaviour (count all real events): 6 > 4 → would compact and start window
+		// at branch USER u2-sub, which is semantically wrong.
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(4).build();
+
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a1")).build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(new UserMessage("sub-q"))
+			.branch("sub")
+			.build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(new AssistantMessage("sub-a"))
+			.branch("sub")
+			.build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u2")).build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a2")).build());
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		// All 6 events returned unchanged — no compaction needed
+		assertThat(result.archivedEvents()).isEmpty();
+		assertThat(result.compactedEvents()).hasSize(6);
+	}
+
 	private List<SessionEvent> buildRealEvents(int count) {
 		List<SessionEvent> events = new ArrayList<>();
 		for (int i = 1; i <= count; i++) {
