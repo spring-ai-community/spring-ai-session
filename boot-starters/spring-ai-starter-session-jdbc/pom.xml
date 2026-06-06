@@ -22,13 +22,13 @@
     <parent>
         <groupId>org.springaicommunity</groupId>
         <artifactId>spring-ai-session-parent</artifactId>
-        <version>0.4.2-SNAPSHOT</version>
+        <version>0.4.2</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
     <groupId>org.springaicommunity</groupId>
     <artifactId>spring-ai-starter-session-jdbc</artifactId>
-    <version>0.4.2-SNAPSHOT</version>
+    <version>0.4.2</version>
     <packaging>jar</packaging>
 
     <name>Spring AI Starter - Session JDBC</name>

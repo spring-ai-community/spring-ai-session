@@ -18,7 +18,7 @@ Import the BOM so all module versions stay in sync:
         <dependency>
             <groupId>org.springaicommunity</groupId>
             <artifactId>spring-ai-session-bom</artifactId>
-            <version>${spring-ai-session.version}</version>
+            <version>0.4.2</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
