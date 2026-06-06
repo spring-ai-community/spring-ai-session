@@ -20,13 +20,13 @@ SessionEventTools tools = SessionEventTools.builder(sessionService)
 
 ChatClient client = ChatClient.builder(chatModel)
     .defaultTools(tools)
-    .defaultAdvisors(advisor)   // SessionMemoryAdvisor sets chat_memory_session_id
+    .defaultAdvisors(advisor)   // SessionMemoryAdvisor sets chat_memory_conversation_id
     .build();
 ```
 
 !!! tip
     Register `SessionMemoryAdvisor` alongside `SessionEventTools`. The advisor writes the
-    `chat_memory_session_id` context key that the tool uses to resolve the active session.
+    `chat_memory_conversation_id` context key (`ChatMemory.CONVERSATION_ID`) that the tool uses to resolve the active session.
     Without the advisor, the tool falls back to the literal session ID `"default"`.
 
 ---
@@ -56,8 +56,8 @@ When nothing matches: `"No results found."` is returned.
 
 ## How it works
 
-1. Resolves the session ID from `ToolContext` using the `chat_memory_session_id` key
-   (the same key written by `SessionMemoryAdvisor`). If the key is absent or blank, a
+1. Resolves the session ID from `ToolContext` using the `chat_memory_conversation_id` key
+   (`ChatMemory.CONVERSATION_ID`, the same key written by `SessionMemoryAdvisor`). If the key is absent or blank, a
    `WARN`-level log is emitted and the tool falls back to the literal session ID
    `"default"`.
 2. Calls `SessionService.getEvents(sessionId, EventFilter.keywordSearch(query, page, pageSize))`.
