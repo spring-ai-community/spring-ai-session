@@ -122,7 +122,7 @@ SlidingWindowCompactionStrategy.builder().maxEvents(20).tokenCountEstimator(myEs
 
 1. Separate synthetic events (always preserved, placed first in output).
 2. Keep the last `maxEvents` real events.
-3. Snap the cut point forward to the nearest `USER` message (turn-boundary safety).
+3. Snap the cut point forward to the nearest root-level `USER` message (turn-boundary safety).
 4. Return: `[synthetics] + [kept real events]`.
 
 ### TurnWindowCompactionStrategy
@@ -167,7 +167,7 @@ TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEst
    first event that would exceed the remaining budget. This produces a **contiguous
    suffix** — skipping individual oversize events would create non-contiguous gaps that
    break conversation coherence.
-3. Drop any leading kept events that are not `USER` messages (turn-boundary safety).
+3. Drop any leading kept events that are not root-level `USER` messages (turn-boundary safety).
 4. Return: `[synthetics] + [kept events]`.
 
 ### RecursiveSummarizationCompactionStrategy
@@ -246,16 +246,40 @@ predecessors without starting from scratch.
 ## Turn-boundary Safety
 
 All four strategies share a common safety rule enforced by
-`CompactionUtils.snapToTurnStart`: the kept window always starts at a `USER` message.
+`CompactionUtils.snapToTurnStart`: the kept window always starts at a **root-level**
+`USER` message — one whose `branch` is `null`.
 
-If a raw cut point lands on an `ASSISTANT` or `TOOL` event in the middle of a turn, it
-is advanced forward to the next `USER` message. This prevents keeping a tool result or
-assistant reply without the user message that originated its turn.
+If a raw cut point lands in the middle of a turn, it is advanced forward to the next
+qualifying event. This prevents keeping a tool result or assistant reply without the user
+message that originated its turn.
 
 ```
 Before snap:  [u1, a1, u2, a2, | a3, u3, a3]   ← cut lands on a3 (middle of turn 2)
 After snap:   [u1, a1, u2, a2, a3, | u3, a3]   ← cut moved to u3 (turn start)
 ```
+
+### Branch-awareness in multi-agent sessions
+
+In multi-agent sessions, `UserMessage` events appear on named branches (e.g.
+`branch="orch.researcher"`) as well as at the root level. A branched `UserMessage` is the
+prompt sent *to* a sub-agent — it is **turn-internal**, not a turn boundary.
+
+A single root turn can contain an entire sub-agent exchange:
+
+```
+[branch=null]  USER:      "What's the weather in Paris?"      ← real turn start
+[branch=null]  ASSISTANT: [tool call: delegate_to_agent]
+[branch="sub"] USER:      "Fetch weather for Paris"           ← internal sub-agent prompt
+[branch="sub"] ASSISTANT: [tool call: get_weather]
+[branch="sub"] TOOL:      {temp: "22C"}
+[branch="sub"] ASSISTANT: "It's 22°C in Paris"
+[branch=null]  ASSISTANT: "The weather in Paris is 22°C"
+```
+
+`snapToTurnStart` skips all branched events regardless of message type, and only stops
+when it finds a `USER` event with `branch == null` (i.e. `SessionEvent.isRootEvent()`).
+This prevents the cut from landing on a sub-agent prompt and leaving the root turn's user
+message in the archived window.
 
 ---
 

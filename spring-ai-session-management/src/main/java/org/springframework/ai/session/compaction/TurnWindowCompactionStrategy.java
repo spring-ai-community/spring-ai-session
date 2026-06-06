@@ -86,13 +86,15 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 		// (e.g., pre-seeded tool context). These are kept verbatim.
 		List<SessionEvent> preamble = new ArrayList<>();
 		int firstUserIdx = 0;
-		while (firstUserIdx < real.size() && real.get(firstUserIdx).getMessageType() != MessageType.USER) {
+		while (firstUserIdx < real.size()
+				&& !(real.get(firstUserIdx).isRootEvent()
+						&& real.get(firstUserIdx).getMessageType() == MessageType.USER)) {
 			preamble.add(real.get(firstUserIdx));
 			firstUserIdx++;
 		}
 		List<SessionEvent> afterPreamble = real.subList(firstUserIdx, real.size());
 
-		// 3. Group into turns — each turn starts at a user message
+		// 3. Group into turns — each turn starts at a root-level user message
 		List<List<SessionEvent>> turns = groupIntoTurns(afterPreamble);
 
 		// 4. No-op if within budget
@@ -121,16 +123,17 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 	}
 
 	/**
-	 * Groups a flat list of events into turns. Each turn starts with a
-	 * {@link MessageType#USER} event. Assumes {@code events} begins with a user message
-	 * (preamble has already been stripped).
+	 * Groups a flat list of events into turns. Each turn starts with a root-level
+	 * ({@code branch == null}) {@link MessageType#USER} event. Sub-agent branch events are
+	 * grouped with the enclosing root turn. Assumes {@code events} begins with a root user
+	 * message (preamble has already been stripped).
 	 */
 	private static List<List<SessionEvent>> groupIntoTurns(List<SessionEvent> events) {
 		List<List<SessionEvent>> turns = new ArrayList<>();
 		List<SessionEvent> currentTurn = null;
 
 		for (SessionEvent event : events) {
-			if (event.getMessageType() == MessageType.USER) {
+			if (event.isRootEvent() && event.getMessageType() == MessageType.USER) {
 				if (currentTurn != null) {
 					turns.add(currentTurn);
 				}

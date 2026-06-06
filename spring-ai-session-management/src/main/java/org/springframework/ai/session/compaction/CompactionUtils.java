@@ -43,8 +43,10 @@ final class CompactionUtils {
 	 * Handles all Spring AI message types:
 	 * <ul>
 	 * <li>Plain user / assistant / system messages → {@code "Role: text"}</li>
-	 * <li>{@link AssistantMessage} with tool calls → {@code "Assistant [tool calls: name(args), ...]"}</li>
-	 * <li>{@link ToolResponseMessage} → {@code "Tool [responses: name -> data, ...]"}</li>
+	 * <li>{@link AssistantMessage} with tool calls →
+	 * {@code "Assistant [tool calls: name(args), ...]"}</li>
+	 * <li>{@link ToolResponseMessage} →
+	 * {@code "Tool [responses: name -> data, ...]"}</li>
 	 * </ul>
 	 * @param event the session event to format
 	 * @return a non-null, non-empty string representing the event
@@ -80,7 +82,7 @@ final class CompactionUtils {
 	}
 
 	/**
-	 * Advances {@code rawCutIndex} forward until it points to a null-branch 
+	 * Advances {@code rawCutIndex} forward until it points to a root-level (null-branch)
 	 * {@link MessageType#USER} event, or to {@code real.size()} if no such event exists.
 	 *
 	 * <p>
@@ -91,13 +93,13 @@ final class CompactionUtils {
 	 * kept window always begins at a complete turn, preserving conversation semantics.
 	 * @param real the list of non-synthetic session events
 	 * @param rawCutIndex the initial cut point; must be in {@code [0, real.size()]}
-	 * @return the adjusted index pointing to the first null-branch USER event at or after
+	 * @return the adjusted index pointing to the first root-level USER event at or after
 	 * {@code rawCutIndex}, or {@code real.size()} if none exists
 	 */
 	static int snapToTurnStart(List<SessionEvent> real, int rawCutIndex) {
 		int idx = rawCutIndex;
 		while (idx < real.size()
-				&& !(real.get(idx).getBranch() == null && real.get(idx).getMessageType() == MessageType.USER)) {
+				&& !(real.get(idx).isRootEvent() && real.get(idx).getMessageType() == MessageType.USER)) {
 			idx++;
 		}
 		return idx;

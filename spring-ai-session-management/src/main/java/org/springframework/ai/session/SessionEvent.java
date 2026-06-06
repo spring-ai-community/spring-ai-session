@@ -129,6 +129,16 @@ public final class SessionEvent {
 	}
 
 	/**
+	 * Returns {@code true} if this event belongs to the root conversation thread, i.e.
+	 * was not produced inside any delegated sub-agent branch. Root events have a
+	 * {@code null} branch.
+	 * @return {@code true} if this event is a root-level event, {@code false} otherwise
+	 */
+	public boolean isRootEvent() {
+		return (this.branch == null);
+	}
+
+	/**
 	 * Convenience accessor — delegates to the wrapped message. No need to unwrap for
 	 * common type-switch operations.
 	 */

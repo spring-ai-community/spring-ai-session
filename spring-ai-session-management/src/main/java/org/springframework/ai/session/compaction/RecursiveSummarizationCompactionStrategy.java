@@ -60,7 +60,7 @@ import org.springframework.util.Assert;
  * summary. This means each summary <em>builds on</em> its predecessors rather than
  * starting from scratch, creating a rolling window of compressed context.
  *
- * <h3>No-op condition</h3> If the total number of real events does not exceed
+ * <h3>No-op condition</h3> If the number of root (non-branch) real events does not exceed
  * {@code maxEventsToKeep} no LLM call is made and the events are returned unchanged.
  *
  * @author Christian Tzolov
@@ -150,16 +150,33 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		List<SessionEvent> syntheticEvents = events.stream().filter(SessionEvent::isSynthetic).toList();
 		List<SessionEvent> realEvents = events.stream().filter(e -> !e.isSynthetic()).toList();
 
-		if (realEvents.size() <= this.maxEventsToKeep) {
+		// Count only root (non-branch) real events. Branch events from sub-agent sessions
+		// are bundled with their enclosing root turns and do not consume slots from the
+		// maxEventsToKeep budget.
+		long rootEventCount = realEvents.stream().filter(SessionEvent::isRootEvent).count();
+
+		if (rootEventCount <= this.maxEventsToKeep) {
 			// Nothing to compact — return as-is
 			return new CompactionResult(events, List.of(), 0);
 		}
 
-		// Raw cut point based on event count alone
-		int rawCutIndex = realEvents.size() - this.maxEventsToKeep;
+		// Find the index in realEvents just after the last root event to archive.
+		long rootEventsToArchive = rootEventCount - this.maxEventsToKeep;
+		int rawCutIndex = 0;
+		long rootSeen = 0;
+		for (int i = 0; i < realEvents.size(); i++) {
+			if (realEvents.get(i).isRootEvent()) {
+				rootSeen++;
+				if (rootSeen == rootEventsToArchive) {
+					rawCutIndex = i + 1;
+					break;
+				}
+			}
+		}
 
-		// Snap forward to the nearest turn start (USER message) so the active window
-		// always begins at a turn boundary and is never a partial turn.
+		// Snap forward to the nearest root-level turn start (USER message) so the active
+		// window always begins at a turn boundary and is never a partial turn.
+		// Sub-agent USER messages (branch != null) are skipped — they are turn-internal.
 		int cutIndex = CompactionUtils.snapToTurnStart(realEvents, rawCutIndex);
 
 		// Split real events: archive the older ones, keep the newest window

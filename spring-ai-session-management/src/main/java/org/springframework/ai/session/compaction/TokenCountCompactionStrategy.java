@@ -19,7 +19,6 @@ package org.springframework.ai.session.compaction;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.tokenizer.JTokkitTokenCountEstimator;
 import org.springframework.ai.tokenizer.TokenCountEstimator;
@@ -39,9 +38,9 @@ import org.springframework.util.Assert;
  * exhausted. Stops at the first event that would exceed the remaining budget, producing a
  * contiguous kept window (a suffix of the real-event list). Skipping oversize events and
  * continuing would produce non-contiguous gaps that break conversation coherence.</li>
- * <li>Drop any leading kept events that are not {@link MessageType#USER} messages. This
- * guarantees the kept window always starts at a turn boundary, so an assistant reply or
- * tool result is never kept without the user message that originated its turn.</li>
+ * <li>Snap the cut point to the next root-level ({@code branch == null}) user message.
+ * This guarantees the kept window always starts at a turn boundary — sub-agent
+ * {@code USER} messages are skipped because they are turn-internal, not turn starts.</li>
  * <li>Return: {@code [synthetic events] + [kept events]}.</li>
  * </ol>
  *
@@ -90,29 +89,27 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 		// Stop at the first event that would exceed the remaining budget so the kept
 		// window is always a contiguous suffix — keeping older events after skipping a
 		// large middle event would produce gaps that break conversation coherence.
-		int cutIndex = real.size();
+		int rawCutIndex = real.size();
 		int usedTokens = 0;
 		for (int i = real.size() - 1; i >= 0; i--) {
 			int tokens = this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(real.get(i)));
 			if (usedTokens + tokens <= remainingBudget) {
 				usedTokens += tokens;
-				cutIndex = i;
+				rawCutIndex = i;
 			}
 			else {
 				break;
 			}
 		}
 
+		// Snap the raw cut forward to the nearest root-level USER event so the kept
+		// window always starts at a turn boundary. Sub-agent USER messages (branch != null)
+		// are skipped — they are turn-internal, not turn starts.
+		int cutIndex = CompactionUtils.snapToTurnStart(real, rawCutIndex);
+
 		// Build kept and archived lists in chronological order
 		List<SessionEvent> kept = new ArrayList<>(real.subList(cutIndex, real.size()));
 		List<SessionEvent> archived = new ArrayList<>(real.subList(0, cutIndex));
-
-		// Ensure the kept window starts at a turn boundary (USER message).
-		// Drop any leading kept events that are not USER messages — keeping an assistant
-		// reply without its originating user message breaks conversation semantics.
-		while (!kept.isEmpty() && kept.get(0).getMessageType() != MessageType.USER) {
-			archived.add(kept.remove(0));
-		}
 
 		if (archived.isEmpty()) {
 			return new CompactionResult(events, List.of(), 0);
