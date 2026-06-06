@@ -40,9 +40,11 @@ import org.springframework.util.StringUtils;
  * context compaction has pruned older events from the active context window.
  *
  * <p>
- * The session to search is resolved from {@link ToolContext} using the
- * {@code chat_memory_session_id} key, which is the same key used by
- * {@code SessionMemoryAdvisor}. Register an instance of this class as a tool on the
+ * The session to search is resolved from {@link ToolContext} using
+ * {@link org.springframework.ai.session.advisor.SessionMemoryAdvisor#SESSION_ID_CONTEXT_KEY}
+ * (equals {@link org.springframework.ai.chat.memory.ChatMemory#CONVERSATION_ID}), which is
+ * the same key written into the context by {@code SessionMemoryAdvisor}. Register an
+ * instance of this class as a tool on the
  * {@code ChatClient} alongside the advisor:
  *
  * <pre>{@code
@@ -62,8 +64,11 @@ public class SessionEventTools {
 
 	private static final Logger logger = LoggerFactory.getLogger(SessionEventTools.class);
 
-	/** Context key used to resolve the session ID from {@link ToolContext}. */
-	public static final String SESSION_ID_CONTEXT_KEY = "chat_memory_session_id";
+	/**
+	 * Context key used to resolve the session ID from {@link ToolContext}. Must match
+	 * {@link org.springframework.ai.session.advisor.SessionMemoryAdvisor#SESSION_ID_CONTEXT_KEY}.
+	 */
+	public static final String SESSION_ID_CONTEXT_KEY = "chat_memory_conversation_id";
 
 	private final SessionService sessionService;
 
