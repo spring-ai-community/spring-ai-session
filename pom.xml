@@ -21,7 +21,7 @@
 
     <groupId>org.springaicommunity</groupId>
     <artifactId>spring-ai-session-parent</artifactId>
-    <version>0.4.2</version>
+    <version>0.4.3-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>Spring AI Session Parent</name>
