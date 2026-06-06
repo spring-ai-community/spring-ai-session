@@ -42,6 +42,7 @@ import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
+import org.springframework.core.Ordered;
 import org.springframework.util.Assert;
 
 /**
@@ -253,10 +254,10 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		private String defaultUserId = "default-user";
 
-		// Default order 1000 ensures this advisor runs after the ToolAdvisor (order 300),
-		// so tool-call events are captured in the session history before the tool advisor's
-		// before() callback can remove them from the prompt.
-		private int order = 1000;
+		// Higher precedence than default ToolCallingAdvisor: before() runs first, after()
+		// runs last, so tool results are fully resolved before being written to session
+		// history.
+		private int order = Ordered.HIGHEST_PRECEDENCE + 1000;
 
 		private Scheduler scheduler = BaseAdvisor.DEFAULT_SCHEDULER;
 
