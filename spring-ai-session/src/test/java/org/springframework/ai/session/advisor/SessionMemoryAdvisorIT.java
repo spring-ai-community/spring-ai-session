@@ -16,6 +16,7 @@
 
 package org.springframework.ai.session.advisor;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
@@ -32,20 +33,22 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.content.Media;
 import org.springframework.ai.session.CreateSessionRequest;
+import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.compaction.TurnCountTrigger;
-import org.springframework.ai.session.DefaultSessionService;
-import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
+import org.springframework.util.MimeTypeUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -117,8 +120,7 @@ class SessionMemoryAdvisorIT {
 		ChatClientRequest request = ChatClientRequest.builder().prompt(prompt).context(Map.of()).build();
 		AdvisorChain chain = mock(AdvisorChain.class);
 
-		assertThatThrownBy(() -> this.advisor.before(request, chain))
-			.isInstanceOf(IllegalStateException.class)
+		assertThatThrownBy(() -> this.advisor.before(request, chain)).isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("SESSION_ID_CONTEXT_KEY");
 	}
 
@@ -184,7 +186,8 @@ class SessionMemoryAdvisorIT {
 		}
 
 		// Compaction runs synchronously after each turn, so by the time we get here
-		// the sliding window (maxEvents=2) has already been applied to the active context.
+		// the sliding window (maxEvents=2) has already been applied to the active
+		// context.
 		// (The compacted events are archived, not deleted, so the full log is larger.)
 		List<SessionEvent> active = this.sessionService.getEvents(this.sessionId, EventFilter.active());
 		assertThat(active.size()).isLessThanOrEqualTo(2);
@@ -237,8 +240,7 @@ class SessionMemoryAdvisorIT {
 		ChatClientRequest request = buildRequestWithUserId(this.sessionId, "hello", "other-user");
 		AdvisorChain chain = mock(AdvisorChain.class);
 
-		assertThatThrownBy(() -> this.advisor.before(request, chain))
-			.isInstanceOf(IllegalStateException.class)
+		assertThatThrownBy(() -> this.advisor.before(request, chain)).isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("does not belong to user");
 	}
 
@@ -333,6 +335,144 @@ class SessionMemoryAdvisorIT {
 		assertThat(texts).contains("only message");
 	}
 
+	// --- Empty assistant message filtering ---
+
+	@Test
+	void afterDoesNotStoreAssistantMessageWithBlankText() {
+		// Bedrock Converse emits AssistantMessage("") to signal end_turn after tool use.
+		// It must not be stored; replaying it on the next request causes a
+		// ValidationException on Bedrock.
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, new AssistantMessage(""));
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
+	}
+
+	@Test
+	void afterDoesNotStoreAssistantMessageWithWhitespaceOnlyText() {
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, new AssistantMessage("   "));
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
+	}
+
+	@Test
+	void afterStoresAssistantMessageWithText() {
+		// Regression guard: normal assistant messages must still be stored.
+		ChatClientResponse response = buildResponse(this.sessionId, "Paris is the capital of France.");
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).getMessage().getText()).isEqualTo("Paris is the capital of France.");
+	}
+
+	@Test
+	void afterStoresAssistantMessageWithToolCallsEvenWhenTextIsBlank() {
+		// An AssistantMessage with tool calls but no text is a real tool-invocation
+		// event — it must not be filtered out.
+		AssistantMessage withToolCalls = AssistantMessage.builder()
+			.toolCalls(
+					List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"city\":\"Paris\"}")))
+			.build();
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, withToolCalls);
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).hasToolCalls()).isTrue();
+	}
+
+	@Test
+	void afterStoresOnlyNonEmptyMessagesFromMultiGenerationResponse() {
+		// Bedrock scenario: the model response contains two generations — the real
+		// tool-call invocation followed by an empty end_turn frame. Only the tool-call
+		// generation must be persisted.
+		AssistantMessage toolCallMessage = AssistantMessage.builder()
+			.toolCalls(
+					List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"city\":\"Paris\"}")))
+			.build();
+		AssistantMessage emptyEndTurn = new AssistantMessage("");
+
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, toolCallMessage, emptyEndTurn);
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).hasToolCalls()).isTrue();
+	}
+
+	@Test
+	void emptyEndTurnMessageIsNotReplayedOnNextTurn() {
+		// Full Bedrock tool-call round-trip:
+		// turn 1 before() → user message stored
+		// turn 1 after() → ASSISTANT[tool calls] stored, ASSISTANT[""] skipped
+		// turn 2 before() → history injected into prompt must not contain the empty frame
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		// Turn 1
+		this.advisor.before(buildRequest(this.sessionId, "What is the weather in Paris?"), chain);
+
+		AssistantMessage toolCallMessage = AssistantMessage.builder()
+			.toolCalls(
+					List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"city\":\"Paris\"}")))
+			.build();
+		AssistantMessage emptyEndTurn = new AssistantMessage("");
+		this.advisor.after(buildResponseFromMessages(this.sessionId, toolCallMessage, emptyEndTurn), chain);
+
+		// Turn 2 — inspect the prompt that the advisor builds
+		ChatClientRequest modified = this.advisor.before(buildRequest(this.sessionId, "Thanks!"), chain);
+
+		List<String> texts = modified.prompt().getInstructions().stream().map(Message::getText).toList();
+		// The empty end_turn frame must not appear in the injected history
+		assertThat(texts).doesNotContain("");
+		assertThat(texts).doesNotContain("   ");
+		// Real events are still present
+		assertThat(texts).contains("What is the weather in Paris?");
+	}
+
+	// --- Multimodal assistant message filtering ---
+
+	@Test
+	void afterStoresAssistantMessageWithMediaEvenWhenTextIsBlank() {
+		// A multimodal model may respond with an image (or other media) and no text.
+		// That is a valid, content-bearing message and must NOT be dropped.
+		Media image = new Media(MimeTypeUtils.IMAGE_PNG, URI.create("https://example.com/image.png"));
+		AssistantMessage withMedia = AssistantMessage.builder().media(List.of(image)).build();
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, withMedia);
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).getMessage()).isInstanceOf(AssistantMessage.class);
+		assertThat(((AssistantMessage) events.get(0).getMessage()).getMedia()).hasSize(1);
+	}
+
+	@Test
+	void afterStoresAssistantMessageWithMediaAndToolCallsEvenWhenTextIsBlank() {
+		Media image = new Media(MimeTypeUtils.IMAGE_PNG, URI.create("https://example.com/image.png"));
+		AssistantMessage withBoth = AssistantMessage.builder()
+			.media(List.of(image))
+			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "describe_image", "{}")))
+			.build();
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, withBoth);
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).hasToolCalls()).isTrue();
+	}
+
+	@Test
+	void afterDropsAssistantMessageWithNullTextNoToolCallsAndNoMedia() {
+		// Explicit null text (not just blank) with no other content — must be dropped.
+		AssistantMessage nullText = AssistantMessage.builder().build();
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, nullText);
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
+	}
+
 	// --- Builder validation ---
 
 	@Test
@@ -374,6 +514,20 @@ class SessionMemoryAdvisorIT {
 		ChatResponse chatResponse = ChatResponse.builder()
 			.generations(List.of(new Generation(new AssistantMessage(assistantText))))
 			.build();
+		return ChatClientResponse.builder()
+			.chatResponse(chatResponse)
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
+			.build();
+	}
+
+	/**
+	 * Builds a response whose {@code ChatResponse} contains one {@code Generation} per
+	 * supplied {@link AssistantMessage}. Use this to simulate multi-generation responses
+	 * such as the Bedrock Converse end_turn pattern (tool-call frame + empty frame).
+	 */
+	private static ChatClientResponse buildResponseFromMessages(String sessionId, AssistantMessage... messages) {
+		List<Generation> generations = List.of(messages).stream().map(Generation::new).toList();
+		ChatResponse chatResponse = ChatResponse.builder().generations(generations).build();
 		return ChatClientResponse.builder()
 			.chatResponse(chatResponse)
 			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))

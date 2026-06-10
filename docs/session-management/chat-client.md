@@ -23,7 +23,10 @@ On every request the advisor:
 3. Reorders all `SystemMessage` instances to the front of the combined message list,
    preserving their relative order.
 4. Appends the current user message to the session.
-5. After the model responds, appends the assistant message.
+5. After the model responds, appends the assistant message. Empty assistant messages
+   (blank text, no tool calls, and no media) are skipped — some models (e.g. Bedrock
+   Converse) emit an empty `end_turn` frame after tool use that would otherwise be
+   replayed and rejected on the next request.
 6. If a trigger fires, runs compaction **synchronously** before returning — the full turn
    (user + assistant) is already written at this point, so there is no race between
    compaction and message appending.

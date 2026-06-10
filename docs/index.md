@@ -62,7 +62,7 @@ Spring AI Session solves this with three ideas working together:
 
 ---
 
-## Quick Example
+## Example
 
 ```java
 // 1. Create the service

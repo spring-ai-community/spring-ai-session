@@ -21,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
@@ -33,6 +35,7 @@ import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
 import org.springframework.ai.chat.client.advisor.api.MemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.session.CreateSessionRequest;
@@ -44,6 +47,7 @@ import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 import org.springframework.core.Ordered;
 import org.springframework.util.Assert;
+import org.springframework.util.CollectionUtils;
 
 /**
  * A {@link BaseAdvisor} that manages conversation history using the
@@ -54,7 +58,8 @@ import org.springframework.util.Assert;
  * <ol>
  * <li>Retrieves the session's event history and prepends it to the prompt messages.</li>
  * <li>Appends the current user message to the session.</li>
- * <li>After the model responds, appends the assistant message to the session.</li>
+ * <li>After the model responds, appends the assistant message to the session; empty
+ * assistant messages (blank text, no tool calls, and no media) are skipped.</li>
  * <li>Optionally triggers context compaction if the configured trigger fires.</li>
  * </ol>
  *
@@ -75,6 +80,8 @@ import org.springframework.util.Assert;
  * @since 2.0.0
  */
 public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
+
+	private static final Logger logger = LoggerFactory.getLogger(SessionMemoryAdvisor.class);
 
 	/**
 	 * Context key used to pass the session ID into the advisor per-request. Equals
@@ -168,8 +175,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		}
 
 		// Always exclude archived events from the active context window — they were
-		// compacted out and live on only for Recall Storage search. Merging forces the flag
-		// on regardless of the configured or per-request filter.
+		// compacted out and live on only for Recall Storage search. Merging forces the
+		// flag on regardless of the configured or per-request filter.
 		eventFilter = eventFilter.merge(EventFilter.active());
 
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, eventFilter);
@@ -202,12 +209,14 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	public ChatClientResponse after(ChatClientResponse response, AdvisorChain advisorChain) {
 		String sessionId = getSessionId(response.context());
 
-		// 1. Append the assistant message(s) produced by the model
+		// 1. Append the assistant message(s) produced by the model. Excludes messages
+		// that carry no content — blank text, no tool calls, and no media.
 		if (response.chatResponse() != null) {
 			response.chatResponse()
 				.getResults()
 				.stream()
 				.map(g -> (Message) g.getOutput())
+				.filter(msg -> shouldPersist(msg, sessionId))
 				.forEach(msg -> this.sessionService.appendMessage(sessionId, msg));
 		}
 
@@ -247,6 +256,29 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	private String getUserId(Map<String, @Nullable Object> context) {
 		Object value = context.get(USER_ID_CONTEXT_KEY);
 		return (value instanceof String s && !s.isBlank()) ? s : this.defaultUserId;
+	}
+
+	/**
+	 * Returns {@code true} if the message should be persisted to the session. Empty
+	 * assistant messages — those carrying neither text, tool calls, nor media — are
+	 * skipped (and logged) so they are not replayed on later requests.
+	 */
+	private static boolean shouldPersist(Message message, String sessionId) {
+		if (isEmptyAssistantMessage(message)) {
+			logger.debug("Skipping empty assistant message for session [{}] — no text, tool calls, or media",
+					sessionId);
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Returns {@code true} for an {@link AssistantMessage} that carries neither text,
+	 * tool calls, nor media content.
+	 */
+	private static boolean isEmptyAssistantMessage(Message message) {
+		return message instanceof AssistantMessage am && (am.getText() == null || am.getText().isBlank())
+				&& !am.hasToolCalls() && CollectionUtils.isEmpty(am.getMedia());
 	}
 
 	public static Builder builder(SessionService sessionService) {
