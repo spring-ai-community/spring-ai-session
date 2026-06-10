@@ -332,6 +332,101 @@ class SessionMemoryAdvisorIT {
 		assertThat(texts).contains("only message");
 	}
 
+	// --- Empty assistant message filtering ---
+
+	@Test
+	void afterDoesNotStoreAssistantMessageWithBlankText() {
+		// Bedrock Converse emits AssistantMessage("") to signal end_turn after tool use.
+		// It must not be stored; replaying it on the next request causes a
+		// ValidationException on Bedrock.
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId,
+				new AssistantMessage(""));
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
+	}
+
+	@Test
+	void afterDoesNotStoreAssistantMessageWithWhitespaceOnlyText() {
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId,
+				new AssistantMessage("   "));
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
+	}
+
+	@Test
+	void afterStoresAssistantMessageWithText() {
+		// Regression guard: normal assistant messages must still be stored.
+		ChatClientResponse response = buildResponse(this.sessionId, "Paris is the capital of France.");
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).getMessage().getText()).isEqualTo("Paris is the capital of France.");
+	}
+
+	@Test
+	void afterStoresAssistantMessageWithToolCallsEvenWhenTextIsBlank() {
+		// An AssistantMessage with tool calls but no text is a real tool-invocation
+		// event — it must not be filtered out.
+		AssistantMessage withToolCalls = AssistantMessage.builder()
+			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"city\":\"Paris\"}")))
+			.build();
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, withToolCalls);
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).hasToolCalls()).isTrue();
+	}
+
+	@Test
+	void afterStoresOnlyNonEmptyMessagesFromMultiGenerationResponse() {
+		// Bedrock scenario: the model response contains two generations — the real
+		// tool-call invocation followed by an empty end_turn frame. Only the tool-call
+		// generation must be persisted.
+		AssistantMessage toolCallMessage = AssistantMessage.builder()
+			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"city\":\"Paris\"}")))
+			.build();
+		AssistantMessage emptyEndTurn = new AssistantMessage("");
+
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, toolCallMessage, emptyEndTurn);
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).hasToolCalls()).isTrue();
+	}
+
+	@Test
+	void emptyEndTurnMessageIsNotReplayedOnNextTurn() {
+		// Full Bedrock tool-call round-trip:
+		//   turn 1 before()  → user message stored
+		//   turn 1 after()   → ASSISTANT[tool calls] stored, ASSISTANT[""] skipped
+		//   turn 2 before()  → history injected into prompt must not contain the empty frame
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		// Turn 1
+		this.advisor.before(buildRequest(this.sessionId, "What is the weather in Paris?"), chain);
+
+		AssistantMessage toolCallMessage = AssistantMessage.builder()
+			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"city\":\"Paris\"}")))
+			.build();
+		AssistantMessage emptyEndTurn = new AssistantMessage("");
+		this.advisor.after(buildResponseFromMessages(this.sessionId, toolCallMessage, emptyEndTurn), chain);
+
+		// Turn 2 — inspect the prompt that the advisor builds
+		ChatClientRequest modified = this.advisor.before(buildRequest(this.sessionId, "Thanks!"), chain);
+
+		List<String> texts = modified.prompt().getInstructions().stream().map(Message::getText).toList();
+		// The empty end_turn frame must not appear in the injected history
+		assertThat(texts).doesNotContain("");
+		assertThat(texts).doesNotContain("   ");
+		// Real events are still present
+		assertThat(texts).contains("What is the weather in Paris?");
+	}
+
 	// --- Builder validation ---
 
 	@Test
@@ -373,6 +468,20 @@ class SessionMemoryAdvisorIT {
 		ChatResponse chatResponse = ChatResponse.builder()
 			.generations(List.of(new Generation(new AssistantMessage(assistantText))))
 			.build();
+		return ChatClientResponse.builder()
+			.chatResponse(chatResponse)
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
+			.build();
+	}
+
+	/**
+	 * Builds a response whose {@code ChatResponse} contains one {@code Generation} per
+	 * supplied {@link AssistantMessage}. Use this to simulate multi-generation responses
+	 * such as the Bedrock Converse end_turn pattern (tool-call frame + empty frame).
+	 */
+	private static ChatClientResponse buildResponseFromMessages(String sessionId, AssistantMessage... messages) {
+		List<Generation> generations = List.of(messages).stream().map(Generation::new).toList();
+		ChatResponse chatResponse = ChatResponse.builder().generations(generations).build();
 		return ChatClientResponse.builder()
 			.chatResponse(chatResponse)
 			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
