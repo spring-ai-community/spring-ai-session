@@ -33,6 +33,7 @@ import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
 import org.springframework.ai.chat.client.advisor.api.MemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.session.CreateSessionRequest;
@@ -54,7 +55,8 @@ import org.springframework.util.Assert;
  * <ol>
  * <li>Retrieves the session's event history and prepends it to the prompt messages.</li>
  * <li>Appends the current user message to the session.</li>
- * <li>After the model responds, appends the assistant message to the session.</li>
+ * <li>After the model responds, appends the assistant message to the session;
+ *     empty assistant messages (blank text and no tool calls) are skipped.</li>
  * <li>Optionally triggers context compaction if the configured trigger fires.</li>
  * </ol>
  *
@@ -197,12 +199,16 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	public ChatClientResponse after(ChatClientResponse response, AdvisorChain advisorChain) {
 		String sessionId = getSessionId(response.context());
 
-		// 1. Append the assistant message(s) produced by the model
+		// 1. Append the assistant message(s) produced by the model. Empty frames —
+		// blank text and no tool calls — are not stored. Some models (e.g. Bedrock
+		// Converse) emit such a frame to signal end_turn after a tool-call sequence;
+		// replaying it on the next request causes a validation error on those models.
 		if (response.chatResponse() != null) {
 			response.chatResponse()
 				.getResults()
 				.stream()
 				.map(g -> (Message) g.getOutput())
+				.filter(msg -> !isEmptyAssistantMessage(msg))
 				.forEach(msg -> this.sessionService.appendMessage(sessionId, msg));
 		}
 
@@ -242,6 +248,19 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	private String getUserId(Map<String, @Nullable Object> context) {
 		Object value = context.get(USER_ID_CONTEXT_KEY);
 		return (value instanceof String s && !s.isBlank()) ? s : this.defaultUserId;
+	}
+
+	/**
+	 * Returns {@code true} for an {@link AssistantMessage} that carries neither text
+	 * nor tool calls. Such messages are implementation artifacts emitted by some models
+	 * (e.g. Bedrock Converse {@code end_turn} after a tool-call sequence) and carry no
+	 * conversational value. Storing and replaying them causes validation errors on those
+	 * same models.
+	 */
+	private static boolean isEmptyAssistantMessage(Message message) {
+		return message instanceof AssistantMessage am
+				&& (am.getText() == null || am.getText().isBlank())
+				&& !am.hasToolCalls();
 	}
 
 	public static Builder builder(SessionService sessionService) {
