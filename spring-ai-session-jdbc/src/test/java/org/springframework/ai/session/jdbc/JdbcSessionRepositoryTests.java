@@ -18,7 +18,6 @@ package org.springframework.ai.session.jdbc;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -86,10 +85,10 @@ class JdbcSessionRepositoryTests {
 		Session session = buildSession("user-1");
 		this.repository.save(session);
 
-		Optional<Session> found = this.repository.findById(session.id());
-		assertThat(found).isPresent();
-		assertThat(found.get().id()).isEqualTo(session.id());
-		assertThat(found.get().userId()).isEqualTo("user-1");
+		Session found = this.repository.findById(session.id());
+		assertThat(found).isNotNull();
+		assertThat(found.id()).isEqualTo(session.id());
+		assertThat(found.userId()).isEqualTo("user-1");
 	}
 
 	@Test
@@ -103,7 +102,8 @@ class JdbcSessionRepositoryTests {
 			.build();
 		this.repository.save(session);
 
-		Session found = this.repository.findById(session.id()).orElseThrow();
+		Session found = this.repository.findById(session.id());
+		assertThat(found).isNotNull();
 		assertThat(found.expiresAt()).isNotNull();
 		assertThat(found.expiresAt().toEpochMilli()).isEqualTo(expiry.toEpochMilli());
 		assertThat(found.metadata()).containsEntry("model", "gpt-4o");
@@ -124,15 +124,16 @@ class JdbcSessionRepositoryTests {
 			.build();
 		this.repository.save(updated);
 
-		Session found = this.repository.findById(session.id()).orElseThrow();
+		Session found = this.repository.findById(session.id());
+		assertThat(found).isNotNull();
 		assertThat(found.metadata()).containsEntry("newKey", "newVal");
 		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(versionAfterAppend);
 		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).hasSize(1);
 	}
 
 	@Test
-	void findByIdReturnsEmptyWhenNotFound() {
-		assertThat(this.repository.findById("no-such-id")).isEmpty();
+	void findByIdReturnsNullWhenNotFound() {
+		assertThat(this.repository.findById("no-such-id")).isNull();
 	}
 
 	@Test
@@ -154,7 +155,7 @@ class JdbcSessionRepositoryTests {
 
 		this.repository.delete(session.id());
 
-		assertThat(this.repository.findById(session.id())).isEmpty();
+		assertThat(this.repository.findById(session.id())).isNull();
 		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).isEmpty();
 	}
 

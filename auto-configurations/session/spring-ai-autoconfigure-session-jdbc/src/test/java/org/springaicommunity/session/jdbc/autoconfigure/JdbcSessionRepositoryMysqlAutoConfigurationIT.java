@@ -75,8 +75,8 @@ class JdbcSessionRepositoryMysqlAutoConfigurationIT {
 
 			repo.save(session);
 
-			assertThat(repo.findById(sessionId)).isPresent()
-				.hasValueSatisfying(s -> assertThat(s.userId()).isEqualTo("user-mysql"));
+			assertThat(repo.findById(sessionId)).isNotNull()
+				.satisfies(s -> assertThat(s.userId()).isEqualTo("user-mysql"));
 		});
 	}
 
@@ -126,7 +126,7 @@ class JdbcSessionRepositoryMysqlAutoConfigurationIT {
 
 			repo.delete(sessionId);
 
-			assertThat(repo.findById(sessionId)).isEmpty();
+			assertThat(repo.findById(sessionId)).isNull();
 		});
 	}
 
