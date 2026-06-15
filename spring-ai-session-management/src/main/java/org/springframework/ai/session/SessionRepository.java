@@ -18,7 +18,8 @@ package org.springframework.ai.session;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
+
+import org.jspecify.annotations.Nullable;
 
 /**
  * Persistence contract for {@link Session} objects and their event logs.
@@ -41,7 +42,7 @@ public interface SessionRepository {
 	 */
 	Session save(Session session);
 
-	Optional<Session> findById(String sessionId);
+	@Nullable Session findById(String sessionId);
 
 	List<Session> findByUserId(String userId);
 

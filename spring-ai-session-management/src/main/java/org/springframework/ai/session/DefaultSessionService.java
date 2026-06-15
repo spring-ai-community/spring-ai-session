@@ -67,7 +67,7 @@ public class DefaultSessionService implements SessionService {
 	@Nullable public Session findById(String sessionId) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 
-		return this.sessionRepository.findById(sessionId).orElse(null);
+		return this.sessionRepository.findById(sessionId);
 	}
 
 	@Override
@@ -109,8 +109,10 @@ public class DefaultSessionService implements SessionService {
 		Assert.notNull(trigger, "trigger must not be null");
 		Assert.notNull(strategy, "strategy must not be null");
 
-		Session session = this.sessionRepository.findById(sessionId)
-			.orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));
+		Session session = this.sessionRepository.findById(sessionId);
+		if (session == null) {
+			throw new IllegalArgumentException("Session not found: " + sessionId);
+		}
 
 		return compactWith(session, trigger, strategy);
 	}

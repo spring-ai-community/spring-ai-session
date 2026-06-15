@@ -75,8 +75,8 @@ class JdbcSessionRepositoryPostgresqlAutoConfigurationIT {
 
 			repo.save(session);
 
-			assertThat(repo.findById(sessionId)).isPresent()
-				.hasValueSatisfying(s -> assertThat(s.userId()).isEqualTo("user-pg"));
+			assertThat(repo.findById(sessionId)).isNotNull()
+				.satisfies(s -> assertThat(s.userId()).isEqualTo("user-pg"));
 		});
 	}
 
@@ -126,7 +126,7 @@ class JdbcSessionRepositoryPostgresqlAutoConfigurationIT {
 
 			repo.delete(sessionId);
 
-			assertThat(repo.findById(sessionId)).isEmpty();
+			assertThat(repo.findById(sessionId)).isNull();
 		});
 	}
 

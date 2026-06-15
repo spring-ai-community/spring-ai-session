@@ -18,7 +18,6 @@ package org.springframework.ai.session;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -47,16 +46,16 @@ class InMemorySessionRepositoryTests {
 		Session session = buildSession("user-1");
 
 		Session saved = this.repository.save(session);
-		Optional<Session> found = this.repository.findById(saved.id());
+		Session found = this.repository.findById(saved.id());
 
-		assertThat(found).isPresent();
-		assertThat(found.get().id()).isEqualTo(saved.id());
-		assertThat(found.get().userId()).isEqualTo("user-1");
+		assertThat(found).isNotNull();
+		assertThat(found.id()).isEqualTo(saved.id());
+		assertThat(found.userId()).isEqualTo("user-1");
 	}
 
 	@Test
-	void findByIdReturnsEmptyWhenNotFound() {
-		assertThat(this.repository.findById("no-such-id")).isEmpty();
+	void findByIdReturnsNullWhenNotFound() {
+		assertThat(this.repository.findById("no-such-id")).isNull();
 	}
 
 	@Test
@@ -115,7 +114,7 @@ class InMemorySessionRepositoryTests {
 
 		this.repository.delete(session.id());
 
-		assertThat(this.repository.findById(session.id())).isEmpty();
+		assertThat(this.repository.findById(session.id())).isNull();
 	}
 
 	@Test

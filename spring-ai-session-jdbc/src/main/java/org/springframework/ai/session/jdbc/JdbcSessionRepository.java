@@ -25,7 +25,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import javax.sql.DataSource;
 
@@ -173,10 +172,10 @@ public final class JdbcSessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public Optional<Session> findById(String sessionId) {
+	public @Nullable Session findById(String sessionId) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		List<Session> results = this.jdbcTemplate.query(SELECT_SESSION_BY_ID, new SessionRowMapper(), sessionId);
-		return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+		return results.isEmpty() ? null : results.get(0);
 	}
 
 	@Override
