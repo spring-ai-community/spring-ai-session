@@ -16,7 +16,7 @@ The event log is stored separately in the repository and fetched on demand.
 | `id` | Unique session identifier |
 | `userId` | Owning user or agent — required, used for isolation |
 | `createdAt` | Creation timestamp |
-| `expiresAt` | Expiry instant; defaults to 60 days from creation; `null` means no expiry. The builder rejects past values. |
+| `expiresAt` | Expiry instant; defaults to the configured default time-to-live (60 days) from creation; `null` means no expiry. The builder rejects past values. |
 | `metadata` | Arbitrary key/value pairs (model info, tags, etc.) |
 
 Keeping `Session` metadata-only means it can be passed across boundaries cheaply, and
@@ -181,18 +181,35 @@ unit.
 Storing the event log inside `Session` would force every consumer that needs to mutate the
 list (compaction, archiving) to hold a mutable reference inside what is meant to be an
 immutable value object. By keeping `Session` as pure metadata, all event mutations go
-through dedicated repository methods (`appendEvent`, `replaceEvents`) and `SessionService`
+through dedicated repository methods (`appendEvent`, `compactEvents`) and `SessionService`
 operates on the event list as an explicit parameter.
+
+**Archiving instead of deleting**
+
+Compaction never deletes the events it removes from the active context window. Instead it
+marks them archived (`SessionEvent.isArchived()`) via `compactEvents`, leaving the full
+verbatim history in the log. The active context window — what `SessionMemoryAdvisor`
+injects into the prompt — is the `EventFilter.active()` view (`excludeArchived = true`),
+while Recall Storage searches (`EventFilter.keywordSearch(...)`) deliberately span the
+whole log, archived events included. This is what makes the MemGPT recall pattern work:
+the agent can surface any prior exchange even after it has been summarized out of context.
 
 **Optimistic concurrency**
 
 `SessionRepository` exposes `getEventVersion(sessionId)` — a monotonically increasing
-counter incremented on every `appendEvent` and `replaceEvents` call. Callers read this
-version before fetching events, then pass it to `replaceEvents(sessionId, events,
-expectedVersion)`. If another writer mutated the log in the interval, the CAS variant
-returns `false` — the caller treats this as a no-op rather than retrying. Durable
+counter incremented on every `appendEvent` and `compactEvents` call. Callers read this
+version before fetching events, then pass it to `compactEvents(sessionId, archivedEvents,
+retainedEvents, expectedVersion)`. If another writer mutated the log in the interval, the
+CAS returns `false` — the caller treats this as a no-op rather than retrying. Durable
 implementations (JDBC, Redis) should map this to a database-level optimistic-lock column
 or a Redis `WATCH`.
+
+**Event ordering**
+
+Events are returned in insertion (logical conversation) order, not by wall-clock
+timestamp. The JDBC implementation persists a monotonic `seq` column for this purpose so
+that a synthetic compaction summary — stamped with the compaction time — stays correctly
+positioned ahead of the older active-window events it precedes.
 
 ---
 

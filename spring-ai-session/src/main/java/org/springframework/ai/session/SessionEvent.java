@@ -80,14 +80,17 @@ public final class SessionEvent {
 
 	@Nullable private final String branch;
 
+	private final boolean archived;
+
 	private SessionEvent(String id, String sessionId, Instant timestamp, Message message, Map<String, Object> metadata,
-			@Nullable String branch) {
+			@Nullable String branch, boolean archived) {
 		this.id = id;
 		this.sessionId = sessionId;
 		this.timestamp = timestamp;
 		this.message = message;
 		this.metadata = Map.copyOf(metadata);
 		this.branch = branch;
+		this.archived = archived;
 	}
 
 	/** Unique identity per event. {@code Message} has none. */
@@ -136,6 +139,33 @@ public final class SessionEvent {
 	 */
 	public boolean isRootEvent() {
 		return (this.branch == null);
+	}
+
+	/**
+	 * Returns {@code true} if this event has been archived by compaction. Archived events
+	 * are removed from the active context window injected into the prompt, but are
+	 * retained in the event log and remain searchable via the Recall Storage tools (see
+	 * {@code SessionEventTools}). They implement the MemGPT recall pattern: the full
+	 * verbatim history is preserved even after older events have been summarized out of the
+	 * active window.
+	 * @return {@code true} if this event is archived, {@code false} otherwise
+	 */
+	public boolean isArchived() {
+		return this.archived;
+	}
+
+	/**
+	 * Returns a copy of this event marked as archived. Identity ({@link #getId()} and
+	 * {@link #getSessionId()}) is preserved, so the copy is {@link #equals(Object) equal}
+	 * to the original. Returns {@code this} when the event is already archived.
+	 * @return an archived copy of this event
+	 */
+	public SessionEvent asArchived() {
+		if (this.archived) {
+			return this;
+		}
+		return new SessionEvent(this.id, this.sessionId, this.timestamp, this.message, this.metadata, this.branch,
+				true);
 	}
 
 	/**
@@ -190,8 +220,8 @@ public final class SessionEvent {
 	 *
 	 * <p>
 	 * Defaults: {@code id} is auto-generated (random UUID), {@code timestamp} is
-	 * {@link Instant#now()}, {@code metadata} is empty, {@code branch} is {@code null}.
-	 * {@code sessionId} and {@code message} are required.
+	 * {@link Instant#now()}, {@code metadata} is empty, {@code branch} is {@code null},
+	 * {@code archived} is {@code false}. {@code sessionId} and {@code message} are required.
 	 */
 	public static final class Builder {
 
@@ -206,6 +236,8 @@ public final class SessionEvent {
 		private Map<String, Object> metadata = new HashMap<>();
 
 		@Nullable private String branch;
+
+		private boolean archived = false;
 
 		private Builder() {
 		}
@@ -255,6 +287,15 @@ public final class SessionEvent {
 			return this;
 		}
 
+		/**
+		 * Marks the event as archived. Archived events are excluded from the active context
+		 * window but retained for Recall Storage search. Defaults to {@code false}.
+		 */
+		public Builder archived(boolean archived) {
+			this.archived = archived;
+			return this;
+		}
+
 		/** Builds the {@link SessionEvent}, validating required fields. */
 		public SessionEvent build() {
 			Assert.hasText(this.id, "id must not be null or empty");
@@ -262,7 +303,8 @@ public final class SessionEvent {
 			Assert.notNull(this.timestamp, "timestamp must not be null");
 			Assert.notNull(this.message, "message must not be null");
 			return new SessionEvent(this.id, this.sessionId, this.timestamp,
-					Objects.requireNonNull(this.message, "message must not be null"), this.metadata, this.branch);
+					Objects.requireNonNull(this.message, "message must not be null"), this.metadata, this.branch,
+					this.archived);
 		}
 
 	}

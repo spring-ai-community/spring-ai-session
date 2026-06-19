@@ -23,6 +23,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 
 /**
@@ -31,8 +32,8 @@ import org.springframework.context.annotation.Bean;
  * <p>
  * Creates a {@link DefaultSessionService} bean whenever a {@link SessionRepository} bean
  * is present in the application context and no {@link SessionService} bean has been
- * declared by the application. This applies regardless of which
- * {@link SessionRepository} implementation is in use — in-memory, JDBC, Redis, etc.
+ * declared by the application. This applies regardless of which {@link SessionRepository}
+ * implementation is in use — in-memory, JDBC, Redis, etc.
  *
  * <p>
  * The auto-configuration is ordered after the JDBC repository auto-configuration so that
@@ -41,15 +42,20 @@ import org.springframework.context.annotation.Bean;
  * @author Christian Tzolov
  * @since 2.0.0
  */
-@AutoConfiguration(afterName = "org.springaicommunity.session.jdbc.autoconfigure.JdbcSessionRepositoryAutoConfiguration")
+@AutoConfiguration(
+		afterName = "org.springaicommunity.session.jdbc.autoconfigure.JdbcSessionRepositoryAutoConfiguration")
 @ConditionalOnClass(SessionService.class)
 @ConditionalOnBean(SessionRepository.class)
 @ConditionalOnMissingBean(SessionService.class)
+@EnableConfigurationProperties(SessionServiceProperties.class)
 public class SessionServiceAutoConfiguration {
 
 	@Bean
-	DefaultSessionService sessionService(SessionRepository sessionRepository) {
-		return DefaultSessionService.builder().sessionRepository(sessionRepository).build();
+	DefaultSessionService sessionService(SessionRepository sessionRepository, SessionServiceProperties properties) {
+		return DefaultSessionService.builder()
+			.sessionRepository(sessionRepository)
+			.defaultTimeToLive(properties.getTimeToLive())
+			.build();
 	}
 
 }

@@ -5,6 +5,11 @@ event log is always retained and searchable by keyword, even after context compa
 pruned older events from the active context window. The agent can surface any prior
 exchange on demand rather than relying solely on what fits in the prompt.
 
+This works because compaction **archives** rather than deletes. Events dropped from the
+active window are flagged `SessionEvent.isArchived()` and kept in the log. The active
+context window the advisor injects is the `EventFilter.active()` view (archived events
+excluded), while `conversation_search` searches the whole log (archived events included).
+
 ---
 
 ## Registration

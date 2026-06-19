@@ -144,10 +144,11 @@ side can opt in. A `null` value for `EVENT_FILTER_CONTEXT_KEY` is ignored.
 
 If two requests for the same session complete concurrently (e.g. parallel fan-out), both
 `after()` calls may reach the compaction step simultaneously. Compaction uses an optimistic
-compare-and-swap write via `SessionRepository.replaceEvents(sessionId, events,
-expectedVersion)`. The event-log version is read before events are fetched; if another
-writer mutates the log between that read and the CAS write, `replaceEvents` returns `false`
-and the second writer skips silently — no compacted result is lost or corrupted.
+compare-and-swap write via `SessionRepository.compactEvents(sessionId, archivedEvents,
+retainedEvents, expectedVersion)`. The event-log version is read before events are fetched;
+if another writer mutates the log between that read and the CAS write, `compactEvents`
+returns `false` and the second writer skips silently — no compacted result is lost or
+corrupted.
 
 ---
 

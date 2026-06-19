@@ -67,7 +67,7 @@ import org.springframework.util.Assert;
  * <strong>Concurrent compaction safety:</strong> If two requests for the same session
  * complete concurrently, both {@code after()} calls may reach the compaction step
  * simultaneously. Compaction uses an optimistic compare-and-swap write via
- * {@link org.springframework.ai.session.SessionRepository#replaceEvents(String, java.util.List, long)},
+ * {@link org.springframework.ai.session.SessionRepository#compactEvents(String, java.util.List, java.util.List, long)},
  * so only the first writer succeeds; the second detects the version mismatch and skips
  * silently. No compaction result is lost or corrupted.
  *
@@ -166,6 +166,11 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 				eventFilter = this.eventFilter.merge(requestEventFilter);
 			}
 		}
+
+		// Always exclude archived events from the active context window — they were
+		// compacted out and live on only for Recall Storage search. Merging forces the flag
+		// on regardless of the configured or per-request filter.
+		eventFilter = eventFilter.merge(EventFilter.active());
 
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, eventFilter);
 		List<Message> history = events.stream().map(SessionEvent::getMessage).toList();

@@ -13,9 +13,11 @@ AI_SESSION          — session metadata (id, user_id, TTL, metadata JSON, event
 AI_SESSION_EVENT    — append-only event log (FK → AI_SESSION, ON DELETE CASCADE)
 ```
 
-`AI_SESSION_EVENT` is an append-only log — events are never updated in place. The
-`event_version` column on `AI_SESSION` is incremented on every `appendEvent` and
-`replaceEvents` call, enabling optimistic-lock compaction.
+`AI_SESSION_EVENT` rows are ordered by a monotonic `seq` column (insertion order) and carry
+`synthetic` and `archived` flags. Compaction archives events in place rather than deleting
+them, so the full history stays searchable. The `event_version` column on `AI_SESSION` is
+incremented on every `appendEvent` and `compactEvents` call, enabling optimistic-lock
+compaction.
 
 ---
 
@@ -130,9 +132,9 @@ columns: `message_type` (enum name), `message_content` (plain text), and `messag
 message types.
 
 **Optimistic concurrency** — the `event_version` column on `AI_SESSION` is incremented on
-every `appendEvent` and `replaceEvents` call. The CAS variant of `replaceEvents`
-atomically claims the version slot with `UPDATE … WHERE event_version = ?` before
-modifying the event log, making compaction safe under concurrent access.
+every `appendEvent` and `compactEvents` call. `compactEvents` atomically claims the version
+slot with `UPDATE … WHERE event_version = ?` before modifying the event log, making
+compaction safe under concurrent access.
 
 **`synthetic` column** — stored as a dedicated `BOOLEAN` column (not only in the metadata
 JSON blob) so `EventFilter.excludeSynthetic()` translates to a SQL predicate instead of

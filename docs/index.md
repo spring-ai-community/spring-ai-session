@@ -51,7 +51,7 @@ Spring AI Session solves this with three ideas working together:
 - **Two compaction triggers**: turn count and token count (composable with OR semantics)
 - **Turn-boundary safety** — the kept window always starts at a `USER` message; no orphaned
   tool results or split turn sequences
-- **Optimistic concurrency** — compare-and-swap `replaceEvents` makes compaction safe under
+- **Optimistic concurrency** — compare-and-swap `compactEvents` makes compaction safe under
   concurrent requests without locking
 - **Multi-agent branch isolation** — dot-separated branch labels let peer sub-agents share
   one session while hiding each other's events

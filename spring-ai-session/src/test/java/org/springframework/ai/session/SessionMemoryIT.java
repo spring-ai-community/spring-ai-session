@@ -185,11 +185,15 @@ class SessionMemoryIT {
 		assertThat(result.eventsRemoved()).isPositive();
 		assertThat(result.compactedEvents()).hasSizeLessThanOrEqualTo(4);
 
-		// Verify the compacted events are persisted
-		List<Message> messages = this.sessionService.getMessages(session.id());
-		assertThat(messages).hasSizeLessThanOrEqualTo(4);
+		// The active window is trimmed to the kept events...
+		List<SessionEvent> active = this.sessionService.getEvents(session.id(), EventFilter.active());
+		assertThat(active).hasSizeLessThanOrEqualTo(4);
 		// Window must start on a turn boundary (user message)
-		assertThat(messages.get(0).getMessageType().getValue()).isEqualTo("user");
+		assertThat(active.get(0).getMessageType().getValue()).isEqualTo("user");
+
+		// ...but archived events are retained for Recall Storage (nothing is deleted)
+		List<Message> all = this.sessionService.getMessages(session.id());
+		assertThat(all).hasSize(12);
 	}
 
 	@Test
@@ -206,11 +210,14 @@ class SessionMemoryIT {
 
 		assertThat(result.eventsRemoved()).isPositive();
 
-		List<Message> messages = this.sessionService.getMessages(session.id());
-		// 2 turns × 2 messages per turn = 4 messages
-		assertThat(messages).hasSize(4);
-		assertThat(messages.get(0).getText()).isEqualTo("user turn 4");
-		assertThat(messages.get(3).getText()).isEqualTo("assistant reply 5");
+		// Active window: 2 turns × 2 messages per turn = 4 messages
+		List<SessionEvent> active = this.sessionService.getEvents(session.id(), EventFilter.active());
+		assertThat(active).hasSize(4);
+		assertThat(active.get(0).getMessage().getText()).isEqualTo("user turn 4");
+		assertThat(active.get(3).getMessage().getText()).isEqualTo("assistant reply 5");
+
+		// Archived turns are retained (not deleted) — full history still available
+		assertThat(this.sessionService.getMessages(session.id())).hasSize(10);
 	}
 
 	@Test

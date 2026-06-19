@@ -161,56 +161,87 @@ class InMemorySessionRepositoryTests {
 	}
 
 	@Test
-	void replaceEventsWithCorrectVersionSucceeds() {
+	void compactEventsWithCorrectVersionSucceeds() {
 		Session session = buildSession("user-7");
 		this.repository.save(session);
-		this.repository
-			.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("msg-1")).build());
+		SessionEvent e1 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("msg-1")).build();
+		SessionEvent e2 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("msg-2")).build();
+		this.repository.appendEvent(e1);
+		this.repository.appendEvent(e2);
 
 		long version = this.repository.getEventVersion(session.id());
-		List<SessionEvent> replacement = List
-			.of(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("compacted")).build());
+		SessionEvent summary = SessionEvent.builder()
+			.sessionId(session.id())
+			.message(new UserMessage("summary"))
+			.build();
 
-		boolean replaced = this.repository.replaceEvents(session.id(), replacement, version);
+		boolean replaced = this.repository.compactEvents(session.id(), List.of(e1), List.of(summary, e2), version);
 
 		assertThat(replaced).isTrue();
 		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(version + 1);
-		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).hasSize(1);
-		assertThat(this.repository.findEvents(session.id(), EventFilter.all()).get(0).getMessage().getText())
-			.isEqualTo("compacted");
+		// Active view excludes the archived event
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("summary", "msg-2");
+		// Full view still contains the archived event (Recall Storage), ahead of the
+		// active window, and it is flagged archived.
+		List<SessionEvent> all = this.repository.findEvents(session.id(), EventFilter.all());
+		assertThat(all).extracting(e -> e.getMessage().getText()).containsExactly("msg-1", "summary", "msg-2");
+		assertThat(all.get(0).isArchived()).isTrue();
+		assertThat(all.get(1).isArchived()).isFalse();
 	}
 
 	@Test
-	void replaceEventsWithStaleVersionFails() {
+	void compactEventsWithStaleVersionFails() {
 		Session session = buildSession("user-8");
 		this.repository.save(session);
-		this.repository
-			.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("msg-1")).build());
+		SessionEvent e1 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("msg-1")).build();
+		this.repository.appendEvent(e1);
 
 		long staleVersion = this.repository.getEventVersion(session.id()) - 1;
-		List<SessionEvent> replacement = List
-			.of(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("should-not-land")).build());
+		SessionEvent summary = SessionEvent.builder()
+			.sessionId(session.id())
+			.message(new UserMessage("should-not-land"))
+			.build();
 
-		boolean replaced = this.repository.replaceEvents(session.id(), replacement, staleVersion);
+		boolean replaced = this.repository.compactEvents(session.id(), List.of(e1), List.of(summary), staleVersion);
 
 		assertThat(replaced).isFalse();
-		// Original event is still there
-		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).hasSize(1);
-		assertThat(this.repository.findEvents(session.id(), EventFilter.all()).get(0).getMessage().getText())
-			.isEqualTo("msg-1");
+		// Original event is still there and is not archived
+		List<SessionEvent> all = this.repository.findEvents(session.id(), EventFilter.all());
+		assertThat(all).hasSize(1);
+		assertThat(all.get(0).getMessage().getText()).isEqualTo("msg-1");
+		assertThat(all.get(0).isArchived()).isFalse();
 	}
 
 	@Test
-	void replaceEventsVersionIncrementedOnUnconditionalReplace() {
+	void compactEventsPreservesPreviouslyArchivedEvents() {
 		Session session = buildSession("user-9");
 		this.repository.save(session);
-		this.repository
-			.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("original")).build());
+		SessionEvent e1 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("e1")).build();
+		SessionEvent e2 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("e2")).build();
+		SessionEvent e3 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("e3")).build();
+		this.repository.appendEvent(e1);
+		this.repository.appendEvent(e2);
+		this.repository.appendEvent(e3);
 
-		long versionBefore = this.repository.getEventVersion(session.id());
-		this.repository.replaceEvents(session.id(), List.of());
+		// First pass: archive e1, keep summary-1 + e2 + e3
+		SessionEvent summary1 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("s1")).build();
+		long v1 = this.repository.getEventVersion(session.id());
+		this.repository.compactEvents(session.id(), List.of(e1), List.of(summary1, e2, e3), v1);
 
-		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(versionBefore + 1);
+		// Second pass: archive e2, drop the superseded summary-1, keep summary-2 + e3
+		SessionEvent summary2 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("s2")).build();
+		long v2 = this.repository.getEventVersion(session.id());
+		this.repository.compactEvents(session.id(), List.of(e2), List.of(summary2, e3), v2);
+
+		// e1 (previously archived) is preserved; e2 newly archived; superseded s1 dropped
+		assertThat(this.repository.findEvents(session.id(), EventFilter.all()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("e1", "e2", "s2", "e3");
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("s2", "e3");
 	}
 
 	private Session buildSession(String userId) {

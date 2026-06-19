@@ -404,54 +404,97 @@ class JdbcSessionRepositoryTests {
 	}
 
 	@Test
-	void replaceEventsIncrementsVersion() {
+	void compactEventsIncrementsVersion() {
 		Session session = buildSession("user-rv");
 		this.repository.save(session);
-		this.repository
-			.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("original")).build());
+		SessionEvent original = SessionEvent.builder()
+			.sessionId(session.id())
+			.message(new UserMessage("original"))
+			.build();
+		this.repository.appendEvent(original);
 
 		long versionBefore = this.repository.getEventVersion(session.id());
-		this.repository.replaceEvents(session.id(), List.of());
+		this.repository.compactEvents(session.id(), List.of(original), List.of(), versionBefore);
 		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(versionBefore + 1);
 	}
 
 	@Test
-	void replaceEventsWithCorrectVersionSucceeds() {
+	void compactEventsWithCorrectVersionSucceeds() {
 		Session session = buildSession("user-cas-ok");
 		this.repository.save(session);
-		this.repository
-			.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("msg-1")).build());
+		SessionEvent e1 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("msg-1")).build();
+		SessionEvent e2 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("msg-2")).build();
+		this.repository.appendEvent(e1);
+		this.repository.appendEvent(e2);
 
 		long version = this.repository.getEventVersion(session.id());
-		List<SessionEvent> replacement = List
-			.of(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("compacted")).build());
+		SessionEvent summary = SessionEvent.builder()
+			.sessionId(session.id())
+			.message(new UserMessage("summary"))
+			.build();
 
-		boolean replaced = this.repository.replaceEvents(session.id(), replacement, version);
+		boolean replaced = this.repository.compactEvents(session.id(), List.of(e1), List.of(summary, e2), version);
 
 		assertThat(replaced).isTrue();
 		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(version + 1);
-		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).hasSize(1);
-		assertThat(this.repository.findEvents(session.id(), EventFilter.all()).get(0).getMessage().getText())
-			.isEqualTo("compacted");
+		// Active view excludes the archived event; ordered by seq (summary precedes window)
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("summary", "msg-2");
+		// Full view retains the archived event ahead of the active window, flagged archived
+		List<SessionEvent> all = this.repository.findEvents(session.id(), EventFilter.all());
+		assertThat(all).extracting(e -> e.getMessage().getText()).containsExactly("msg-1", "summary", "msg-2");
+		assertThat(all.get(0).isArchived()).isTrue();
+		assertThat(all.get(1).isArchived()).isFalse();
 	}
 
 	@Test
-	void replaceEventsWithStaleVersionFails() {
+	void compactEventsWithStaleVersionFails() {
 		Session session = buildSession("user-cas-fail");
 		this.repository.save(session);
-		this.repository
-			.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("msg-1")).build());
+		SessionEvent e1 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("msg-1")).build();
+		this.repository.appendEvent(e1);
 
 		long staleVersion = this.repository.getEventVersion(session.id()) - 1;
-		List<SessionEvent> replacement = List
-			.of(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("should-not-land")).build());
+		SessionEvent summary = SessionEvent.builder()
+			.sessionId(session.id())
+			.message(new UserMessage("should-not-land"))
+			.build();
 
-		boolean replaced = this.repository.replaceEvents(session.id(), replacement, staleVersion);
+		boolean replaced = this.repository.compactEvents(session.id(), List.of(e1), List.of(summary), staleVersion);
 
 		assertThat(replaced).isFalse();
-		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).hasSize(1);
-		assertThat(this.repository.findEvents(session.id(), EventFilter.all()).get(0).getMessage().getText())
-			.isEqualTo("msg-1");
+		List<SessionEvent> all = this.repository.findEvents(session.id(), EventFilter.all());
+		assertThat(all).hasSize(1);
+		assertThat(all.get(0).getMessage().getText()).isEqualTo("msg-1");
+		assertThat(all.get(0).isArchived()).isFalse();
+	}
+
+	@Test
+	void compactEventsPreservesPreviouslyArchivedEvents() {
+		Session session = buildSession("user-archive-multi");
+		this.repository.save(session);
+		SessionEvent e1 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("e1")).build();
+		SessionEvent e2 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("e2")).build();
+		SessionEvent e3 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("e3")).build();
+		this.repository.appendEvent(e1);
+		this.repository.appendEvent(e2);
+		this.repository.appendEvent(e3);
+
+		SessionEvent summary1 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("s1")).build();
+		long v1 = this.repository.getEventVersion(session.id());
+		this.repository.compactEvents(session.id(), List.of(e1), List.of(summary1, e2, e3), v1);
+
+		SessionEvent summary2 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("s2")).build();
+		long v2 = this.repository.getEventVersion(session.id());
+		this.repository.compactEvents(session.id(), List.of(e2), List.of(summary2, e3), v2);
+
+		assertThat(this.repository.findEvents(session.id(), EventFilter.all()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("e1", "e2", "s2", "e3");
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("s2", "e3");
 	}
 
 	// -------------------------------------------------------------------------

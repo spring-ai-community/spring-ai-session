@@ -67,35 +67,48 @@ public interface SessionRepository {
 	void appendEvent(SessionEvent event);
 
 	/**
-	 * Replaces the entire event log for the given session with the provided list. Used
-	 * after compaction to atomically swap the event list.
-	 * @throws IllegalArgumentException if the session does not exist
-	 */
-	void replaceEvents(String sessionId, List<SessionEvent> events);
-
-	/**
-	 * Compare-and-swap variant of {@link #replaceEvents}: atomically replaces the event
-	 * log only if the current event-log version equals {@code expectedVersion}. Returns
-	 * {@code true} when the swap succeeded, {@code false} when another writer had already
-	 * mutated the event log (a concurrent compaction or append) between the caller's read
-	 * and this write.
+	 * Atomically applies a compaction result to the session's event log using an
+	 * optimistic compare-and-swap. The swap is performed only if the current event-log
+	 * version equals {@code expectedVersion}; otherwise the call is a no-op and returns
+	 * {@code false} (another writer mutated the log between the caller's read and this
+	 * write).
+	 *
+	 * <p>
+	 * Archived events are <em>retained</em> in the log (soft-deleted via
+	 * {@link SessionEvent#isArchived()}) so they remain searchable by the Recall Storage
+	 * tools. On success the resulting active log is, in order:
+	 * <ol>
+	 * <li>all events that were already archived (preserved as-is),</li>
+	 * <li>the events in {@code archivedEvents}, now marked archived,</li>
+	 * <li>the events in {@code retainedEvents} (the new active window, typically a
+	 * synthetic summary turn followed by the most recent events), marked active.</li>
+	 * </ol>
+	 * Any previously-active event that appears in neither list (e.g. a superseded
+	 * synthetic summary) is removed.
+	 *
 	 * <p>
 	 * Callers should read {@link #getEventVersion} <em>before</em> reading events via
 	 * {@link #findEvents}, then pass that version here. If this method returns
 	 * {@code false} the caller should treat the compaction as a no-op — the concurrent
 	 * writer already handled the session.
+	 * @param sessionId the session whose log is being compacted
+	 * @param archivedEvents events to mark archived (must already exist in the log)
+	 * @param retainedEvents the new active event set, in chronological order
+	 * @param expectedVersion the event-log version the caller observed
+	 * @return {@code true} when the swap succeeded, {@code false} on a version mismatch
 	 * @throws IllegalArgumentException if the session does not exist
 	 */
-	boolean replaceEvents(String sessionId, List<SessionEvent> events, long expectedVersion);
+	boolean compactEvents(String sessionId, List<SessionEvent> archivedEvents, List<SessionEvent> retainedEvents,
+			long expectedVersion);
 
 	/**
 	 * Returns the current event-log version for the given session. The version is
-	 * incremented atomically on every {@link #appendEvent} and {@link #replaceEvents}
+	 * incremented atomically on every {@link #appendEvent} and {@link #compactEvents}
 	 * call. Returns {@code 0} when the session does not exist or has no events yet.
 	 * <p>
 	 * Read this <em>before</em> calling {@link #findEvents} to obtain a version that is
 	 * guaranteed to be ≤ the version of the events you subsequently read, which is the
-	 * safe ordering for passing to {@link #replaceEvents(String, List, long)}.
+	 * safe ordering for passing to {@link #compactEvents(String, List, List, long)}.
 	 */
 	long getEventVersion(String sessionId);
 
@@ -106,7 +119,7 @@ public interface SessionRepository {
 	 * <p>
 	 * <strong>Existence contract:</strong> returns an empty list when the session does
 	 * not exist, rather than throwing. This differs from {@link #appendEvent} and
-	 * {@link #replaceEvents}, which throw {@link IllegalArgumentException} for unknown
+	 * {@link #compactEvents}, which throw {@link IllegalArgumentException} for unknown
 	 * sessions. The silent-empty behaviour allows callers to query event history without
 	 * first checking whether the session exists (the "read before write" pattern used by
 	 * {@code SessionMemoryAdvisor}).

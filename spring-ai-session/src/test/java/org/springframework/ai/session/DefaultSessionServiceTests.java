@@ -16,6 +16,7 @@
 
 package org.springframework.ai.session;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -55,6 +56,39 @@ class DefaultSessionServiceTests {
 		assertThat(session.id()).isNotBlank();
 		assertThat(session.userId()).isEqualTo("user-1");
 		assertThat(this.service.getEvents(session.id())).isEmpty();
+	}
+
+	@Test
+	void createAppliesDefaultTimeToLiveWhenRequestHasNone() {
+		// Builder default is 60 days.
+		Instant before = Instant.now();
+		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+
+		assertThat(session.expiresAt()).isBetween(before.plus(Duration.ofDays(60)).minusSeconds(5),
+				Instant.now().plus(Duration.ofDays(60)).plusSeconds(5));
+	}
+
+	@Test
+	void createHonoursConfiguredDefaultTimeToLive() {
+		SessionService customService = DefaultSessionService.builder()
+			.sessionRepository(InMemorySessionRepository.builder().build())
+			.defaultTimeToLive(Duration.ofHours(2))
+			.build();
+
+		Instant before = Instant.now();
+		Session session = customService.create(CreateSessionRequest.builder().userId("user-1").build());
+
+		assertThat(session.expiresAt()).isBetween(before.plus(Duration.ofHours(2)).minusSeconds(5),
+				Instant.now().plus(Duration.ofHours(2)).plusSeconds(5));
+	}
+
+	@Test
+	void createPrefersRequestTimeToLiveOverDefault() {
+		Instant before = Instant.now();
+		Session session = this.service
+			.create(CreateSessionRequest.builder().userId("user-1").timeToLive(Duration.ofMinutes(30)).build());
+
+		assertThat(session.expiresAt()).isBefore(before.plus(Duration.ofHours(1)));
 	}
 
 	@Test
@@ -116,10 +150,40 @@ class DefaultSessionServiceTests {
 		assertThat(result.eventsRemoved()).isEqualTo(3);
 		assertThat(result.compactedEvents()).hasSize(2);
 
-		List<Message> messages = this.service.getMessages(session.id());
-		assertThat(messages).hasSize(2);
-		assertThat(messages.get(0).getText()).isEqualTo("msg-4");
-		assertThat(messages.get(1).getText()).isEqualTo("msg-5");
+		// Active window keeps only the last two events
+		List<SessionEvent> active = this.service.getEvents(session.id(), EventFilter.active());
+		assertThat(active).extracting(e -> e.getMessage().getText()).containsExactly("msg-4", "msg-5");
+
+		// The three compacted events are archived, not deleted — still available for Recall
+		// Storage search via the full (unfiltered) view.
+		List<SessionEvent> all = this.service.getEvents(session.id());
+		assertThat(all).extracting(e -> e.getMessage().getText())
+			.containsExactly("msg-1", "msg-2", "msg-3", "msg-4", "msg-5");
+		assertThat(all.stream().filter(SessionEvent::isArchived).map(e -> e.getMessage().getText()))
+			.containsExactly("msg-1", "msg-2", "msg-3");
+	}
+
+	@Test
+	void compactedEventsRemainSearchableViaRecallStorage() {
+		// Regression for issue #21: compaction must archive (not delete) events so the
+		// Recall Storage keyword search can still surface them after the active context
+		// window has moved on.
+		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		this.service.appendMessage(session.id(), new UserMessage("the secret code is alpha-7"));
+		for (int i = 1; i <= 5; i++) {
+			this.service.appendMessage(session.id(), new UserMessage("filler-" + i));
+		}
+
+		this.service.compact(session.id(), req -> true, SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
+
+		// The first message is archived out of the active window...
+		assertThat(this.service.getEvents(session.id(), EventFilter.active()))
+			.noneMatch(e -> e.getMessage().getText().contains("alpha-7"));
+		// ...but a keyword search (the Recall Storage filter) still finds it.
+		List<SessionEvent> recalled = this.service.getEvents(session.id(), EventFilter.keywordSearch("alpha-7"));
+		assertThat(recalled).hasSize(1);
+		assertThat(recalled.get(0).getMessage().getText()).isEqualTo("the secret code is alpha-7");
+		assertThat(recalled.get(0).isArchived()).isTrue();
 	}
 
 	@Test
@@ -166,10 +230,8 @@ class DefaultSessionServiceTests {
 		assertThat(result.eventsRemoved()).isEqualTo(3);
 		assertThat(result.compactedEvents()).hasSize(2);
 
-		List<Message> messages = this.service.getMessages(session.id());
-		assertThat(messages).hasSize(2);
-		assertThat(messages.get(0).getText()).isEqualTo("msg-4");
-		assertThat(messages.get(1).getText()).isEqualTo("msg-5");
+		List<SessionEvent> active = this.service.getEvents(session.id(), EventFilter.active());
+		assertThat(active).extracting(e -> e.getMessage().getText()).containsExactly("msg-4", "msg-5");
 	}
 
 	@Test
@@ -195,7 +257,7 @@ class DefaultSessionServiceTests {
 		}
 
 		// Two threads race to compact the same session to a window of 2.
-		// The CAS in replaceEvents guarantees that only the first writer lands;
+		// The CAS in compactEvents guarantees that only the first writer lands;
 		// the second detects a version mismatch and skips silently.
 		CountDownLatch ready = new CountDownLatch(2);
 		CountDownLatch go = new CountDownLatch(1);
@@ -226,11 +288,9 @@ class DefaultSessionServiceTests {
 		int totalRemoved = results[0].eventsRemoved() + results[1].eventsRemoved();
 		assertThat(totalRemoved).isEqualTo(3);
 
-		// The surviving event list must be exactly the last 2 messages.
-		List<Message> messages = this.service.getMessages(session.id());
-		assertThat(messages).hasSize(2);
-		assertThat(messages.get(0).getText()).isEqualTo("msg-4");
-		assertThat(messages.get(1).getText()).isEqualTo("msg-5");
+		// The surviving active window must be exactly the last 2 messages.
+		List<SessionEvent> active = this.service.getEvents(session.id(), EventFilter.active());
+		assertThat(active).extracting(e -> e.getMessage().getText()).containsExactly("msg-4", "msg-5");
 	}
 
 	// --- deleteExpiredSessions ---

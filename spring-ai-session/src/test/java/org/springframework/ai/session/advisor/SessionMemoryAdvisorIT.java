@@ -184,9 +184,10 @@ class SessionMemoryAdvisorIT {
 		}
 
 		// Compaction runs synchronously after each turn, so by the time we get here
-		// the sliding window (maxEvents=2) has already been applied.
-		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
-		assertThat(events.size()).isLessThanOrEqualTo(2);
+		// the sliding window (maxEvents=2) has already been applied to the active context.
+		// (The compacted events are archived, not deleted, so the full log is larger.)
+		List<SessionEvent> active = this.sessionService.getEvents(this.sessionId, EventFilter.active());
+		assertThat(active.size()).isLessThanOrEqualTo(2);
 	}
 
 	@Test

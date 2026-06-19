@@ -113,21 +113,11 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public void replaceEvents(String sessionId, List<SessionEvent> events) {
+	public boolean compactEvents(String sessionId, List<SessionEvent> archivedEvents,
+			List<SessionEvent> retainedEvents, long expectedVersion) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
-		Assert.notNull(events, "events must not be null");
-		this.store.compute(sessionId, (id, existing) -> {
-			if (existing == null) {
-				throw new IllegalArgumentException("Session not found: " + sessionId);
-			}
-			return existing.withEvents(List.copyOf(events));
-		});
-	}
-
-	@Override
-	public boolean replaceEvents(String sessionId, List<SessionEvent> events, long expectedVersion) {
-		Assert.hasText(sessionId, "sessionId must not be null or empty");
-		Assert.notNull(events, "events must not be null");
+		Assert.notNull(archivedEvents, "archivedEvents must not be null");
+		Assert.notNull(retainedEvents, "retainedEvents must not be null");
 		boolean[] success = { false };
 		this.store.compute(sessionId, (id, existing) -> {
 			if (existing == null) {
@@ -137,7 +127,14 @@ public final class InMemorySessionRepository implements SessionRepository {
 				return existing;
 			}
 			success[0] = true;
-			return existing.withEvents(List.copyOf(events));
+			// Preserve previously-archived events (always the oldest prefix), then the
+			// newly-archived events (marked archived), then the new active window. Any other
+			// previously-active event (e.g. a superseded synthetic summary) is dropped.
+			List<SessionEvent> newEvents = new ArrayList<>();
+			existing.events().stream().filter(SessionEvent::isArchived).forEach(newEvents::add);
+			archivedEvents.forEach(e -> newEvents.add(e.asArchived()));
+			newEvents.addAll(retainedEvents);
+			return existing.withEvents(List.copyOf(newEvents));
 		});
 		return success[0];
 	}

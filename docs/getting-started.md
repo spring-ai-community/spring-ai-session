@@ -86,6 +86,16 @@ Import the BOM so all module versions stay in sync:
     No additional bean declarations are required. To override the auto-configured
     `SessionService`, declare your own `@Bean SessionService` and it will take precedence.
 
+    The default session time-to-live (used when a `CreateSessionRequest` does not set
+    its own `timeToLive`) defaults to 60 days and can be configured:
+
+    ```yaml
+    spring:
+      ai:
+        session:
+          time-to-live: 30d   # ISO-8601 / Spring duration; defaults to 60d
+    ```
+
 === "JDBC (manual)"
 
     Add the JDBC module:

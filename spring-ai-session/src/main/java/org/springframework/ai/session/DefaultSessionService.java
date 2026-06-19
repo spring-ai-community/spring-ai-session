@@ -38,21 +38,28 @@ import org.springframework.util.Assert;
  */
 public class DefaultSessionService implements SessionService {
 
+	private final Duration defaultTimeToLive;
+
 	private final SessionRepository sessionRepository;
 
-	private DefaultSessionService(SessionRepository sessionRepository) {
+	private DefaultSessionService(SessionRepository sessionRepository, Duration defaultTimeToLive) {
 		Assert.notNull(sessionRepository, "sessionRepository must not be null");
+		Assert.notNull(defaultTimeToLive, "defaultTimeToLive must not be null");
 		this.sessionRepository = sessionRepository;
+		this.defaultTimeToLive = defaultTimeToLive;
 	}
 
 	@Override
 	public Session create(CreateSessionRequest request) {
 		Assert.notNull(request, "request must not be null");
+
 		Instant now = Instant.now();
 		Instant expiresAt = (request.timeToLive() != null) ? now.plus(request.timeToLive())
-				: now.plus(Duration.ofDays(60));
+				: now.plus(this.defaultTimeToLive);
+
 		String sessionId = (request.id() != null && !request.id().isBlank()) ? request.id()
 				: UUID.randomUUID().toString();
+
 		Session session = Session.builder()
 			.id(sessionId)
 			.userId(request.userId())
@@ -60,6 +67,7 @@ public class DefaultSessionService implements SessionService {
 			.expiresAt(expiresAt)
 			.metadata(new HashMap<>(request.metadata()))
 			.build();
+
 		return this.sessionRepository.save(session);
 	}
 
@@ -114,21 +122,18 @@ public class DefaultSessionService implements SessionService {
 			throw new IllegalArgumentException("Session not found: " + sessionId);
 		}
 
-		return compactWith(session, trigger, strategy);
-	}
-
-	/**
-	 * Core compaction logic shared by both {@code compact} overloads. Skips the
-	 * {@code findById} round-trip — the caller must supply a valid {@link Session}.
-	 */
-	private CompactionResult compactWith(Session session, CompactionTrigger trigger, CompactionStrategy strategy) {
 		// Read version BEFORE events so the version we pass to the CAS write is
 		// guaranteed to be ≤ the version of the events we subsequently read. If another
 		// writer (append or compaction) mutates the log between our read and our write,
 		// the CAS will detect the version mismatch and return false — we skip silently,
 		// as the concurrent writer already handled the session.
 		long version = this.sessionRepository.getEventVersion(session.id());
-		List<SessionEvent> events = this.sessionRepository.findEvents(session.id(), EventFilter.all());
+
+		// Operate on the active context window only — already-archived events are
+		// retained for Recall Storage and must not be re-processed (or re-summarized) by
+		// compaction.
+		List<SessionEvent> events = this.sessionRepository.findEvents(session.id(), EventFilter.active());
+
 		CompactionRequest request = CompactionRequest.of(session, events);
 
 		if (!trigger.shouldCompact(request)) {
@@ -138,9 +143,11 @@ public class DefaultSessionService implements SessionService {
 		CompactionResult result = strategy.compact(request);
 
 		if (!result.archivedEvents().isEmpty()) {
-			boolean replaced = this.sessionRepository.replaceEvents(session.id(), result.compactedEvents(), version);
+			boolean replaced = this.sessionRepository.compactEvents(session.id(), result.archivedEvents(),
+					result.compactedEvents(), version);
 			if (!replaced) {
-				// CAS rejected — a concurrent writer already mutated the log; skip silently.
+				// CAS rejected — a concurrent writer already mutated the log; skip
+				// silently.
 				return new CompactionResult(events, List.of(), 0);
 			}
 		}
@@ -156,15 +163,24 @@ public class DefaultSessionService implements SessionService {
 
 		private SessionRepository sessionRepository;
 
+		private Duration defaultTimeToLive = Duration.ofDays(60);
+
 		public Builder sessionRepository(SessionRepository sessionRepository) {
+			Assert.notNull(sessionRepository, "sessionRepository must not be null");
 			this.sessionRepository = sessionRepository;
 			return this;
 		}
 
-		public DefaultSessionService build() {
-			return new DefaultSessionService(this.sessionRepository);
+		public Builder defaultTimeToLive(Duration defaultTimeToLive) {
+			Assert.notNull(defaultTimeToLive, "defaultTimeToLive must not be null");
+			this.defaultTimeToLive = defaultTimeToLive;
+			return this;
 		}
 
-	}	
+		public DefaultSessionService build() {
+			return new DefaultSessionService(this.sessionRepository, this.defaultTimeToLive);
+		}
+
+	}
 
 }

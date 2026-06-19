@@ -120,6 +120,19 @@ class EventFilterMergeTests {
 		assertThat(EventFilter.all().merge(EventFilter.all()).excludeSynthetic()).isFalse();
 	}
 
+	// --- excludeArchived is OR-ed ---
+
+	@Test
+	void excludeArchivedIsTrueWhenEitherSideIsTrue() {
+		assertThat(EventFilter.all().merge(EventFilter.active()).excludeArchived()).isTrue();
+		assertThat(EventFilter.active().merge(EventFilter.all()).excludeArchived()).isTrue();
+	}
+
+	@Test
+	void excludeArchivedIsFalseWhenBothAreFalse() {
+		assertThat(EventFilter.all().merge(EventFilter.all()).excludeArchived()).isFalse();
+	}
+
 	// --- merging two EventFilter.all() produces all() ---
 
 	@Test

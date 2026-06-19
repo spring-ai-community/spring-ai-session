@@ -16,6 +16,8 @@
 
 package org.springaicommunity.session.autoconfigure;
 
+import java.time.Duration;
+
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.session.DefaultSessionService;
@@ -51,6 +53,21 @@ class SessionServiceAutoConfigurationTests {
 				assertThat(context).hasSingleBean(SessionService.class);
 				assertThat(context).hasSingleBean(DefaultSessionService.class);
 			});
+	}
+
+	@Test
+	void timeToLiveDefaultsTo60Days() {
+		this.contextRunner.withBean(SessionRepository.class, () -> InMemorySessionRepository.builder().build())
+			.run(context -> assertThat(context.getBean(SessionServiceProperties.class).getTimeToLive())
+				.isEqualTo(Duration.ofDays(60)));
+	}
+
+	@Test
+	void timeToLiveIsBoundFromProperties() {
+		this.contextRunner.withBean(SessionRepository.class, () -> InMemorySessionRepository.builder().build())
+			.withPropertyValues("spring.ai.session.time-to-live=2h")
+			.run(context -> assertThat(context.getBean(SessionServiceProperties.class).getTimeToLive())
+				.isEqualTo(Duration.ofHours(2)));
 	}
 
 	@Test

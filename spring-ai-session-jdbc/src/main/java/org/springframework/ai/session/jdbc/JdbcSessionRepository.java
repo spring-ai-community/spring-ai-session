@@ -80,10 +80,17 @@ import org.springframework.util.Assert;
  * <h2>Optimistic concurrency (CAS)</h2>
  * <p>
  * The {@code event_version} column in {@code AI_SESSION} is incremented atomically on
- * every {@link #appendEvent} and {@link #replaceEvents} call. The CAS variant of
- * {@code replaceEvents} guards compaction by issuing a conditional
- * {@code UPDATE … WHERE event_version = ?} first; if zero rows are updated the swap is
- * abandoned and {@code false} is returned.
+ * every {@link #appendEvent} and {@link #compactEvents} call. {@code compactEvents} guards
+ * compaction by issuing a conditional {@code UPDATE … WHERE event_version = ?} first; if
+ * zero rows are updated the swap is abandoned and {@code false} is returned.
+ *
+ * <h2>Event ordering</h2>
+ * <p>
+ * Events are ordered by a database-assigned monotonic {@code seq} column, which reflects
+ * insertion order (the logical conversation order) rather than wall-clock
+ * {@code timestamp}. This keeps a synthetic compaction summary — whose timestamp is the
+ * compaction time — correctly positioned ahead of the older active-window events it
+ * precedes.
  *
  * <h2>Thread safety</h2>
  * <p>
@@ -116,8 +123,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private static final String INSERT_EVENT =
 		"INSERT INTO AI_SESSION_EVENT"
 		+ " (id, session_id, timestamp, message_type, message_content, message_data,"
-		+ "  synthetic, branch, metadata)"
-		+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		+ "  synthetic, archived, branch, metadata)"
+		+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 	private static final String INCREMENT_EVENT_VERSION =
 		"UPDATE AI_SESSION SET event_version = event_version + 1 WHERE id = ?";
@@ -135,9 +142,15 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private static final String DELETE_EVENTS =
 		"DELETE FROM AI_SESSION_EVENT WHERE session_id = ?";
 
+	private static final String SELECT_ARCHIVED_EVENTS =
+		"SELECT e.id, e.session_id, e.timestamp, e.message_type, e.message_content,"
+		+ "       e.message_data, e.synthetic, e.archived, e.branch, e.metadata"
+		+ " FROM AI_SESSION_EVENT e"
+		+ " WHERE e.session_id = ? AND e.archived = ? ORDER BY e.seq ASC";
+
 	private static final String SELECT_EVENTS_BASE =
 		"SELECT e.id, e.session_id, e.timestamp, e.message_type, e.message_content,"
-		+ "       e.message_data, e.synthetic, e.branch, e.metadata"
+		+ "       e.message_data, e.synthetic, e.archived, e.branch, e.metadata"
 		+ " FROM AI_SESSION_EVENT e"
 		+ " WHERE e.session_id = ? ";
 
@@ -213,22 +226,11 @@ public final class JdbcSessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public void replaceEvents(String sessionId, List<SessionEvent> events) {
+	public boolean compactEvents(String sessionId, List<SessionEvent> archivedEvents,
+			List<SessionEvent> retainedEvents, long expectedVersion) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
-		Assert.notNull(events, "events must not be null");
-		requireSessionExists(sessionId);
-		this.transactionTemplate.execute(status -> {
-			this.jdbcTemplate.update(DELETE_EVENTS, sessionId);
-			events.forEach(this::insertEvent);
-			this.jdbcTemplate.update(INCREMENT_EVENT_VERSION, sessionId);
-			return null;
-		});
-	}
-
-	@Override
-	public boolean replaceEvents(String sessionId, List<SessionEvent> events, long expectedVersion) {
-		Assert.hasText(sessionId, "sessionId must not be null or empty");
-		Assert.notNull(events, "events must not be null");
+		Assert.notNull(archivedEvents, "archivedEvents must not be null");
+		Assert.notNull(retainedEvents, "retainedEvents must not be null");
 		requireSessionExists(sessionId);
 		Boolean success = this.transactionTemplate.execute(status -> {
 			// Atomically claim the version slot. If another writer already changed it,
@@ -237,8 +239,16 @@ public final class JdbcSessionRepository implements SessionRepository {
 			if (updated == 0) {
 				return false;
 			}
+			// Read the previously-archived events (oldest prefix) so they survive the
+			// delete-and-reinsert. The whole log is rebuilt in order so the auto-assigned
+			// `seq` reflects the logical conversation order: previously-archived events,
+			// then newly-archived events, then the new active window (summary + recent).
+			List<SessionEvent> previouslyArchived = this.jdbcTemplate.query(SELECT_ARCHIVED_EVENTS,
+					new SessionEventRowMapper(), sessionId, true);
 			this.jdbcTemplate.update(DELETE_EVENTS, sessionId);
-			events.forEach(this::insertEvent);
+			previouslyArchived.forEach(this::insertEvent);
+			archivedEvents.forEach(e -> insertEvent(e.asArchived()));
+			retainedEvents.forEach(this::insertEvent);
 			return true;
 		});
 		return Boolean.TRUE.equals(success);
@@ -279,6 +289,10 @@ public final class JdbcSessionRepository implements SessionRepository {
 			sql.append("AND e.synthetic = ? ");
 			params.add(false);
 		}
+		if (filter.excludeArchived()) {
+			sql.append("AND e.archived = ? ");
+			params.add(false);
+		}
 		if (filter.branch() != null) {
 			// Visibility: null branch (root events) OR exact match OR caller is a
 			// descendant (filterBranch starts with eventBranch + '.')
@@ -292,17 +306,17 @@ public final class JdbcSessionRepository implements SessionRepository {
 		}
 
 		if (filter.lastN() != null) {
-			sql.append("ORDER BY e.timestamp DESC LIMIT ? ");
+			sql.append("ORDER BY e.seq DESC LIMIT ? ");
 			params.add(filter.lastN());
 		}
 		else if (filter.pageSize() != null) {
 			int page = filter.page() != null ? filter.page() : 0;
-			sql.append("ORDER BY e.timestamp ASC LIMIT ? OFFSET ? ");
+			sql.append("ORDER BY e.seq ASC LIMIT ? OFFSET ? ");
 			params.add(filter.pageSize());
 			params.add((long) page * filter.pageSize());
 		}
 		else {
-			sql.append("ORDER BY e.timestamp ASC ");
+			sql.append("ORDER BY e.seq ASC ");
 		}
 
 		List<SessionEvent> result = this.jdbcTemplate.query(sql.toString(), new SessionEventRowMapper(),
@@ -324,7 +338,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 		Message msg = event.getMessage();
 		this.jdbcTemplate.update(INSERT_EVENT, event.getId(), event.getSessionId(), toTimestamp(event.getTimestamp()),
 				msg.getMessageType().name(), msg.getText(), messageDataToJson(msg), event.isSynthetic(),
-				event.getBranch(), toJson(event.getMetadata()));
+				event.isArchived(), event.getBranch(), toJson(event.getMetadata()));
 	}
 
 	private void requireSessionExists(String sessionId) {
@@ -472,6 +486,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 				.timestamp(rs.getTimestamp("timestamp").toInstant())
 				.message(message)
 				.branch(rs.getString("branch"))
+				.archived(rs.getBoolean("archived"))
 				.metadata(metadata)
 				.build();
 		}

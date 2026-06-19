@@ -22,17 +22,24 @@ CompactionResult result = service.compact(
 
 System.out.println(result.eventsRemoved());        // derived: archivedEvents().size()
 System.out.println(result.compactedEvents());      // the kept event list
-System.out.println(result.archivedEvents());       // the removed event list
+System.out.println(result.archivedEvents());       // the archived (not deleted) event list
 System.out.println(result.tokensEstimatedSaved()); // rough token saving estimate
 
 // Compact unconditionally — pass an always-fire trigger
 service.compact(sessionId, req -> true, SlidingWindowCompactionStrategy.builder().maxEvents(10).build());
 ```
 
+!!! note "Archived, not deleted"
+    Events in `archivedEvents()` are removed from the **active context window** but retained
+    in the event log with `SessionEvent.isArchived() == true`. They are excluded from the
+    prompt (`EventFilter.active()`) yet remain searchable through
+    [Recall Storage](recall-storage.md) (`EventFilter.keywordSearch(...)`). Compaction never
+    destroys conversation history.
+
 !!! note "CAS write safety"
     `DefaultSessionService.compact()` reads the event-log version **before** fetching
     events. If another writer mutated the log between that read and the write,
-    `replaceEvents()` returns `false` and compaction is silently skipped — the concurrent
+    `compactEvents()` returns `false` and compaction is silently skipped — the concurrent
     writer already handled the session. No-op results skip the write entirely, important
     for production persistence backends.
 

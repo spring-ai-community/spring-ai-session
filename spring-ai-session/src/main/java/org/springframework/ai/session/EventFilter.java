@@ -72,7 +72,7 @@ import org.springframework.ai.chat.messages.MessageType;
  */
 public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullable Set<MessageType> messageTypes,
 		boolean excludeSynthetic, @Nullable Integer lastN, @Nullable String keyword, @Nullable Integer page,
-		@Nullable Integer pageSize, @Nullable String branch) {
+		@Nullable Integer pageSize, @Nullable String branch, boolean excludeArchived) {
 
 	public EventFilter {
 		keyword = (keyword != null && !keyword.isBlank()) ? keyword.toLowerCase() : null;
@@ -103,15 +103,27 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 				other.excludeSynthetic || this.excludeSynthetic, other.lastN != null ? other.lastN : this.lastN,
 				other.keyword != null ? other.keyword : this.keyword, other.page != null ? other.page : this.page,
 				other.pageSize != null ? other.pageSize : this.pageSize,
-				other.branch != null ? other.branch : this.branch);
+				other.branch != null ? other.branch : this.branch, other.excludeArchived || this.excludeArchived);
 	}
 
 	/** Default number of results per page used by {@link #keywordSearch(String)}. */
 	public static final int DEFAULT_PAGE_SIZE = 10;
 
-	/** Returns all events with no filtering. */
+	/**
+	 * Returns all events with no filtering, <em>including</em> archived events. Used by
+	 * Recall Storage so the full verbatim history remains searchable after compaction. For
+	 * building the active context window use {@link #active()} instead.
+	 */
 	public static EventFilter all() {
 		return builder().build();
+	}
+
+	/**
+	 * Returns only the active events — i.e. excludes events archived by compaction. This is
+	 * the view that should be injected into the prompt as the active context window.
+	 */
+	public static EventFilter active() {
+		return builder().excludeArchived(true).build();
 	}
 
 	/** Returns the last {@code n} events. */
@@ -181,6 +193,9 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		if (this.excludeSynthetic && event.isSynthetic()) {
 			return false;
 		}
+		if (this.excludeArchived && event.isArchived()) {
+			return false;
+		}
 		if (this.from != null && event.getTimestamp().isBefore(this.from)) {
 			return false;
 		}
@@ -238,6 +253,8 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		private @Nullable Integer pageSize;
 
 		private @Nullable String branch;
+
+		private boolean excludeArchived = false;
 
 		private Builder() {
 		}
@@ -316,10 +333,20 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 			return this;
 		}
 
+		/**
+		 * When {@code true}, events archived by compaction are excluded. Used to build the
+		 * active context window; leave {@code false} (the default) for Recall Storage
+		 * searches that must see the full history.
+		 */
+		public Builder excludeArchived(boolean excludeArchived) {
+			this.excludeArchived = excludeArchived;
+			return this;
+		}
+
 		/** Constructs the {@link EventFilter}. */
 		public EventFilter build() {
 			return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, this.lastN,
-					this.keyword, this.page, this.pageSize, this.branch);
+					this.keyword, this.page, this.pageSize, this.branch, this.excludeArchived);
 		}
 
 	}
