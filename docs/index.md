@@ -97,8 +97,8 @@ String answer = client.prompt()
 ## Requirements
 
 - Java 17+
-- Spring AI `2.0.0-RC1+4+`
-- Spring Boot `4.0.6+`
+- Spring AI `2.0.0+`
+- Spring Boot `4.0.7+`
 
 ---
 
