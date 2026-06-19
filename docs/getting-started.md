@@ -37,7 +37,7 @@ Import the BOM so all module versions stay in sync:
     ```xml
     <dependency>
         <groupId>org.springaicommunity</groupId>
-        <artifactId>spring-ai-session-management</artifactId>
+        <artifactId>spring-ai-session</artifactId>
     </dependency>
     ```
 

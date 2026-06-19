@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Java Version](https://img.shields.io/badge/Java-17%2B-orange)](https://www.oracle.com/java/technologies/javase/jdk17-archive-downloads.html)
-[![Spring AI Session](https://img.shields.io/maven-central/v/org.springaicommunity/spring-ai-session-management?label=Maven%20Central)](https://central.sonatype.com/artifact/org.springaicommunity/spring-ai-session-management)
+[![Spring AI Session](https://img.shields.io/maven-central/v/org.springaicommunity/spring-ai-session?label=Maven%20Central)](https://central.sonatype.com/artifact/org.springaicommunity/spring-ai-session)
 
 A [Spring AI](https://docs.spring.io/spring-ai/reference/) library that provides structured, event-sourced session management with context compaction for AI applications.
 
@@ -21,7 +21,7 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 ```
 spring-ai-session/
 ├── spring-ai-session-bom/                               # Bill of Materials for version 
-├── spring-ai-session-management/                        # Core SPI, compaction framework, SessionMemoryAdvisor
+├── spring-ai-session/                                   # Core SPI, compaction framework, SessionMemoryAdvisor
 ├── spring-ai-session-jdbc/                              # JDBC-backed SessionRepository (PostgreSQL, MySQL, H2) management
 └── auto-configurations/
     └── session/
@@ -35,7 +35,7 @@ spring-ai-session/
 
 | Module | Artifact | Description |
 |--------|----------|-------------|
-| **Session Management** | `spring-ai-session-management` | `Session`, `SessionEvent`, `SessionService`, `SessionRepository` SPI, compaction framework, `SessionMemoryAdvisor` |
+| **Session Management** | `spring-ai-session` | `Session`, `SessionEvent`, `SessionService`, `SessionRepository` SPI, compaction framework, `SessionMemoryAdvisor` |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
@@ -66,7 +66,7 @@ spring-ai-session/
 <!-- Core only (in-memory repository) -->
 <dependency>
     <groupId>org.springaicommunity</groupId>
-    <artifactId>spring-ai-session-management</artifactId>
+    <artifactId>spring-ai-session</artifactId>
 </dependency>
 
 <!-- Or JDBC starter (Spring Boot, recommended) -->

@@ -28,7 +28,7 @@ Spring AI Session solves this with three ideas working together:
 
 | Module | Artifact | Description |
 |--------|----------|-------------|
-| **Session Management** | `spring-ai-session-management` | Core SPI: `Session`, `SessionEvent`, `SessionService`, `SessionRepository`, compaction framework, `SessionMemoryAdvisor` |
+| **Session Management** | `spring-ai-session` | Core SPI: `Session`, `SessionEvent`, `SessionService`, `SessionRepository`, compaction framework, `SessionMemoryAdvisor` |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, H2, and MariaDB |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
