@@ -21,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
@@ -45,6 +47,7 @@ import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 import org.springframework.core.Ordered;
 import org.springframework.util.Assert;
+import org.springframework.util.CollectionUtils;
 
 /**
  * A {@link BaseAdvisor} that manages conversation history using the
@@ -56,7 +59,7 @@ import org.springframework.util.Assert;
  * <li>Retrieves the session's event history and prepends it to the prompt messages.</li>
  * <li>Appends the current user message to the session.</li>
  * <li>After the model responds, appends the assistant message to the session;
- *     empty assistant messages (blank text and no tool calls) are skipped.</li>
+ *     empty assistant messages (blank text, no tool calls, and no media) are skipped.</li>
  * <li>Optionally triggers context compaction if the configured trigger fires.</li>
  * </ol>
  *
@@ -77,6 +80,8 @@ import org.springframework.util.Assert;
  * @since 2.0.0
  */
 public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
+
+	private static final Logger logger = LoggerFactory.getLogger(SessionMemoryAdvisor.class);
 
 	/**
 	 * Context key used to pass the session ID into the advisor per-request. Equals
@@ -200,15 +205,23 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		String sessionId = getSessionId(response.context());
 
 		// 1. Append the assistant message(s) produced by the model. Empty frames —
-		// blank text and no tool calls — are not stored. Some models (e.g. Bedrock
-		// Converse) emit such a frame to signal end_turn after a tool-call sequence;
-		// replaying it on the next request causes a validation error on those models.
+		// blank text, no tool calls, and no media — are not stored. Some models
+		// (e.g. Bedrock Converse) emit such a frame to signal end_turn after a
+		// tool-call sequence; replaying it on the next request causes a validation
+		// error on those models.
 		if (response.chatResponse() != null) {
 			response.chatResponse()
 				.getResults()
 				.stream()
 				.map(g -> (Message) g.getOutput())
-				.filter(msg -> !isEmptyAssistantMessage(msg))
+				.filter(msg -> {
+					if (isEmptyAssistantMessage(msg)) {
+						logger.warn("Skipping empty assistant message for session [{}] — no text, tool calls, or media",
+								sessionId);
+						return false;
+					}
+					return true;
+				})
 				.forEach(msg -> this.sessionService.appendMessage(sessionId, msg));
 		}
 
@@ -251,16 +264,20 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	}
 
 	/**
-	 * Returns {@code true} for an {@link AssistantMessage} that carries neither text
-	 * nor tool calls. Such messages are implementation artifacts emitted by some models
-	 * (e.g. Bedrock Converse {@code end_turn} after a tool-call sequence) and carry no
-	 * conversational value. Storing and replaying them causes validation errors on those
-	 * same models.
+	 * Returns {@code true} for an {@link AssistantMessage} that carries neither text,
+	 * tool calls, nor media content. Such messages are implementation artifacts emitted
+	 * by some models (e.g. Bedrock Converse {@code end_turn} after a tool-call sequence)
+	 * and carry no conversational value. Storing and replaying them causes validation
+	 * errors on those same models.
+	 * <p>
+	 * Messages that carry media (e.g. image outputs from multimodal models) are
+	 * intentionally preserved even when their text is blank.
 	 */
 	private static boolean isEmptyAssistantMessage(Message message) {
 		return message instanceof AssistantMessage am
 				&& (am.getText() == null || am.getText().isBlank())
-				&& !am.hasToolCalls();
+				&& !am.hasToolCalls()
+				&& CollectionUtils.isEmpty(am.getMedia());
 	}
 
 	public static Builder builder(SessionService sessionService) {

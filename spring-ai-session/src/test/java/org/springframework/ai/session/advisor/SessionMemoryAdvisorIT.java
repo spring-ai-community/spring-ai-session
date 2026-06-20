@@ -16,6 +16,7 @@
 
 package org.springframework.ai.session.advisor;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
@@ -38,6 +39,7 @@ import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.content.Media;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.compaction.TurnCountTrigger;
 import org.springframework.ai.session.DefaultSessionService;
@@ -46,6 +48,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
+import org.springframework.util.MimeTypeUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -425,6 +428,52 @@ class SessionMemoryAdvisorIT {
 		assertThat(texts).doesNotContain("   ");
 		// Real events are still present
 		assertThat(texts).contains("What is the weather in Paris?");
+	}
+
+	// --- Multimodal assistant message filtering ---
+
+	@Test
+	void afterStoresAssistantMessageWithMediaEvenWhenTextIsBlank() {
+		// A multimodal model may respond with an image (or other media) and no text.
+		// That is a valid, content-bearing message and must NOT be dropped.
+		Media image = new Media(MimeTypeUtils.IMAGE_PNG, URI.create("https://example.com/image.png"));
+		AssistantMessage withMedia = AssistantMessage.builder()
+			.media(List.of(image))
+			.build();
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, withMedia);
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).getMessage()).isInstanceOf(AssistantMessage.class);
+		assertThat(((AssistantMessage) events.get(0).getMessage()).getMedia()).hasSize(1);
+	}
+
+	@Test
+	void afterStoresAssistantMessageWithMediaAndToolCallsEvenWhenTextIsBlank() {
+		// Pathological but legal: a message with both media and tool calls, no text.
+		// Both signals independently mark it as non-empty — it must be preserved.
+		Media image = new Media(MimeTypeUtils.IMAGE_PNG, URI.create("https://example.com/image.png"));
+		AssistantMessage withBoth = AssistantMessage.builder()
+			.media(List.of(image))
+			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "describe_image", "{}")))
+			.build();
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, withBoth);
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).hasToolCalls()).isTrue();
+	}
+
+	@Test
+	void afterDropsAssistantMessageWithNullTextNoToolCallsAndNoMedia() {
+		// Explicit null text (not just blank) with no other content — must be dropped.
+		AssistantMessage nullText = AssistantMessage.builder().build();
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, nullText);
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
 	}
 
 	// --- Builder validation ---
