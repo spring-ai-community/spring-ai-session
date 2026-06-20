@@ -62,35 +62,39 @@ Spring AI Session solves this with three ideas working together:
 
 ---
 
-## Example
+## Quickstart (Spring Boot)
+
+Add a single dependency — the JDBC starter — and Spring Boot auto-configures the
+repository and `SessionService` (schema auto-initialised with an embedded database):
+
+```xml
+<dependency>
+    <groupId>org.springaicommunity</groupId>
+    <artifactId>spring-ai-starter-session-jdbc</artifactId>
+    <version>${spring-ai-session.version}</version>
+</dependency>
+```
 
 ```java
-// 1. Create the service
-SessionService service = new DefaultSessionService(InMemorySessionRepository.builder().build());
-
-// 2. Create a session
-Session session = service.create(
-    CreateSessionRequest.builder().userId("alice").build()
-);
-
-// 3. Wire it into a ChatClient
-SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(service)
-    .defaultUserId("alice")
-    .compactionTrigger(new TurnCountTrigger(20))
-    .compactionStrategy(new SlidingWindowCompactionStrategy(10))
-    .build();
-
-ChatClient client = ChatClient.builder(chatModel)
-    .defaultAdvisors(advisor)
-    .build();
+@Bean
+ChatClient chatClient(ChatModel chatModel, SessionService sessionService) {
+    SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
+        .compactionTrigger(new TurnCountTrigger(20))
+        .compactionStrategy(new SlidingWindowCompactionStrategy(10))
+        .build();
+    return ChatClient.builder(chatModel).defaultAdvisors(advisor).build();
+}
 
 // Every call automatically loads history, appends messages, and compacts when needed
-String answer = client.prompt()
+String answer = chatClient.prompt()
     .user("What is Spring AI?")
-    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, session.id()))
+    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "session-abc"))
     .call()
     .content();
 ```
+
+See [Getting Started](getting-started.md) for the full setup, including persistent
+databases and a no-Boot programmatic option.
 
 ---
 

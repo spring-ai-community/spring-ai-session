@@ -8,6 +8,42 @@
 
 ---
 
+## Quickstart (Spring Boot)
+
+The fastest way to a running app is the **JDBC starter**. Add one dependency:
+
+```xml
+<dependency>
+    <groupId>org.springaicommunity</groupId>
+    <artifactId>spring-ai-starter-session-jdbc</artifactId>
+    <version>${spring-ai-session.version}</version>
+</dependency>
+```
+
+With an embedded database (e.g. H2) on the classpath, that's it — no beans, no config.
+The starter auto-configures a `JdbcSessionRepository`, a `DefaultSessionService`, detects
+the SQL dialect, and initialises the schema. Wire the advisor into your `ChatClient` and
+pass a session ID per call:
+
+```java
+@Bean
+ChatClient chatClient(ChatModel chatModel, SessionService sessionService) {
+    SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService).build();
+    return ChatClient.builder(chatModel).defaultAdvisors(advisor).build();
+}
+
+String answer = chatClient.prompt()
+    .user("What is Spring AI?")
+    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "session-abc"))
+    .call()
+    .content();
+```
+
+For a persistent database (PostgreSQL, MySQL) or other setups, see
+[Choose a setup](#choose-a-setup) below.
+
+---
+
 ## Add the BOM (recommended)
 
 Import the BOM so all module versions stay in sync:
@@ -30,33 +66,9 @@ Import the BOM so all module versions stay in sync:
 
 ## Choose a setup
 
-=== "In-memory (no persistence)"
+=== "Spring Boot starter (recommended)"
 
-    Add the session management module:
-
-    ```xml
-    <dependency>
-        <groupId>org.springaicommunity</groupId>
-        <artifactId>spring-ai-session</artifactId>
-    </dependency>
-    ```
-
-    Create the service in your application:
-
-    ```java
-    @Bean
-    SessionService sessionService() {
-        return new DefaultSessionService(InMemorySessionRepository.builder().build());
-    }
-    ```
-
-    !!! warning
-        `InMemorySessionRepository` is not suitable for production — sessions are lost on
-        restart and not shared across instances. Use the JDBC repository for persistence.
-
-=== "JDBC with auto-configuration (Spring Boot)"
-
-    Add the starter:
+    Add the starter — one dependency for a fully wired JDBC session setup:
 
     ```xml
     <dependency>
@@ -124,6 +136,31 @@ Import the BOM so all module versions stay in sync:
     }
     ```
 
+=== "In-memory (testing only)"
+
+    Add the session management module:
+
+    ```xml
+    <dependency>
+        <groupId>org.springaicommunity</groupId>
+        <artifactId>spring-ai-session</artifactId>
+    </dependency>
+    ```
+
+    Create the service in your application:
+
+    ```java
+    @Bean
+    SessionService sessionService() {
+        return new DefaultSessionService(InMemorySessionRepository.builder().build());
+    }
+    ```
+
+    !!! warning
+        `InMemorySessionRepository` is not suitable for production — sessions are lost on
+        restart and not shared across instances. Use the [Spring Boot starter](#choose-a-setup)
+        or the JDBC repository for persistence.
+
 ---
 
 ## Wire the ChatClient advisor
@@ -165,7 +202,7 @@ If no session exists for the given ID, the advisor creates one automatically.
 
 ---
 
-## Repositories
+## Git Repositories
 
 Spring AI Session is available from the Spring snapshot repository:
 

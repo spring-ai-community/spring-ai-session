@@ -31,6 +31,11 @@ On every request the advisor:
    (user + assistant) is already written at this point, so there is no race between
    compaction and message appending.
 
+The diagram below shows the round-trip: the **before** phase loads history and builds the
+expanded prompt, the **after** phase appends the assistant message and compacts on trigger.
+
+![Spring AI Session — SessionMemoryAdvisor flow](../images/spring-ai-session-advisor-flow.png)
+
 ---
 
 ## Setup
