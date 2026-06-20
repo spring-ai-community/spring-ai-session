@@ -1082,6 +1082,9 @@ no manual history loading or appending required in application code.</p>
    (user + assistant) is already written at this point, so there is no race between
    compaction and message appending.</li>
 </ol>
+<p>The diagram below shows the round-trip: the <strong>before</strong> phase loads history and builds the
+expanded prompt, the <strong>after</strong> phase appends the assistant message and compacts on trigger.</p>
+<p><img alt="Spring AI Session — SessionMemoryAdvisor flow" src="../../images/spring-ai-session-advisor-flow.png" /></p>
 <hr />
 <h2 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
