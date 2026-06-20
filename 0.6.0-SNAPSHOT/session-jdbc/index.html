@@ -949,9 +949,11 @@ and H2 out of the box.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>AI_SESSION          — session metadata (id, user_id, TTL, metadata JSON, event_version)
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>AI_SESSION_EVENT    — append-only event log (FK → AI_SESSION, ON DELETE CASCADE)
 </span></code></pre></div>
-<p><code>AI_SESSION_EVENT</code> is an append-only log — events are never updated in place. The
-<code>event_version</code> column on <code>AI_SESSION</code> is incremented on every <code>appendEvent</code> and
-<code>replaceEvents</code> call, enabling optimistic-lock compaction.</p>
+<p><code>AI_SESSION_EVENT</code> rows are ordered by a monotonic <code>seq</code> column (insertion order) and carry
+<code>synthetic</code> and <code>archived</code> flags. Compaction archives events in place rather than deleting
+them, so the full history stays searchable. The <code>event_version</code> column on <code>AI_SESSION</code> is
+incremented on every <code>appendEvent</code> and <code>compactEvents</code> call, enabling optimistic-lock
+compaction.</p>
 <hr />
 <h2 id="dependency">Dependency<a class="headerlink" href="#dependency" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">&lt;dependency&gt;</span>
@@ -1069,9 +1071,9 @@ columns: <code>message_type</code> (enum name), <code>message_content</code> (pl
 (JSON for tool calls and tool responses). This avoids Jackson polymorphism on Spring AI
 message types.</p>
 <p><strong>Optimistic concurrency</strong> — the <code>event_version</code> column on <code>AI_SESSION</code> is incremented on
-every <code>appendEvent</code> and <code>replaceEvents</code> call. The CAS variant of <code>replaceEvents</code>
-atomically claims the version slot with <code>UPDATE … WHERE event_version = ?</code> before
-modifying the event log, making compaction safe under concurrent access.</p>
+every <code>appendEvent</code> and <code>compactEvents</code> call. <code>compactEvents</code> atomically claims the version
+slot with <code>UPDATE … WHERE event_version = ?</code> before modifying the event log, making
+compaction safe under concurrent access.</p>
 <p><strong><code>synthetic</code> column</strong> — stored as a dedicated <code>BOOLEAN</code> column (not only in the metadata
 JSON blob) so <code>EventFilter.excludeSynthetic()</code> translates to a SQL predicate instead of
 an in-process scan.</p>

@@ -1196,10 +1196,11 @@ side can opt in. A <code>null</code> value for <code>EVENT_FILTER_CONTEXT_KEY</c
 <h2 id="concurrent-compaction-safety">Concurrent compaction safety<a class="headerlink" href="#concurrent-compaction-safety" title="Permanent link">&para;</a></h2>
 <p>If two requests for the same session complete concurrently (e.g. parallel fan-out), both
 <code>after()</code> calls may reach the compaction step simultaneously. Compaction uses an optimistic
-compare-and-swap write via <code>SessionRepository.replaceEvents(sessionId, events,
-expectedVersion)</code>. The event-log version is read before events are fetched; if another
-writer mutates the log between that read and the CAS write, <code>replaceEvents</code> returns <code>false</code>
-and the second writer skips silently — no compacted result is lost or corrupted.</p>
+compare-and-swap write via <code>SessionRepository.compactEvents(sessionId, archivedEvents,
+retainedEvents, expectedVersion)</code>. The event-log version is read before events are fetched;
+if another writer mutates the log between that read and the CAS write, <code>compactEvents</code>
+returns <code>false</code> and the second writer skips silently — no compacted result is lost or
+corrupted.</p>
 <hr />
 <h2 id="scheduler-pinning">Scheduler pinning<a class="headerlink" href="#scheduler-pinning" title="Permanent link">&para;</a></h2>
 <p>Both the blocking (<code>advise()</code>) and streaming (<code>adviseStream()</code>) paths run <code>before()</code> and

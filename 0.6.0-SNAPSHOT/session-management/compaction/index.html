@@ -1261,17 +1261,25 @@ only runs the strategy — and writes back to the repository — when the trigge
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="na">eventsRemoved</span><span class="p">());</span><span class="w">        </span><span class="c1">// derived: archivedEvents().size()</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="na">compactedEvents</span><span class="p">());</span><span class="w">      </span><span class="c1">// the kept event list</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="na">archivedEvents</span><span class="p">());</span><span class="w">       </span><span class="c1">// the removed event list</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="na">archivedEvents</span><span class="p">());</span><span class="w">       </span><span class="c1">// the archived (not deleted) event list</span>
 </span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="na">tokensEstimatedSaved</span><span class="p">());</span><span class="w"> </span><span class="c1">// rough token saving estimate</span>
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="c1">// Compact unconditionally — pass an always-fire trigger</span>
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="n">service</span><span class="p">.</span><span class="na">compact</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">req</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="n">SlidingWindowCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">().</span><span class="na">maxEvents</span><span class="p">(</span><span class="mi">10</span><span class="p">).</span><span class="na">build</span><span class="p">());</span>
 </span></code></pre></div>
 <div class="admonition note">
+<p class="admonition-title">Archived, not deleted</p>
+<p>Events in <code>archivedEvents()</code> are removed from the <strong>active context window</strong> but retained
+in the event log with <code>SessionEvent.isArchived() == true</code>. They are excluded from the
+prompt (<code>EventFilter.active()</code>) yet remain searchable through
+<a href="../recall-storage/">Recall Storage</a> (<code>EventFilter.keywordSearch(...)</code>). Compaction never
+destroys conversation history.</p>
+</div>
+<div class="admonition note">
 <p class="admonition-title">CAS write safety</p>
 <p><code>DefaultSessionService.compact()</code> reads the event-log version <strong>before</strong> fetching
 events. If another writer mutated the log between that read and the write,
-<code>replaceEvents()</code> returns <code>false</code> and compaction is silently skipped — the concurrent
+<code>compactEvents()</code> returns <code>false</code> and compaction is silently skipped — the concurrent
 writer already handled the session. No-op results skip the write entirely, important
 for production persistence backends.</p>
 </div>

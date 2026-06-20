@@ -774,6 +774,56 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#upgrading-to-060" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrading to 0.6.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Upgrading to 0.6.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#breaking-sessionrepositoryreplaceevents-replaced-by-compactevents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: SessionRepository.replaceEvents(...) replaced by compactEvents(...)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-geteventssessionid-getmessagessessionid-now-include-archived-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: getEvents(sessionId) / getMessages(sessionId) now include archived events
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-jdbc-schema-adds-seq-and-archived-columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: JDBC schema adds seq and archived columns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#upgrading-to-030" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -830,6 +880,40 @@
 
 
 <h1 id="migration-guide">Migration Guide<a class="headerlink" href="#migration-guide" title="Permanent link">&para;</a></h1>
+<h2 id="upgrading-to-060">Upgrading to 0.6.0<a class="headerlink" href="#upgrading-to-060" title="Permanent link">&para;</a></h2>
+<p>Compaction now <strong>archives</strong> events instead of deleting them, so the full history stays
+searchable through Recall Storage (issue #21). This introduces three breaking changes.</p>
+<h3 id="breaking-sessionrepositoryreplaceevents-replaced-by-compactevents">Breaking: <code>SessionRepository.replaceEvents(...)</code> replaced by <code>compactEvents(...)</code><a class="headerlink" href="#breaking-sessionrepositoryreplaceevents-replaced-by-compactevents" title="Permanent link">&para;</a></h3>
+<p>Both <code>replaceEvents</code> overloads are removed. Custom <code>SessionRepository</code> implementations must
+implement the new method instead:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1">// Before (0.5.x)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kt">boolean</span><span class="w"> </span><span class="nf">replaceEvents</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">events</span><span class="p">,</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">expectedVersion</span><span class="p">);</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1">// After (0.6.0): archive the removed events, swap in the new active window</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="kt">boolean</span><span class="w"> </span><span class="nf">compactEvents</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">archivedEvents</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">        </span><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">retainedEvents</span><span class="p">,</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">expectedVersion</span><span class="p">);</span>
+</span></code></pre></div>
+<p>The implementation must mark <code>archivedEvents</code> as archived (retained, not deleted), set the
+active event set to <code>retainedEvents</code>, and preserve any previously-archived events.</p>
+<h3 id="breaking-geteventssessionid-getmessagessessionid-now-include-archived-events">Breaking: <code>getEvents(sessionId)</code> / <code>getMessages(sessionId)</code> now include archived events<a class="headerlink" href="#breaking-geteventssessionid-getmessagessessionid-now-include-archived-events" title="Permanent link">&para;</a></h3>
+<p><code>EventFilter.all()</code> (the default for the no-arg accessors) returns the <strong>full</strong> log,
+archived events included. To get the active context window — what you pass to the model —
+use the new <code>EventFilter.active()</code>:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">// Active context window only (archived events excluded)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">active</span><span class="p">());</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1">// Recall Storage: full history, archived included (unchanged)</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">keywordSearch</span><span class="p">(</span><span class="s">&quot;topic&quot;</span><span class="p">));</span>
+</span></code></pre></div>
+<p><code>SessionMemoryAdvisor</code> already forces <code>active()</code> when building the prompt, so no change is
+needed there.</p>
+<h3 id="breaking-jdbc-schema-adds-seq-and-archived-columns">Breaking: JDBC schema adds <code>seq</code> and <code>archived</code> columns<a class="headerlink" href="#breaking-jdbc-schema-adds-seq-and-archived-columns" title="Permanent link">&para;</a></h3>
+<p><code>AI_SESSION_EVENT</code> gains an <code>archived</code> flag and a monotonic <code>seq</code> ordering column (events
+are now ordered by <code>seq</code>, not <code>timestamp</code>). Recreate the table or apply, e.g. for H2:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">AI_SESSION_EVENT</span><span class="w"> </span><span class="k">ADD</span><span class="w"> </span><span class="k">COLUMN</span><span class="w"> </span><span class="n">archived</span><span class="w"> </span><span class="nb">BOOLEAN</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">FALSE</span><span class="p">;</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">AI_SESSION_EVENT</span><span class="w"> </span><span class="k">ADD</span><span class="w"> </span><span class="k">COLUMN</span><span class="w"> </span><span class="n">seq</span><span class="w"> </span><span class="nb">BIGINT</span><span class="w"> </span><span class="k">GENERATED</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">IDENTITY</span><span class="p">;</span>
+</span></code></pre></div>
+<p>See the bundled <code>schema-{h2,postgresql,mysql}.sql</code> for the full DDL per dialect.</p>
 <h2 id="upgrading-to-030">Upgrading to 0.3.0<a class="headerlink" href="#upgrading-to-030" title="Permanent link">&para;</a></h2>
 <h3 id="breaking-sessionmemoryadvisorbuilderdefaultsessionid-removed">Breaking: <code>SessionMemoryAdvisor.Builder.defaultSessionId()</code> removed<a class="headerlink" href="#breaking-sessionmemoryadvisorbuilderdefaultsessionid-removed" title="Permanent link">&para;</a></h3>
 <p><strong>What changed</strong></p>
@@ -842,35 +926,35 @@ silently merging conversation history from different users or threads. This is a
 correctness and security issue in any multi-user deployment.</p>
 <p><strong>How to migrate</strong></p>
 <p>Before (0.2.x):</p>
-<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultSessionId</span><span class="p">(</span><span class="s">&quot;my-session-id&quot;</span><span class="p">)</span><span class="w">   </span><span class="c1">// ← removed</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1">// Session ID came from the advisor default — no per-request param needed</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">().</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Hello&quot;</span><span class="p">).</span><span class="na">call</span><span class="p">().</span><span class="na">content</span><span class="p">();</span>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultSessionId</span><span class="p">(</span><span class="s">&quot;my-session-id&quot;</span><span class="p">)</span><span class="w">   </span><span class="c1">// ← removed</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1">// Session ID came from the advisor default — no per-request param needed</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">().</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Hello&quot;</span><span class="p">).</span><span class="na">call</span><span class="p">().</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
 <p>After (0.3.0):</p>
-<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1">// Session ID must be passed on every request</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Hello&quot;</span><span class="p">)</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
+<div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1">// Session ID must be passed on every request</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Hello&quot;</span><span class="p">)</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
 <p>In a typical web application, resolve the session ID from the authenticated principal or
 HTTP session in the controller, then pass it per call:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">&quot;/chat&quot;</span><span class="p">)</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">String</span><span class="w"> </span><span class="nf">chat</span><span class="p">(</span><span class="nd">@AuthenticationPrincipal</span><span class="w"> </span><span class="n">UserDetails</span><span class="w"> </span><span class="n">user</span><span class="p">,</span><span class="w"> </span><span class="nd">@RequestBody</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">message</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">sessionId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">resolveSessionId</span><span class="p">(</span><span class="n">user</span><span class="p">.</span><span class="na">getUsername</span><span class="p">());</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">chatClient</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">        </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">&quot;/chat&quot;</span><span class="p">)</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">String</span><span class="w"> </span><span class="nf">chat</span><span class="p">(</span><span class="nd">@AuthenticationPrincipal</span><span class="w"> </span><span class="n">UserDetails</span><span class="w"> </span><span class="n">user</span><span class="p">,</span><span class="w"> </span><span class="nd">@RequestBody</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">message</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">sessionId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">resolveSessionId</span><span class="p">(</span><span class="n">user</span><span class="p">.</span><span class="na">getUsername</span><span class="p">());</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">chatClient</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">        </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">        </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">        </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">        </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="p">}</span>
 </span></code></pre></div>
 
 

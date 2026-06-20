@@ -1042,7 +1042,7 @@ the model may still need.</p>
 <li><strong>Two compaction triggers</strong>: turn count and token count (composable with OR semantics)</li>
 <li><strong>Turn-boundary safety</strong> — the kept window always starts at a <code>USER</code> message; no orphaned
   tool results or split turn sequences</li>
-<li><strong>Optimistic concurrency</strong> — compare-and-swap <code>replaceEvents</code> makes compaction safe under
+<li><strong>Optimistic concurrency</strong> — compare-and-swap <code>compactEvents</code> makes compaction safe under
   concurrent requests without locking</li>
 <li><strong>Multi-agent branch isolation</strong> — dot-separated branch labels let peer sub-agents share
   one session while hiding each other's events</li>
