@@ -1074,7 +1074,10 @@ no manual history loading or appending required in application code.</p>
 <li>Reorders all <code>SystemMessage</code> instances to the front of the combined message list,
    preserving their relative order.</li>
 <li>Appends the current user message to the session.</li>
-<li>After the model responds, appends the assistant message.</li>
+<li>After the model responds, appends the assistant message. Empty assistant messages
+   (blank text, no tool calls, and no media) are skipped — some models (e.g. Bedrock
+   Converse) emit an empty <code>end_turn</code> frame after tool use that would otherwise be
+   replayed and rejected on the next request.</li>
 <li>If a trigger fires, runs compaction <strong>synchronously</strong> before returning — the full turn
    (user + assistant) is already written at this point, so there is no race between
    compaction and message appending.</li>
