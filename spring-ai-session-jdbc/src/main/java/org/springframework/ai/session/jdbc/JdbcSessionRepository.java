@@ -139,14 +139,13 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private static final String COUNT_SESSION =
 		"SELECT COUNT(*) FROM AI_SESSION WHERE id = ?";
 
-	private static final String DELETE_EVENTS =
-		"DELETE FROM AI_SESSION_EVENT WHERE session_id = ?";
+	// Marks events as archived without rewriting existing rows.
+	private static final String ARCHIVE_EVENT_BY_ID =
+		"UPDATE AI_SESSION_EVENT SET archived = true WHERE id = ?";
 
-	private static final String SELECT_ARCHIVED_EVENTS =
-		"SELECT e.id, e.session_id, e.timestamp, e.message_type, e.message_content,"
-		+ "       e.message_data, e.synthetic, e.archived, e.branch, e.metadata"
-		+ " FROM AI_SESSION_EVENT e"
-		+ " WHERE e.session_id = ? AND e.archived = ? ORDER BY e.seq ASC";
+	// Removes the active window before inserting the retained events produced by compaction.
+	private static final String DELETE_ACTIVE_EVENTS =
+		"DELETE FROM AI_SESSION_EVENT WHERE session_id = ? AND archived = false";
 
 	private static final String SELECT_EVENTS_BASE =
 		"SELECT e.id, e.session_id, e.timestamp, e.message_type, e.message_content,"
@@ -239,16 +238,22 @@ public final class JdbcSessionRepository implements SessionRepository {
 			if (updated == 0) {
 				return false;
 			}
-			// Read the previously-archived events (oldest prefix) so they survive the
-			// delete-and-reinsert. The whole log is rebuilt in order so the auto-assigned
-			// `seq` reflects the logical conversation order: previously-archived events,
-			// then newly-archived events, then the new active window (summary + recent).
-			List<SessionEvent> previouslyArchived = this.jdbcTemplate.query(SELECT_ARCHIVED_EVENTS,
-					new SessionEventRowMapper(), sessionId, true);
-			this.jdbcTemplate.update(DELETE_EVENTS, sessionId);
-			previouslyArchived.forEach(this::insertEvent);
-			archivedEvents.forEach(e -> insertEvent(e.asArchived()));
-			retainedEvents.forEach(this::insertEvent);
+			// Archive newly compacted events in place. This avoids deleting and
+			// reinserting the complete session history while preserving the
+			// logical event ordering defined by the seq column.
+			if (!archivedEvents.isEmpty()) {
+				this.jdbcTemplate.batchUpdate(ARCHIVE_EVENT_BY_ID, archivedEvents, archivedEvents.size(),
+						(ps, event) -> ps.setString(1, event.getId()));
+			}
+
+			// Replace the active window with the retained events. Archived events
+			// remain untouched and preserve their original ordering.
+			this.jdbcTemplate.update(DELETE_ACTIVE_EVENTS, sessionId);
+
+			if (!retainedEvents.isEmpty()) {
+				batchInsertEvents(retainedEvents);
+			}
+
 			return true;
 		});
 		return Boolean.TRUE.equals(success);
@@ -339,6 +344,26 @@ public final class JdbcSessionRepository implements SessionRepository {
 		this.jdbcTemplate.update(INSERT_EVENT, event.getId(), event.getSessionId(), toTimestamp(event.getTimestamp()),
 				msg.getMessageType().name(), msg.getText(), messageDataToJson(msg), event.isSynthetic(),
 				event.isArchived(), event.getBranch(), toJson(event.getMetadata()));
+	}
+
+	/**
+	 * Inserts the supplied events using a JDBC batch operation.
+	 */
+	private void batchInsertEvents(List<SessionEvent> events) {
+		this.jdbcTemplate.batchUpdate(INSERT_EVENT, events, events.size(), (ps, event) -> {
+			Message msg = event.getMessage();
+			ps.setString(1, event.getId());
+			ps.setString(2, event.getSessionId());
+			Timestamp ts = toTimestamp(event.getTimestamp());
+			ps.setTimestamp(3, ts);
+			ps.setString(4, msg.getMessageType().name());
+			ps.setString(5, msg.getText());
+			ps.setString(6, messageDataToJson(msg));
+			ps.setBoolean(7, event.isSynthetic());
+			ps.setBoolean(8, event.isArchived());
+			ps.setString(9, event.getBranch());
+			ps.setString(10, toJson(event.getMetadata()));
+		});
 	}
 
 	private void requireSessionExists(String sessionId) {
