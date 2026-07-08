@@ -560,6 +560,83 @@ class JdbcSessionRepositoryTests {
 		assertThat(forResearcher).noneMatch(e -> "by writer".equals(e.getMessage().getText()));
 	}
 
+	@Test
+	void multipleCompactionsPreserveOrderAndGC() {
+		Session session = buildSession("user-multi-compact");
+		this.repository.save(session);
+
+		// 1. Initial messages
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("m1")).build());
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("m2")).build());
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("m3")).build());
+
+		List<SessionEvent> initial = this.repository.findEvents(session.id(), EventFilter.all());
+		
+		// First compaction: archive m1, m2. retain summary1, m3.
+		SessionEvent summary1 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("summary1")).build();
+		this.repository.compactEvents(session.id(), 
+			List.of(initial.get(0), initial.get(1)), // m1, m2
+			List.of(summary1, initial.get(2)),       // summary1, m3
+			this.repository.getEventVersion(session.id()));
+
+		// 2. Append more messages
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("m4")).build());
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("m5")).build());
+
+		List<SessionEvent> afterFirst = this.repository.findEvents(session.id(), EventFilter.all());
+		// Expected: m1(archived), m2(archived), summary1, m3, m4, m5
+		assertThat(afterFirst).hasSize(6);
+		assertThat(afterFirst.get(2).getMessage().getText()).isEqualTo("summary1");
+
+		// Second compaction: archive summary1, m3, m4. retain summary2, m5.
+		// Note that summary1 was an active event. It will be archived now.
+		SessionEvent summary2 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("summary2")).build();
+		this.repository.compactEvents(session.id(), 
+			List.of(afterFirst.get(2), afterFirst.get(3), afterFirst.get(4)), // summary1, m3, m4
+			List.of(summary2, afterFirst.get(5)),                             // summary2, m5
+			this.repository.getEventVersion(session.id()));
+
+		// 3. Append another
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("m6")).build());
+
+		List<SessionEvent> finalEvents = this.repository.findEvents(session.id(), EventFilter.all());
+		
+		// Expected: m1, m2, summary1, m3, m4 (all archived), then summary2, m5, m6 (active)
+		assertThat(finalEvents).hasSize(8);
+		assertThat(finalEvents).extracting(e -> e.getMessage().getText())
+			.containsExactly("m1", "m2", "summary1", "m3", "m4", "summary2", "m5", "m6");
+		
+		assertThat(finalEvents).extracting(SessionEvent::isArchived)
+			.containsExactly(true, true, true, true, true, false, false, false);
+	}
+
+	@Test
+	void compactEventsGarbageCollectsDroppedSummaries() {
+		Session session = buildSession("user-gc");
+		this.repository.save(session);
+
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("m1")).build());
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("summary-stale")).build());
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("m2")).build());
+
+		List<SessionEvent> initial = this.repository.findEvents(session.id(), EventFilter.all());
+		
+		// Compact: archive m1. retain summary-new, m2.
+		// We explicitly do NOT include summary-stale in either list. It should be garbage collected.
+		SessionEvent summaryNew = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("summary-new")).build();
+		this.repository.compactEvents(session.id(), 
+			List.of(initial.get(0)), // m1
+			List.of(summaryNew, initial.get(2)), // summary-new, m2
+			this.repository.getEventVersion(session.id()));
+
+		List<SessionEvent> finalEvents = this.repository.findEvents(session.id(), EventFilter.all());
+		
+		// Expected: m1, summary-new, m2
+		assertThat(finalEvents).hasSize(3);
+		assertThat(finalEvents).extracting(e -> e.getMessage().getText())
+			.containsExactly("m1", "summary-new", "m2");
+	}
+
 	// -------------------------------------------------------------------------
 	// Helpers
 	// -------------------------------------------------------------------------
