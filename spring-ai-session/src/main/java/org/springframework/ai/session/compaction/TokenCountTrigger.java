@@ -53,12 +53,9 @@ public final class TokenCountTrigger implements CompactionTrigger {
 
 	@Override
 	public boolean shouldCompact(CompactionRequest request) {
-		int totalTokens = request.events()
-			.stream()
-			.map(e -> e.getMessage().getText())
-			.filter(t -> t != null)
-			.mapToInt(this.tokenCountEstimator::estimate)
-			.sum();
+		int totalTokens = request.events().stream()
+				.mapToInt(e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e)))
+				.sum();
 		return totalTokens >= this.threshold;
 	}
 
