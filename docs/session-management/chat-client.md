@@ -22,11 +22,13 @@ On every request the advisor:
    advisor-level filter — request-level fields win over advisor defaults.
 3. Reorders all `SystemMessage` instances to the front of the combined message list,
    preserving their relative order.
-4. Appends the current user message to the session.
-5. After the model responds, appends the assistant message. Empty assistant messages
-   (blank text, no tool calls, and no media) are skipped — some models (e.g. Bedrock
-   Converse) emit an empty `end_turn` frame after tool use that would otherwise be
-   replayed and rejected on the next request.
+4. Appends the current user message to the session, if the configured `MessageFilter`
+   accepts it.
+5. After the model responds, appends the assistant message(s) through the configured
+   `MessageFilter` (default: `MessageFilter.skipEmptyAssistantMessages()`). By default,
+   empty assistant messages (blank text, no tool calls, and no media) are skipped — some
+   models (e.g. Bedrock Converse) emit an empty `end_turn` frame after tool use that
+   would otherwise be replayed and rejected on the next request.
 6. If a trigger fires, runs compaction **synchronously** before returning — the full turn
    (user + assistant) is already written at this point, so there is no race between
    compaction and message appending.
@@ -145,6 +147,60 @@ String response = client.prompt()
 `EventFilter.merge()` semantics: every non-null field from the request filter replaces
 the corresponding field from the advisor default; `excludeSynthetic` is OR-ed so either
 side can opt in. A `null` value for `EVENT_FILTER_CONTEXT_KEY` is ignored.
+
+---
+
+## Filtering what gets persisted (`MessageFilter`)
+
+While `EventFilter` controls which **stored** events are loaded into the next prompt,
+`MessageFilter` controls which messages get **stored at all**. A message rejected by the
+filter is never persisted and therefore never replayed on later requests. The outgoing
+prompt is unaffected — filtering applies to persistence only.
+
+| | `EventFilter` (read side) | `MessageFilter` (write side) |
+|---|---|---|
+| Applies when | Loading history in `before()` | Appending messages in `before()` / `after()` |
+| Operates on | Stored `SessionEvent`s | `Message`s about to be persisted |
+| Rejected items | Stay in storage, hidden from the prompt | Never written to storage |
+
+Configure it on the builder:
+
+```java
+SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
+    // Persist only user and assistant messages (e.g. keep verbose tool
+    // responses out of the session log), still skipping empty frames.
+    .messageFilter(
+        MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
+            .and(MessageFilter.skipEmptyAssistantMessages())
+    )
+    .build();
+```
+
+Built-in factories:
+
+| Factory | Behavior |
+|---|---|
+| `MessageFilter.all()` | Persists every message (no filtering) |
+| `MessageFilter.skipEmptyAssistantMessages()` | Skips assistant messages with blank/null text, no tool calls, and no media (**the default**) |
+| `MessageFilter.byMessageType(types...)` | Persists only the listed `MessageType`s |
+| `MessageFilter.containsText(keyword)` | Persists only messages whose text contains the keyword (case-insensitive) |
+
+`MessageFilter` is a `@FunctionalInterface`, so a lambda works too, and filters compose
+via `and()`, `or()`, and `negate()`:
+
+```java
+// Never persist messages containing "confidential"
+.messageFilter(
+    MessageFilter.containsText("confidential").negate()
+        .and(MessageFilter.skipEmptyAssistantMessages())
+)
+```
+
+!!! warning "Compose, don't replace"
+    Setting a custom `messageFilter` **replaces** the default
+    `skipEmptyAssistantMessages()` protection. If you still want empty assistant frames
+    filtered out (recommended — some models reject them when replayed as history),
+    compose your filter with it via `.and(MessageFilter.skipEmptyAssistantMessages())`.
 
 ---
 
