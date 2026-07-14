@@ -28,7 +28,9 @@ import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -38,6 +40,7 @@ import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.MessageFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
@@ -473,7 +476,94 @@ class SessionMemoryAdvisorIT {
 		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
 	}
 
+	// --- MessageFilter ---
+
+	@Test
+	void customMessageFilterBlocksUserMessagePersistenceInBefore() {
+		// A filter rejecting USER messages must prevent persistence in before(), while
+		// the outgoing prompt still carries the user message.
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.messageFilter(msg -> msg.getMessageType() != MessageType.USER)
+			.build();
+
+		ChatClientRequest request = buildRequest(this.sessionId, "do not store me");
+		ChatClientRequest modified = filteringAdvisor.before(request, mock(AdvisorChain.class));
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
+		List<String> texts = modified.prompt().getInstructions().stream().map(Message::getText).toList();
+		assertThat(texts).contains("do not store me");
+	}
+
+	@Test
+	void customMessageFilterExcludesToolResponseMessages() {
+		// Store user + assistant turns but keep verbose tool responses out of the
+		// session log.
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
+				.and(MessageFilter.skipEmptyAssistantMessages()))
+			.build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		// Regular user turn is persisted
+		filteringAdvisor.before(buildRequest(this.sessionId, "What is the weather?"), chain);
+		assertThat(this.sessionService.getEvents(this.sessionId)).hasSize(1);
+
+		// A tool-response turn (prompt whose last message is a ToolResponseMessage) is
+		// not persisted
+		ToolResponseMessage toolResponse = ToolResponseMessage.builder()
+			.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "{\"temp\":21}")))
+			.build();
+		Prompt prompt = new Prompt(List.of(new UserMessage("What is the weather?"), toolResponse));
+		ChatClientRequest toolRequest = ChatClientRequest.builder()
+			.prompt(prompt)
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build();
+		filteringAdvisor.before(toolRequest, chain);
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).getMessageType()).isEqualTo(MessageType.USER);
+	}
+
+	@Test
+	void customMessageFilterAppliedInAfter() {
+		// A content-based filter must gate which generations get persisted.
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.messageFilter(MessageFilter.containsText("confidential").negate())
+			.build();
+
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId,
+				new AssistantMessage("this is confidential data"), new AssistantMessage("public answer"));
+		filteringAdvisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).getMessage().getText()).isEqualTo("public answer");
+	}
+
+	@Test
+	void composedCustomFilterStillSkipsEmptyAssistantMessages() {
+		// Composing a custom filter with skipEmptyAssistantMessages() preserves the
+		// empty end_turn protection (compose, don't replace).
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
+				.and(MessageFilter.skipEmptyAssistantMessages()))
+			.build();
+
+		ChatClientResponse response = buildResponseFromMessages(this.sessionId, new AssistantMessage(""));
+		filteringAdvisor.after(response, mock(AdvisorChain.class));
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
+	}
+
 	// --- Builder validation ---
+
+	@Test
+	void builderRejectsNullMessageFilter() {
+		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService).messageFilter(null))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("messageFilter must not be null");
+	}
 
 	@Test
 	void builderRejectsOnlyTriggerWithoutStrategy() {

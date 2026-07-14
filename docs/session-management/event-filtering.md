@@ -97,3 +97,12 @@ EventFilter merged = advisorDefault.merge(requestOverride);
 
 See [ChatClient Integration → Per-request filter override](chat-client.md#per-request-filter-override)
 for how this is used in practice.
+
+---
+
+## Write-side filtering
+
+`EventFilter` is a **read-side** filter: events it excludes remain in storage — they are
+only hidden from the retrieved history. To control which messages get **persisted** in
+the first place, use `MessageFilter` on the `SessionMemoryAdvisor` builder. See
+[ChatClient Integration → Filtering what gets persisted](chat-client.md#filtering-what-gets-persisted-messagefilter).
