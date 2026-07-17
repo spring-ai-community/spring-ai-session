@@ -1077,6 +1077,8 @@ with:</p>
 <hr />
 <h2 id="configuration-properties">Configuration properties<a class="headerlink" href="#configuration-properties" title="Permanent link">&para;</a></h2>
 <p>All properties are under the prefix <code>spring.ai.session.repository.jdbc</code>:</p>
+<p><code>JdbcSessionRepositoryProperties</code> extends Spring Boot's <code>DatabaseInitializationProperties</code>,
+so it also inherits these general-purpose properties:</p>
 <table>
 <thead>
 <tr>
@@ -1090,6 +1092,21 @@ with:</p>
 <td><code>initialize-schema</code></td>
 <td><code>embedded</code></td>
 <td>When to run the bundled DDL script</td>
+</tr>
+<tr>
+<td><code>schema</code></td>
+<td><code>classpath:org/springframework/ai/session/jdbc/schema-@@platform@@.sql</code></td>
+<td>DDL script location; <code>@@platform@@</code> is resolved to the detected database platform</td>
+</tr>
+<tr>
+<td><code>platform</code></td>
+<td><em>(auto-detected)</em></td>
+<td>Overrides platform detection used to resolve <code>@@platform@@</code> in <code>schema</code></td>
+</tr>
+<tr>
+<td><code>continue-on-error</code></td>
+<td><code>false</code></td>
+<td>Whether to continue startup if the DDL script fails</td>
 </tr>
 </tbody>
 </table>

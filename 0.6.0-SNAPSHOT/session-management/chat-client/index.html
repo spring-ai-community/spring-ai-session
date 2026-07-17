@@ -1092,13 +1092,15 @@ no manual history loading or appending required in application code.</p>
 <li>Retrieves the session's event history (filtered by the configured <code>eventFilter</code>,
    default <code>EventFilter.all()</code>) and <strong>prepends</strong> it to the prompt messages. If the
    request context contains an <code>EVENT_FILTER_CONTEXT_KEY</code> value, it is merged with the
-   advisor-level filter — request-level fields win over advisor defaults.</li>
+   advisor-level filter — request-level fields win over advisor defaults. <code>EventFilter.active()</code>
+   is then unconditionally merged in on top, so archived (compacted-out) events never reach
+   the prompt regardless of what the configured or per-request filter allows.</li>
 <li>Reorders all <code>SystemMessage</code> instances to the front of the combined message list,
    preserving their relative order.</li>
 <li>Appends the current user message to the session, if the configured <code>MessageFilter</code>
    accepts it.</li>
 <li>After the model responds, appends the assistant message(s) through the configured
-   <code>MessageFilter</code> (default: <code>MessageFilter.skipEmptyAssistantMessages()</code>). By default,
+   <code>MessageFilter</code> (default: <code>MessageFilter.skipEmptyMessages()</code>). By default,
    empty assistant messages (blank text, no tool calls, and no media) are skipped — some
    models (e.g. Bedrock Converse) emit an empty <code>end_turn</code> frame after tool use that
    would otherwise be replayed and rejected on the next request.</li>
@@ -1220,8 +1222,9 @@ retrieval on a single call without reconfiguring the advisor:</p>
 </span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
 <p><code>EventFilter.merge()</code> semantics: every non-null field from the request filter replaces
-the corresponding field from the advisor default; <code>excludeSynthetic</code> is OR-ed so either
-side can opt in. A <code>null</code> value for <code>EVENT_FILTER_CONTEXT_KEY</code> is ignored.</p>
+the corresponding field from the advisor default; the two boolean flags, <code>excludeSynthetic</code>
+and <code>excludeArchived</code>, are OR-ed so either side can opt in. A <code>null</code> value for
+<code>EVENT_FILTER_CONTEXT_KEY</code> is ignored.</p>
 <hr />
 <h2 id="filtering-what-gets-persisted-messagefilter">Filtering what gets persisted (<code>MessageFilter</code>)<a class="headerlink" href="#filtering-what-gets-persisted-messagefilter" title="Permanent link">&para;</a></h2>
 <p>While <code>EventFilter</code> controls which <strong>stored</strong> events are loaded into the next prompt,
@@ -1260,7 +1263,7 @@ prompt is unaffected — filtering applies to persistence only.</p>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="c1">// responses out of the session log), still skipping empty frames.</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="p">.</span><span class="na">messageFilter</span><span class="p">(</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">        </span><span class="n">MessageFilter</span><span class="p">.</span><span class="na">byMessageType</span><span class="p">(</span><span class="n">MessageType</span><span class="p">.</span><span class="na">USER</span><span class="p">,</span><span class="w"> </span><span class="n">MessageType</span><span class="p">.</span><span class="na">ASSISTANT</span><span class="p">)</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">            </span><span class="p">.</span><span class="na">and</span><span class="p">(</span><span class="n">MessageFilter</span><span class="p">.</span><span class="na">skipEmptyAssistantMessages</span><span class="p">())</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">            </span><span class="p">.</span><span class="na">and</span><span class="p">(</span><span class="n">MessageFilter</span><span class="p">.</span><span class="na">skipEmptyMessages</span><span class="p">())</span>
 </span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="p">)</span>
 </span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </span></code></pre></div>
@@ -1278,7 +1281,7 @@ prompt is unaffected — filtering applies to persistence only.</p>
 <td>Persists every message (no filtering)</td>
 </tr>
 <tr>
-<td><code>MessageFilter.skipEmptyAssistantMessages()</code></td>
+<td><code>MessageFilter.skipEmptyMessages()</code></td>
 <td>Skips assistant messages with blank/null text, no tool calls, and no media (<strong>the default</strong>)</td>
 </tr>
 <tr>
@@ -1296,15 +1299,15 @@ via <code>and()</code>, <code>or()</code>, and <code>negate()</code>:</p>
 <div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1">// Never persist messages containing &quot;confidential&quot;</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="p">.</span><span class="na">messageFilter</span><span class="p">(</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="n">MessageFilter</span><span class="p">.</span><span class="na">containsText</span><span class="p">(</span><span class="s">&quot;confidential&quot;</span><span class="p">).</span><span class="na">negate</span><span class="p">()</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">        </span><span class="p">.</span><span class="na">and</span><span class="p">(</span><span class="n">MessageFilter</span><span class="p">.</span><span class="na">skipEmptyAssistantMessages</span><span class="p">())</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">        </span><span class="p">.</span><span class="na">and</span><span class="p">(</span><span class="n">MessageFilter</span><span class="p">.</span><span class="na">skipEmptyMessages</span><span class="p">())</span>
 </span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">)</span>
 </span></code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Compose, don't replace</p>
 <p>Setting a custom <code>messageFilter</code> <strong>replaces</strong> the default
-<code>skipEmptyAssistantMessages()</code> protection. If you still want empty assistant frames
+<code>skipEmptyMessages()</code> protection. If you still want empty assistant frames
 filtered out (recommended — some models reject them when replayed as history),
-compose your filter with it via <code>.and(MessageFilter.skipEmptyAssistantMessages())</code>.</p>
+compose your filter with it via <code>.and(MessageFilter.skipEmptyMessages())</code>.</p>
 </div>
 <hr />
 <h2 id="concurrent-compaction-safety">Concurrent compaction safety<a class="headerlink" href="#concurrent-compaction-safety" title="Permanent link">&para;</a></h2>
