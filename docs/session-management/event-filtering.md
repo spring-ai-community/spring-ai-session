@@ -20,6 +20,9 @@ service.getEvents(id, EventFilter.lastN(20));
 // Exclude synthetic summary events — only real conversation turns
 service.getEvents(id, EventFilter.realOnly());
 
+// Exclude archived events — the active context window only
+service.getEvents(id, EventFilter.active());
+
 // Keyword search — first page (default page size 10)
 service.getEvents(id, EventFilter.keywordSearch("Spring AI"));
 
@@ -62,6 +65,7 @@ EventFilter filter = EventFilter.builder()
 | `page` | `Integer` | Zero-indexed page in chronological order (oldest first, page 0 = oldest) |
 | `pageSize` | `Integer` | Results per page (default 10; must be > 0 if set) |
 | `branch` | `String` | Restricts to events visible to this agent branch (own + ancestors only) |
+| `excludeArchived` | `boolean` | When `true`, archived (compacted-out) events are excluded — used by `EventFilter.active()` |
 
 ---
 
@@ -83,9 +87,13 @@ The compact constructor enforces these rules at construction time:
 ## Merging filters
 
 `EventFilter.merge(other)` merges two filters: every non-null field from `other` replaces
-the corresponding field from `this`; `excludeSynthetic` is OR-ed so either side can opt
-in. This is used by `SessionMemoryAdvisor` to combine the advisor-level default filter
-with an optional per-request override:
+the corresponding field from `this`; the two boolean flags, `excludeSynthetic` and
+`excludeArchived`, are OR-ed so either side can opt in. This is used by
+`SessionMemoryAdvisor` to combine the advisor-level default filter with an optional
+per-request override — and, unconditionally, to force `excludeArchived = true` onto every
+history read via `EventFilter.active()` so the prompt never sees compacted-out events
+regardless of the configured or per-request filter (see
+[ChatClient Integration → What the advisor does](chat-client.md#what-the-advisor-does)):
 
 ```java
 EventFilter advisorDefault = EventFilter.lastN(50);
@@ -97,3 +105,12 @@ EventFilter merged = advisorDefault.merge(requestOverride);
 
 See [ChatClient Integration → Per-request filter override](chat-client.md#per-request-filter-override)
 for how this is used in practice.
+
+---
+
+## Write-side filtering
+
+`EventFilter` is a **read-side** filter: events it excludes remain in storage — they are
+only hidden from the retrieved history. To control which messages get **persisted** in
+the first place, use `MessageFilter` on the `SessionMemoryAdvisor` builder. See
+[ChatClient Integration → Filtering what gets persisted](chat-client.md#filtering-what-gets-persisted-messagefilter).

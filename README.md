@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Java Version](https://img.shields.io/badge/Java-17%2B-orange)](https://www.oracle.com/java/technologies/javase/jdk17-archive-downloads.html)
-[![Spring AI Session](https://img.shields.io/maven-central/v/org.springaicommunity/spring-ai-session?label=Maven%20Central)](https://central.sonatype.com/artifact/org.springaicommunity/spring-ai-session)
+[![Spring AI Session](https://img.shields.io/maven-central/v/org.springaicommunity/spring-ai-session-bom?label=Maven%20Central)](https://central.sonatype.com/artifact/org.springaicommunity/spring-ai-session-bom)
 
 A [Spring AI](https://docs.spring.io/spring-ai/reference/) library that provides structured, event-sourced session management with context compaction for AI applications.
 
@@ -52,7 +52,7 @@ spring-ai-session/
         <dependency>
             <groupId>org.springaicommunity</groupId>
             <artifactId>spring-ai-session-bom</artifactId>
-            <version>0.5.0-SNAPSHOT</version>
+            <version>0.6.0</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>

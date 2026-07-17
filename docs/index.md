@@ -80,7 +80,7 @@ repository and `SessionService` (schema auto-initialised with an embedded databa
 ChatClient chatClient(ChatModel chatModel, SessionService sessionService) {
     SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
         .compactionTrigger(new TurnCountTrigger(20))
-        .compactionStrategy(new SlidingWindowCompactionStrategy(10))
+        .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
         .build();
     return ChatClient.builder(chatModel).defaultAdvisors(advisor).build();
 }

@@ -61,9 +61,10 @@ class TokenCountTriggerTests {
 
 	@Test
 	void firesWhenTokenCountReachesThreshold() {
-		// "hello"(5) + "world"(5) = 10 tokens, threshold = 10 → fires (>=)
+		// "User: hello" (11) + "Assistant: world" (16) = exactly 27 chars.
+		// threshold = 27
 		TokenCountTrigger trigger = TokenCountTrigger.builder()
-			.threshold(10)
+			.threshold(27)
 			.tokenCountEstimator(CHAR_ESTIMATOR)
 			.build();
 		CompactionRequest request = requestWith(turn("hello", "world"));
@@ -73,9 +74,10 @@ class TokenCountTriggerTests {
 
 	@Test
 	void firesWhenTokenCountExceedsThreshold() {
-		// "hello"(5) + "world!"(6) = 11 tokens, threshold = 10
+		// "User: hello" (11) + "Assistant: world!" (17) = exactly 28 chars.
+		// threshold = 27
 		TokenCountTrigger trigger = TokenCountTrigger.builder()
-			.threshold(10)
+			.threshold(27)
 			.tokenCountEstimator(CHAR_ESTIMATOR)
 			.build();
 		CompactionRequest request = requestWith(turn("hello", "world!"));
@@ -85,9 +87,10 @@ class TokenCountTriggerTests {
 
 	@Test
 	void doesNotFireWhenTokenCountBelowThreshold() {
-		// "hi"(2) + "ok"(2) = 4 tokens, threshold = 10
+		// "User: hi" (8) + "Assistant: ok" (13) = exactly 21 chars.
+		// threshold = 22
 		TokenCountTrigger trigger = TokenCountTrigger.builder()
-			.threshold(10)
+			.threshold(22)
 			.tokenCountEstimator(CHAR_ESTIMATOR)
 			.build();
 		CompactionRequest request = requestWith(turn("hi", "ok"));
@@ -108,9 +111,11 @@ class TokenCountTriggerTests {
 
 	@Test
 	void countsTokensAcrossAllEvents() {
-		// Two turns: "ab"(2)+"cd"(2) + "ef"(2)+"gh"(2) = 8 tokens, threshold = 7
+		// Turn 1: "User: ab" (8) + "Assistant: cd" (13) = 21 chars
+		// Turn 2: "User: ef" (8) + "Assistant: gh" (13) = 21 chars
+		// Total = 42 chars. threshold = 41
 		TokenCountTrigger trigger = TokenCountTrigger.builder()
-			.threshold(7)
+			.threshold(35)
 			.tokenCountEstimator(CHAR_ESTIMATOR)
 			.build();
 		CompactionRequest request = requestWith(turn("ab", "cd"), turn("ef", "gh"));
