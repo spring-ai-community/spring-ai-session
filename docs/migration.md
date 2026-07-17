@@ -3,7 +3,32 @@
 ## Upgrading to 0.6.0
 
 Compaction now **archives** events instead of deleting them, so the full history stays
-searchable through Recall Storage (issue #21). This introduces three breaking changes.
+searchable through Recall Storage (issue #21). This introduces four breaking changes.
+
+### Breaking: core module artifact renamed from `spring-ai-session-management` to `spring-ai-session`
+
+The `groupId` (`org.springaicommunity`) and Java package
+(`org.springframework.ai.session`) are unchanged — only the Maven artifact/module name
+moved:
+
+```xml
+<!-- Before (0.5.x) -->
+<dependency>
+    <groupId>org.springaicommunity</groupId>
+    <artifactId>spring-ai-session-management</artifactId>
+</dependency>
+
+<!-- After (0.6.0) -->
+<dependency>
+    <groupId>org.springaicommunity</groupId>
+    <artifactId>spring-ai-session</artifactId>
+</dependency>
+```
+
+No other module (`spring-ai-session-jdbc`, `spring-ai-autoconfigure-session`,
+`spring-ai-autoconfigure-session-jdbc`, `spring-ai-starter-session-jdbc`,
+`spring-ai-session-bom`) changed name. If you depend on the JDBC starter or the BOM rather
+than the core artifact directly, no change is needed.
 
 ### Breaking: `SessionRepository.replaceEvents(...)` replaced by `compactEvents(...)`
 

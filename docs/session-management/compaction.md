@@ -61,7 +61,11 @@ new TurnCountTrigger(20);  // compact when > 20 turns
 
 ### TokenCountTrigger
 
-Fires when the estimated total token count is at or above a threshold.
+Fires when the estimated total token count is at or above a threshold. Like the four
+compaction strategies below, it estimates every event through the shared event formatter
+(see [Token accounting](#token-accounting)) rather than raw `getText()`, so tool calls and
+tool responses count toward the threshold and the trigger stays calibrated against
+`TokenCountCompactionStrategy`'s budget.
 
 ```java
 // Uses JTokkitTokenCountEstimator by default
@@ -92,9 +96,9 @@ session metadata and the full event list.
 
 ### Token accounting
 
-All four strategies estimate the token cost of archived events using the same event
-formatter. Tool calls and tool responses contribute their full formatted representation —
-not just the raw `getText()` content, which is `null` for both types.
+All four strategies — and `TokenCountTrigger` above — estimate token cost using the same
+event formatter. Tool calls and tool responses contribute their full formatted
+representation — not just the raw `getText()` content, which is `null` for both types.
 
 | Message type | Formatted as |
 |---|---|

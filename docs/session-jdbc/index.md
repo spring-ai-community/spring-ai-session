@@ -69,7 +69,7 @@ SessionRepository sessionRepository(DataSource dataSource) {
 
 @Bean
 SessionService sessionService(SessionRepository sessionRepository) {
-    return new DefaultSessionService(sessionRepository);
+    return DefaultSessionService.builder().sessionRepository(sessionRepository).build();
 }
 ```
 

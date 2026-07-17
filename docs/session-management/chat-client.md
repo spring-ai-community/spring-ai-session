@@ -19,7 +19,9 @@ On every request the advisor:
 2. Retrieves the session's event history (filtered by the configured `eventFilter`,
    default `EventFilter.all()`) and **prepends** it to the prompt messages. If the
    request context contains an `EVENT_FILTER_CONTEXT_KEY` value, it is merged with the
-   advisor-level filter — request-level fields win over advisor defaults.
+   advisor-level filter — request-level fields win over advisor defaults. `EventFilter.active()`
+   is then unconditionally merged in on top, so archived (compacted-out) events never reach
+   the prompt regardless of what the configured or per-request filter allows.
 3. Reorders all `SystemMessage` instances to the front of the combined message list,
    preserving their relative order.
 4. Appends the current user message to the session, if the configured `MessageFilter`
@@ -145,8 +147,9 @@ String response = client.prompt()
 ```
 
 `EventFilter.merge()` semantics: every non-null field from the request filter replaces
-the corresponding field from the advisor default; `excludeSynthetic` is OR-ed so either
-side can opt in. A `null` value for `EVENT_FILTER_CONTEXT_KEY` is ignored.
+the corresponding field from the advisor default; the two boolean flags, `excludeSynthetic`
+and `excludeArchived`, are OR-ed so either side can opt in. A `null` value for
+`EVENT_FILTER_CONTEXT_KEY` is ignored.
 
 ---
 

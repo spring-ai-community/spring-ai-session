@@ -132,7 +132,7 @@ Import the BOM so all module versions stay in sync:
 
     @Bean
     SessionService sessionService(SessionRepository repository) {
-        return new DefaultSessionService(repository);
+        return DefaultSessionService.builder().sessionRepository(repository).build();
     }
     ```
 
@@ -152,7 +152,9 @@ Import the BOM so all module versions stay in sync:
     ```java
     @Bean
     SessionService sessionService() {
-        return new DefaultSessionService(InMemorySessionRepository.builder().build());
+        return DefaultSessionService.builder()
+            .sessionRepository(InMemorySessionRepository.builder().build())
+            .build();
     }
     ```
 

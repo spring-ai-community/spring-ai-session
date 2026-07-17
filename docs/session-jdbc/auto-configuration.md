@@ -56,9 +56,15 @@ spring:
 
 All properties are under the prefix `spring.ai.session.repository.jdbc`:
 
+`JdbcSessionRepositoryProperties` extends Spring Boot's `DatabaseInitializationProperties`,
+so it also inherits these general-purpose properties:
+
 | Property | Default | Description |
 |---|---|---|
 | `initialize-schema` | `embedded` | When to run the bundled DDL script |
+| `schema` | `classpath:org/springframework/ai/session/jdbc/schema-@@platform@@.sql` | DDL script location; `@@platform@@` is resolved to the detected database platform |
+| `platform` | _(auto-detected)_ | Overrides platform detection used to resolve `@@platform@@` in `schema` |
+| `continue-on-error` | `false` | Whether to continue startup if the DDL script fails |
 
 ---
 

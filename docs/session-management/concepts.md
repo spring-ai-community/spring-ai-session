@@ -16,7 +16,7 @@ The event log is stored separately in the repository and fetched on demand.
 | `id` | Unique session identifier |
 | `userId` | Owning user or agent — required, used for isolation |
 | `createdAt` | Creation timestamp |
-| `expiresAt` | Expiry instant; defaults to the configured default time-to-live (60 days) from creation; `null` means no expiry. The builder rejects past values. |
+| `expiresAt` | Expiry instant; defaults to the configured default time-to-live (60 days) from creation; `null` means no expiry. |
 | `metadata` | Arbitrary key/value pairs (model info, tags, etc.) |
 
 Keeping `Session` metadata-only means it can be passed across boundaries cheaply, and
@@ -27,7 +27,9 @@ Sessions are created through `SessionService`, which is the primary API for the 
 lifecycle:
 
 ```java
-SessionService service = new DefaultSessionService(InMemorySessionRepository.builder().build());
+SessionService service = DefaultSessionService.builder()
+    .sessionRepository(InMemorySessionRepository.builder().build())
+    .build();
 
 Session session = service.create(
     CreateSessionRequest.builder()
@@ -193,6 +195,9 @@ injects into the prompt — is the `EventFilter.active()` view (`excludeArchived
 while Recall Storage searches (`EventFilter.keywordSearch(...)`) deliberately span the
 whole log, archived events included. This is what makes the MemGPT recall pattern work:
 the agent can surface any prior exchange even after it has been summarized out of context.
+In the JDBC repository, events newly marked archived are updated in place (their row is
+never rewritten); only the active window is replaced with the new retained events on each
+compaction pass, so the growing archived history is never re-read or re-written.
 
 **Optimistic concurrency**
 
@@ -216,7 +221,9 @@ positioned ahead of the older active-window events it precedes.
 ## Session Lifecycle
 
 ```java
-SessionService service = new DefaultSessionService(InMemorySessionRepository.builder().build());
+SessionService service = DefaultSessionService.builder()
+    .sessionRepository(InMemorySessionRepository.builder().build())
+    .build();
 
 // 1. Create
 Session session = service.create(
@@ -272,6 +279,7 @@ org.springframework.ai.session          (Java package — unchanged from upstrea
 ├── SessionRepository.java              – persistence SPI
 ├── CreateSessionRequest.java           – builder for session creation parameters
 ├── EventFilter.java                    – composable criteria for event retrieval
+├── MessageFilter.java                  – composable predicate for what gets persisted
 ├── DefaultSessionService.java          – default SessionService implementation
 ├── InMemorySessionRepository.java      – ConcurrentHashMap-backed repository
 │
@@ -283,6 +291,7 @@ org.springframework.ai.session          (Java package — unchanged from upstrea
 │   ├── CompactionResult.java           – compacted events + archived events + metrics
 │   ├── CompactionStrategy.java         – strategy SPI
 │   ├── CompactionTrigger.java          – trigger SPI
+│   ├── CompactionUtils.java            – shared event formatter + turn-boundary snapping
 │   ├── CompositeCompactionTrigger.java – OR-composite of triggers
 │   ├── TurnCountTrigger.java
 │   ├── TokenCountTrigger.java
@@ -290,7 +299,7 @@ org.springframework.ai.session          (Java package — unchanged from upstrea
 │   ├── TurnWindowCompactionStrategy.java
 │   ├── TokenCountCompactionStrategy.java
 │   └── RecursiveSummarizationCompactionStrategy.java
-││
+│
 └── tool/
     └── SessionEventTools.java          – @Tool conversation_search (Recall Storage)
 ```
