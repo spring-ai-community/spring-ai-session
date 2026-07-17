@@ -335,6 +335,115 @@ class SessionMemoryAdvisorIT {
 		assertThat(texts).contains("only message");
 	}
 
+	@Test
+	void shouldUseRuntimeBranchFilterWhenLoadingHistory() {
+		// Base root messages
+		this.sessionService.appendEvent(SessionEvent.builder().sessionId(this.sessionId).message(new UserMessage("root")).build());
+		// Sibling branch message
+		this.sessionService.appendEvent(SessionEvent.builder().sessionId(this.sessionId).branch("research").message(new AssistantMessage("research output")).build());
+		// Target branch message
+		this.sessionService.appendEvent(SessionEvent.builder().sessionId(this.sessionId).branch("planner").message(new AssistantMessage("planner output")).build());
+
+		Prompt prompt = new Prompt(List.of(new UserMessage("follow-up")));
+		ChatClientRequest request = ChatClientRequest.builder()
+			.prompt(prompt)
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId,
+					SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, EventFilter.forBranch("planner")))
+			.build();
+
+		ChatClientRequest modified = this.advisor.before(request, mock(AdvisorChain.class));
+
+		List<String> texts = modified.prompt().getInstructions().stream().map(Message::getText).toList();
+		// Should load root + planner, exclude research
+		assertThat(texts).contains("root", "planner output");
+		assertThat(texts).doesNotContain("research output");
+	}
+
+	@Test
+	void shouldAppendMessagesToResolvedBranch() {
+		Prompt prompt = new Prompt(List.of(new UserMessage("planner input")));
+		ChatClientRequest request = ChatClientRequest.builder()
+			.prompt(prompt)
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId,
+					SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, EventFilter.forBranch("planner")))
+			.build();
+
+		this.advisor.before(request, mock(AdvisorChain.class));
+
+		ChatResponse chatResponse = ChatResponse.builder().generations(List.of(new Generation(new AssistantMessage("planner assistant output")))).build();
+		ChatClientResponse response = ChatClientResponse.builder()
+			.chatResponse(chatResponse)
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId,
+					SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, EventFilter.forBranch("planner")))
+			.build();
+			
+		this.advisor.after(response, mock(AdvisorChain.class));
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId, EventFilter.all());
+		
+		assertThat(events).hasSize(2);
+		assertThat(events.get(0).getBranch()).isEqualTo("planner");
+		assertThat(events.get(0).getMessage().getText()).isEqualTo("planner input");
+		
+		assertThat(events.get(1).getBranch()).isEqualTo("planner");
+		assertThat(events.get(1).getMessage().getText()).isEqualTo("planner assistant output");
+	}
+
+	@Test
+	void shouldPreserveReadWriteBranchSymmetry() {
+		// Populate some initial root history
+		this.sessionService.appendEvent(SessionEvent.builder().sessionId(this.sessionId).message(new UserMessage("root question")).build());
+		this.sessionService.appendEvent(SessionEvent.builder().sessionId(this.sessionId).message(new AssistantMessage("root answer")).build());
+
+		// Single Request turn targeting "planner" branch
+		Map<String, Object> ctx = Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId,
+				SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, EventFilter.forBranch("planner"));
+		
+		ChatClientRequest request = ChatClientRequest.builder().prompt(new Prompt(List.of(new UserMessage("planner turn")))).context(ctx).build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+		
+		ChatClientRequest modified = this.advisor.before(request, chain);
+		List<String> texts = modified.prompt().getInstructions().stream().map(Message::getText).toList();
+		assertThat(texts).contains("root question", "root answer", "planner turn");
+
+		ChatClientResponse response = ChatClientResponse.builder()
+			.chatResponse(ChatResponse.builder().generations(List.of(new Generation(new AssistantMessage("planner response")))).build())
+			.context(ctx)
+			.build();
+			
+		this.advisor.after(response, chain);
+
+		// Verify the session log has root and planner branch messages cleanly separated
+		List<SessionEvent> allEvents = this.sessionService.getEvents(this.sessionId, EventFilter.all());
+		assertThat(allEvents).hasSize(4);
+		assertThat(allEvents).extracting(SessionEvent::getBranch)
+			.containsExactly(null, null, "planner", "planner");
+	}
+
+	@Test
+	void shouldFallbackToConfiguredEventFilter() {
+		// Setup an advisor that has a default branch configured via builder
+		SessionMemoryAdvisor branchAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.forBranch("research"))
+			.build();
+			
+		this.sessionService.appendEvent(SessionEvent.builder().sessionId(this.sessionId).branch("research").message(new UserMessage("research question")).build());
+		this.sessionService.appendEvent(SessionEvent.builder().sessionId(this.sessionId).branch("other").message(new UserMessage("other question")).build());
+
+		// Request without any EVENT_FILTER_CONTEXT_KEY
+		ChatClientRequest request = ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(new UserMessage("follow up"))))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build();
+			
+		ChatClientRequest modified = branchAdvisor.before(request, mock(AdvisorChain.class));
+		
+		// It should use the default "research" branch filter
+		List<String> texts = modified.prompt().getInstructions().stream().map(Message::getText).toList();
+		assertThat(texts).contains("research question", "follow up");
+		assertThat(texts).doesNotContain("other question");
+	}
+
 	// --- Empty assistant message filtering ---
 
 	@Test

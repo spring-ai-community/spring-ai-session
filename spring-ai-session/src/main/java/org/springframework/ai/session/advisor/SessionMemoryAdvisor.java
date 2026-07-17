@@ -138,10 +138,10 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	@Override
 	public ChatClientRequest before(ChatClientRequest request, AdvisorChain advisorChain) {
 
-		// 0. Resolve the session ID — must be present in the request context.
+		// Resolve the session ID — must be present in the request context.
 		String sessionId = getSessionId(request.context());
 
-		// 1. Find or create the session. The Session object is cached in the request
+		// Find or create the session. The Session object is cached in the request
 		// context so that after() can reuse it and skip a redundant findById()
 		// repository round-trip when compaction is configured.
 		Session session = this.sessionService.findById(sessionId);
@@ -161,31 +161,22 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			}
 		}
 
-		// 2. Retrieve history applying the configured filter (default: all events)
+		// Retrieve history applying the configured filter (default: all events)
 
-		// If the request context contains an EventFilter, merge it with the advisor's
-		// configured filter so that request-level parameters override the advisor
-		// defaults
-		EventFilter eventFilter = this.eventFilter;
-		if (request.context().containsKey(EVENT_FILTER_CONTEXT_KEY)) {
-			EventFilter requestEventFilter = (EventFilter) request.context().get(EVENT_FILTER_CONTEXT_KEY);
-			if (requestEventFilter != null) {
-				eventFilter = this.eventFilter.merge(requestEventFilter);
-			}
-		}
+		EventFilter eventFilter = getEventFilter(request.context());
 
 		// Always exclude archived events from the active context window — they were
 		// compacted out and live on only for Recall Storage search. Merging forces the
 		// flag on regardless of the configured or per-request filter.
-		eventFilter = eventFilter.merge(EventFilter.active());
+		EventFilter fetchFilter = eventFilter.merge(EventFilter.active());
 
-		List<SessionEvent> events = this.sessionService.getEvents(sessionId, eventFilter);
+		List<SessionEvent> events = this.sessionService.getEvents(sessionId, fetchFilter);
 		List<Message> history = events.stream().map(SessionEvent::getMessage).toList();
 
 		List<Message> combined = new ArrayList<>(history);
 		combined.addAll(request.prompt().getInstructions());
 
-		// 3. Ensure all system messages appear first (preserving their relative order).
+		// Ensure all system messages appear first (preserving their relative order).
 		// A single pass collects every SystemMessage, removes them in place, then
 		// prepends them as a block — so a system message buried in history and a
 		// second one on the current request both end up at the front rather than
@@ -196,10 +187,16 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			combined.addAll(0, systemMessages);
 		}
 
-		// 4. Append the current user message to the session
+		// Append the current user or tool-response message to the session
+		// Write it to the resolved branch (null = root) so it is properly isolated
 		Message userMessage = request.prompt().getLastUserOrToolResponseMessage();
-		if (userMessage != null) {
-			this.sessionService.appendMessage(sessionId, userMessage);
+		if (userMessage != null && shouldPersist(userMessage, sessionId)) {
+			SessionEvent event = SessionEvent.builder()
+				.sessionId(sessionId)
+				.branch(eventFilter.branch())
+				.message(userMessage)
+				.build();
+			this.sessionService.appendEvent(event);
 		}
 
 		return request.mutate().prompt(request.prompt().mutate().messages(combined).build()).build();
@@ -209,18 +206,27 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	public ChatClientResponse after(ChatClientResponse response, AdvisorChain advisorChain) {
 		String sessionId = getSessionId(response.context());
 
-		// 1. Append the assistant message(s) produced by the model. Excludes messages
-		// that carry no content — blank text, no tool calls, and no media.
+		// Append the assistant message(s) produced by the model. Excludes messages
+		// that do not pass the configured message filter. Writes to the resolved branch.
 		if (response.chatResponse() != null) {
+			Map<String, @Nullable Object> context = response.context();
+			String branch = getEventFilter(context).branch();
 			response.chatResponse()
 				.getResults()
 				.stream()
 				.map(g -> (Message) g.getOutput())
 				.filter(msg -> shouldPersist(msg, sessionId))
-				.forEach(msg -> this.sessionService.appendMessage(sessionId, msg));
+				.forEach(msg -> {
+					SessionEvent event = SessionEvent.builder()
+						.sessionId(sessionId)
+						.branch(branch)
+						.message(msg)
+						.build();
+					this.sessionService.appendEvent(event);
+				});
 		}
 
-		// 2. Compact synchronously if configured — the full turn (user + assistant) is
+		// Compact synchronously if configured — the full turn (user + assistant) is
 		// already written at this point so there is no race.
 		if (this.compactionTrigger != null && this.compactionStrategy != null) {
 			this.sessionService.compact(sessionId, this.compactionTrigger, this.compactionStrategy);
@@ -251,6 +257,15 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		throw new IllegalStateException(
 				"No session ID found in advisor context. " + "Set SESSION_ID_CONTEXT_KEY on every request: "
 						+ ".advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))");
+	}
+
+	private EventFilter getEventFilter(Map<String, @Nullable Object> context) {
+		EventFilter filter = this.eventFilter;
+		EventFilter requestFilter = (EventFilter) context.get(EVENT_FILTER_CONTEXT_KEY);
+		if (requestFilter != null) {
+			filter = filter.merge(requestFilter);
+		}
+		return filter;
 	}
 
 	private String getUserId(Map<String, @Nullable Object> context) {
