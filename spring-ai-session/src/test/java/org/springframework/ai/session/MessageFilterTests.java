@@ -48,11 +48,11 @@ class MessageFilterTests {
 		assertThat(filter.shouldPersist(new AssistantMessage(""))).isTrue();
 	}
 
-	// --- skipEmptyAssistantMessages() ---
+	// --- skipEmptyMessages() ---
 
 	@Test
 	void skipEmptyAssistantMessagesRejectsBlankTextAssistantMessage() {
-		MessageFilter filter = MessageFilter.skipEmptyAssistantMessages();
+		MessageFilter filter = MessageFilter.skipEmptyMessages();
 
 		assertThat(filter.shouldPersist(new AssistantMessage(""))).isFalse();
 		assertThat(filter.shouldPersist(new AssistantMessage("   "))).isFalse();
@@ -60,14 +60,14 @@ class MessageFilterTests {
 
 	@Test
 	void skipEmptyAssistantMessagesRejectsNullTextAssistantMessage() {
-		MessageFilter filter = MessageFilter.skipEmptyAssistantMessages();
+		MessageFilter filter = MessageFilter.skipEmptyMessages();
 
 		assertThat(filter.shouldPersist(AssistantMessage.builder().build())).isFalse();
 	}
 
 	@Test
 	void skipEmptyAssistantMessagesAcceptsAssistantMessageWithText() {
-		MessageFilter filter = MessageFilter.skipEmptyAssistantMessages();
+		MessageFilter filter = MessageFilter.skipEmptyMessages();
 
 		assertThat(filter.shouldPersist(new AssistantMessage("real answer"))).isTrue();
 	}
@@ -78,7 +78,7 @@ class MessageFilterTests {
 			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{}")))
 			.build();
 
-		assertThat(MessageFilter.skipEmptyAssistantMessages().shouldPersist(withToolCalls)).isTrue();
+		assertThat(MessageFilter.skipEmptyMessages().shouldPersist(withToolCalls)).isTrue();
 	}
 
 	@Test
@@ -86,14 +86,14 @@ class MessageFilterTests {
 		Media image = new Media(MimeTypeUtils.IMAGE_PNG, URI.create("https://example.com/image.png"));
 		AssistantMessage withMedia = AssistantMessage.builder().media(List.of(image)).build();
 
-		assertThat(MessageFilter.skipEmptyAssistantMessages().shouldPersist(withMedia)).isTrue();
+		assertThat(MessageFilter.skipEmptyMessages().shouldPersist(withMedia)).isTrue();
 	}
 
 	@Test
 	void skipEmptyAssistantMessagesAcceptsNonAssistantMessagesRegardlessOfContent() {
 		// Only AssistantMessages are subject to the emptiness check — a blank user
 		// message must pass.
-		MessageFilter filter = MessageFilter.skipEmptyAssistantMessages();
+		MessageFilter filter = MessageFilter.skipEmptyMessages();
 
 		assertThat(filter.shouldPersist(new UserMessage(""))).isTrue();
 		assertThat(filter.shouldPersist(new SystemMessage(""))).isTrue();
@@ -144,7 +144,7 @@ class MessageFilterTests {
 	@Test
 	void andRequiresBothFiltersToAccept() {
 		MessageFilter filter = MessageFilter.byMessageType(MessageType.ASSISTANT)
-			.and(MessageFilter.skipEmptyAssistantMessages());
+			.and(MessageFilter.skipEmptyMessages());
 
 		assertThat(filter.shouldPersist(new AssistantMessage("answer"))).isTrue();
 		assertThat(filter.shouldPersist(new AssistantMessage(""))).isFalse();

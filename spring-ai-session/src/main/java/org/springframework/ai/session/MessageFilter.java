@@ -39,7 +39,7 @@ import org.springframework.util.CollectionUtils;
  *
  * <pre>{@code
  * MessageFilter filter = MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
- *     .and(MessageFilter.skipEmptyAssistantMessages());
+ *     .and(MessageFilter.skipEmptyMessages());
  * }</pre>
  *
  * @author Sukhrob Tokhirov
@@ -94,7 +94,7 @@ public interface MessageFilter {
 	 * This is the default filter of
 	 * {@link org.springframework.ai.session.advisor.SessionMemoryAdvisor}.
 	 */
-	static MessageFilter skipEmptyAssistantMessages() {
+	static MessageFilter skipEmptyMessages() {
 		return message -> !(message instanceof AssistantMessage am
 				&& (am.getText() == null || am.getText().isBlank()) && !am.hasToolCalls()
 				&& CollectionUtils.isEmpty(am.getMedia()));

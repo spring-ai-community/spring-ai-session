@@ -298,7 +298,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		private EventFilter eventFilter = EventFilter.all();
 
-		private MessageFilter messageFilter = MessageFilter.skipEmptyAssistantMessages();
+		private MessageFilter messageFilter = MessageFilter.skipEmptyMessages();
 
 		@Nullable private CompactionTrigger compactionTrigger;
 
@@ -347,13 +347,13 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		 * assistant message(s) persisted in {@code after()}. Messages the filter rejects
 		 * are not persisted and therefore never replayed on later requests. The outgoing
 		 * prompt is unaffected. Defaults to
-		 * {@link MessageFilter#skipEmptyAssistantMessages()}.
+		 * {@link MessageFilter#skipEmptyMessages()}.
 		 * <p>
 		 * Note: replacing the default removes the empty-assistant-message protection
 		 * (see issue #19 — some models reject empty messages replayed as history).
 		 * Compose instead of replacing when you still want it: <pre>{@code
 		 * SessionMemoryAdvisor.builder(sessionService)
-		 *     .messageFilter(myFilter.and(MessageFilter.skipEmptyAssistantMessages()))
+		 *     .messageFilter(myFilter.and(MessageFilter.skipEmptyMessages()))
 		 *     .build();
 		 * }</pre>
 		 */

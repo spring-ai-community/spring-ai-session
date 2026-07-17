@@ -500,7 +500,7 @@ class SessionMemoryAdvisorIT {
 		// session log.
 		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
-				.and(MessageFilter.skipEmptyAssistantMessages()))
+				.and(MessageFilter.skipEmptyMessages()))
 			.build();
 		AdvisorChain chain = mock(AdvisorChain.class);
 
@@ -543,11 +543,11 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void composedCustomFilterStillSkipsEmptyAssistantMessages() {
-		// Composing a custom filter with skipEmptyAssistantMessages() preserves the
+		// Composing a custom filter with skipEmptyMessages() preserves the
 		// empty end_turn protection (compose, don't replace).
 		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
-				.and(MessageFilter.skipEmptyAssistantMessages()))
+				.and(MessageFilter.skipEmptyMessages()))
 			.build();
 
 		ChatClientResponse response = buildResponseFromMessages(this.sessionId, new AssistantMessage(""));

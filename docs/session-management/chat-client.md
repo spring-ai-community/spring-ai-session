@@ -25,7 +25,7 @@ On every request the advisor:
 4. Appends the current user message to the session, if the configured `MessageFilter`
    accepts it.
 5. After the model responds, appends the assistant message(s) through the configured
-   `MessageFilter` (default: `MessageFilter.skipEmptyAssistantMessages()`). By default,
+   `MessageFilter` (default: `MessageFilter.skipEmptyMessages()`). By default,
    empty assistant messages (blank text, no tool calls, and no media) are skipped — some
    models (e.g. Bedrock Converse) emit an empty `end_turn` frame after tool use that
    would otherwise be replayed and rejected on the next request.
@@ -171,7 +171,7 @@ SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
     // responses out of the session log), still skipping empty frames.
     .messageFilter(
         MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
-            .and(MessageFilter.skipEmptyAssistantMessages())
+            .and(MessageFilter.skipEmptyMessages())
     )
     .build();
 ```
@@ -181,7 +181,7 @@ Built-in factories:
 | Factory | Behavior |
 |---|---|
 | `MessageFilter.all()` | Persists every message (no filtering) |
-| `MessageFilter.skipEmptyAssistantMessages()` | Skips assistant messages with blank/null text, no tool calls, and no media (**the default**) |
+| `MessageFilter.skipEmptyMessages()` | Skips assistant messages with blank/null text, no tool calls, and no media (**the default**) |
 | `MessageFilter.byMessageType(types...)` | Persists only the listed `MessageType`s |
 | `MessageFilter.containsText(keyword)` | Persists only messages whose text contains the keyword (case-insensitive) |
 
@@ -192,15 +192,15 @@ via `and()`, `or()`, and `negate()`:
 // Never persist messages containing "confidential"
 .messageFilter(
     MessageFilter.containsText("confidential").negate()
-        .and(MessageFilter.skipEmptyAssistantMessages())
+        .and(MessageFilter.skipEmptyMessages())
 )
 ```
 
 !!! warning "Compose, don't replace"
     Setting a custom `messageFilter` **replaces** the default
-    `skipEmptyAssistantMessages()` protection. If you still want empty assistant frames
+    `skipEmptyMessages()` protection. If you still want empty assistant frames
     filtered out (recommended — some models reject them when replayed as history),
-    compose your filter with it via `.and(MessageFilter.skipEmptyAssistantMessages())`.
+    compose your filter with it via `.and(MessageFilter.skipEmptyMessages())`.
 
 ---
 
