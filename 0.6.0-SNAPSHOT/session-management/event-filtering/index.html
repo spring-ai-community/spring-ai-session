@@ -628,6 +628,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#write-side-filtering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write-side filtering
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -941,6 +952,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#write-side-filtering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write-side filtering
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1132,6 +1154,12 @@ with an optional per-request override:</p>
 </span></code></pre></div>
 <p>See <a href="../chat-client/#per-request-filter-override">ChatClient Integration → Per-request filter override</a>
 for how this is used in practice.</p>
+<hr />
+<h2 id="write-side-filtering">Write-side filtering<a class="headerlink" href="#write-side-filtering" title="Permanent link">&para;</a></h2>
+<p><code>EventFilter</code> is a <strong>read-side</strong> filter: events it excludes remain in storage — they are
+only hidden from the retrieved history. To control which messages get <strong>persisted</strong> in
+the first place, use <code>MessageFilter</code> on the <code>SessionMemoryAdvisor</code> builder. See
+<a href="../chat-client/#filtering-what-gets-persisted-messagefilter">ChatClient Integration → Filtering what gets persisted</a>.</p>
 
 
 
