@@ -73,6 +73,7 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 		Assert.notNull(context.session(), "session must not be null");
 
 		List<SessionEvent> events = context.events();
+		CompactionScope scope = context.scope();
 
 		// Separate synthetic summary events (always preserved, always first)
 		List<SessionEvent> synthetic = events.stream().filter(SessionEvent::isSynthetic).toList();
@@ -80,29 +81,31 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 
 		// maxEvents controls the real-events window only; synthetic summary events are
 		// always preserved on top and do not consume slots from the real-event budget.
-		// Branch events produced inside sub-agent sessions also do not consume slots —
-		// they are always included with their enclosing root turn.
+		// Events that are turn-internal under scope (sub-agent branch events for session
+		// scope; sub-branch events for branch scope) also do not consume slots — they are
+		// always included with their enclosing turn.
 		int slotsForReal = this.maxEvents;
 
-		// Count only root (non-branch) real events to determine whether compaction is needed
-		// and where to place the raw cut. Branch events tagged with a non-null branch are
-		// turn-internal and are always carried along with their enclosing root turn.
-		long rootEventCount = real.stream().filter(SessionEvent::isRootEvent).count();
+		// Count only turn-boundary events under scope to determine whether compaction is
+		// needed and where to place the raw cut. Turn-internal events (sub-agent branch
+		// events for session scope; sub-branch events for branch scope) are turn-internal
+		// and are always carried along with their enclosing turn.
+		long rootEventCount = real.stream().filter(scope::isTurnBoundary).count();
 
-		// No-op if root events fit within the available slots
+		// No-op if turn-boundary events fit within the available slots
 		if (rootEventCount <= slotsForReal) {
 			return new CompactionResult(events, List.of(), 0);
 		}
 
-		// Find the index in 'real' just after the last root event to archive.
-		// Walk forward counting root events; place the raw cut right after the
-		// (rootEventCount - slotsForReal)-th root event so snapToTurnStart can advance
-		// it to the next root-level USER event.
+		// Find the index in 'real' just after the last turn-boundary event to archive.
+		// Walk forward counting turn-boundary events; place the raw cut right after the
+		// (rootEventCount - slotsForReal)-th such event so snapToTurnStart can advance it
+		// to the next turn-boundary USER event.
 		long rootEventsToArchive = rootEventCount - slotsForReal;
 		int rawCutIndex = 0;
 		long rootSeen = 0;
 		for (int i = 0; i < real.size(); i++) {
-			if (real.get(i).isRootEvent()) {
+			if (scope.isTurnBoundary(real.get(i))) {
 				rootSeen++;
 				if (rootSeen == rootEventsToArchive) {
 					rawCutIndex = i + 1;
@@ -113,7 +116,7 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 
 		// Snap forward to the nearest turn start (USER message) so we never keep a
 		// partial turn — e.g. an assistant reply without its originating user message.
-		int cutIndex = CompactionUtils.snapToTurnStart(real, rawCutIndex);
+		int cutIndex = CompactionUtils.snapToTurnStart(real, rawCutIndex, scope);
 
 		List<SessionEvent> keptReal = new ArrayList<>(real.subList(cutIndex, real.size()));
 		List<SessionEvent> removedReal = real.subList(0, cutIndex);

@@ -84,6 +84,20 @@ final class CompactionUtils {
 	/**
 	 * Advances {@code rawCutIndex} forward until it points to a root-level (null-branch)
 	 * {@link MessageType#USER} event, or to {@code real.size()} if no such event exists.
+	 * Equivalent to {@code snapToTurnStart(real, rawCutIndex, CompactionScope.session())}.
+	 * @param real the list of non-synthetic session events
+	 * @param rawCutIndex the initial cut point; must be in {@code [0, real.size()]}
+	 * @return the adjusted index pointing to the first root-level USER event at or after
+	 * {@code rawCutIndex}, or {@code real.size()} if none exists
+	 */
+	static int snapToTurnStart(List<SessionEvent> real, int rawCutIndex) {
+		return snapToTurnStart(real, rawCutIndex, CompactionScope.session());
+	}
+
+	/**
+	 * Advances {@code rawCutIndex} forward until it points to an event that is a turn
+	 * boundary under {@code scope} (see {@link CompactionScope#isTurnBoundary(SessionEvent)}),
+	 * or to {@code real.size()} if no such event exists.
 	 *
 	 * <p>
 	 * Compaction strategies compute a raw cut point (the index into the real-event list
@@ -93,13 +107,14 @@ final class CompactionUtils {
 	 * kept window always begins at a complete turn, preserving conversation semantics.
 	 * @param real the list of non-synthetic session events
 	 * @param rawCutIndex the initial cut point; must be in {@code [0, real.size()]}
-	 * @return the adjusted index pointing to the first root-level USER event at or after
+	 * @param scope the scope whose turn-boundary rule applies
+	 * @return the adjusted index pointing to the first turn-boundary event at or after
 	 * {@code rawCutIndex}, or {@code real.size()} if none exists
 	 */
-	static int snapToTurnStart(List<SessionEvent> real, int rawCutIndex) {
+	static int snapToTurnStart(List<SessionEvent> real, int rawCutIndex, CompactionScope scope) {
 		int idx = rawCutIndex;
-		while (idx < real.size()
-				&& !(real.get(idx).isRootEvent() && real.get(idx).getMessageType() == MessageType.USER)) {
+		while (idx < real.size() && !(scope.isTurnBoundary(real.get(idx)) && real.get(idx)
+			.getMessageType() == MessageType.USER)) {
 			idx++;
 		}
 		return idx;
