@@ -47,6 +47,7 @@ import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.compaction.TurnCountTrigger;
+import org.springframework.ai.session.compaction.TurnWindowCompactionStrategy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -194,6 +195,52 @@ class SessionMemoryAdvisorIT {
 		// (The compacted events are archived, not deleted, so the full log is larger.)
 		List<SessionEvent> active = this.sessionService.getEvents(this.sessionId, EventFilter.active());
 		assertThat(active.size()).isLessThanOrEqualTo(2);
+	}
+
+	@Test
+	void afterCompactsOnlyTheConfiguredBranchLeavingRootAndSiblingBranchesIntact() {
+		// Reproduces the bug this scope threads through: an advisor configured with
+		// eventFilter(EventFilter.forBranch("planner")) must compact using planner's own
+		// turn count (not root's, which would never fire for a branch-only advisor), and
+		// must never archive root or sibling-branch events it does not own.
+		//
+		// Seed: 1 root turn, 1 "researcher" sibling-branch turn, 3 "planner" turns.
+		appendBranchTurn(null, "root-q", "root-a");
+		appendBranchTurn("researcher", "researcher-q", "researcher-a");
+		appendBranchTurn("planner", "planner-q1", "planner-a1");
+		appendBranchTurn("planner", "planner-q2", "planner-a2");
+		appendBranchTurn("planner", "planner-q3", "planner-a3");
+
+		SessionMemoryAdvisor plannerAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.forBranch("planner"))
+			.compactionTrigger(new TurnCountTrigger(1))
+			.compactionStrategy(TurnWindowCompactionStrategy.builder().maxTurns(1).build())
+			.build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		// Only after() is exercised here — before() would additionally write the current
+		// user message to root (main's advisor is not itself branch-write-aware without
+		// PR #33's runtime EventFilter resolution); after() alone is enough to prove the
+		// compaction scope resolves from the advisor's configured branch.
+		plannerAdvisor.after(buildResponse(this.sessionId, "assistant reply"), chain);
+
+		List<SessionEvent> active = this.sessionService.getEvents(this.sessionId, EventFilter.active());
+
+		// planner: only its last turn (2 events) survives — the first 2 turns (4 events)
+		// were archived using planner's own turn count, not root's.
+		List<SessionEvent> plannerActive = active.stream().filter(e -> "planner".equals(e.getBranch())).toList();
+		assertThat(plannerActive).extracting(e -> e.getMessage().getText())
+			.containsExactly("planner-q3", "planner-a3");
+
+		// researcher (sibling branch) — fully untouched.
+		List<SessionEvent> researcherActive = active.stream().filter(e -> "researcher".equals(e.getBranch())).toList();
+		assertThat(researcherActive).extracting(e -> e.getMessage().getText())
+			.containsExactly("researcher-q", "researcher-a");
+
+		// root — fully untouched, plus the assistant reply after() just appended.
+		List<SessionEvent> rootActive = active.stream().filter(SessionEvent::isRootEvent).toList();
+		assertThat(rootActive).extracting(e -> e.getMessage().getText())
+			.containsExactly("root-q", "root-a", "assistant reply");
 	}
 
 	@Test
@@ -582,6 +629,15 @@ class SessionMemoryAdvisorIT {
 	}
 
 	// --- Helpers ---
+
+	/** Appends a user+assistant turn directly to the event log, tagged with {@code branch}. */
+	private void appendBranchTurn(String branch, String userText, String assistantText) {
+		this.sessionService
+			.appendEvent(SessionEvent.builder().sessionId(this.sessionId).message(new UserMessage(userText))
+				.branch(branch).build());
+		this.sessionService.appendEvent(SessionEvent.builder().sessionId(this.sessionId)
+			.message(new AssistantMessage(assistantText)).branch(branch).build());
+	}
 
 	private static ChatClientRequest buildRequest(String sessionId, String userText) {
 		Prompt prompt = new Prompt(List.of(new UserMessage(userText)));
