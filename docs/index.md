@@ -41,8 +41,8 @@ Spring AI Session solves this with three ideas working together:
 
 - **Event-sourced conversation log** — append-only, immutable `SessionEvent` records
   wrapping Spring AI `Message` types
-- **Composable event filtering** — filter by message type, time range, keyword, branch,
-  last-N, or pagination
+- **Composable event filtering** — filter by message type, time range, single or
+  multi-term keyword (`ANY`/`ALL`), regular expression, branch, last-N, or pagination
 - **Four compaction strategies** out of the box:
     - `SlidingWindowCompactionStrategy` — keep the last N real events
     - `TurnWindowCompactionStrategy` — keep the last N complete turns
@@ -55,8 +55,10 @@ Spring AI Session solves this with three ideas working together:
   concurrent requests without locking
 - **Multi-agent branch isolation** — dot-separated branch labels let peer sub-agents share
   one session while hiding each other's events
-- **Recall storage tool** — `SessionEventTools` gives the model a `conversation_search`
-  tool to keyword-search the full verbatim history even after compaction
+- **Recall storage tools** — `SessionEventTools` gives the model a `conversation_search`
+  tool to keyword-search the full verbatim history of the current session even after
+  compaction; `CrossSessionRecallTools` gives a background/maintenance agent a
+  `cross_session_search` tool to mine signal across *every* session a user has
 - **Spring Boot auto-configuration** for the JDBC repository (schema init, dialect
   detection, `JdbcSessionRepository` bean)
 

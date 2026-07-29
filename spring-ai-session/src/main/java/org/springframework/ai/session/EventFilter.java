@@ -17,7 +17,9 @@
 package org.springframework.ai.session;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.jspecify.annotations.Nullable;
 
@@ -71,11 +73,29 @@ import org.springframework.ai.chat.messages.MessageType;
  * @since 2.0.0
  */
 public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullable Set<MessageType> messageTypes,
-		boolean excludeSynthetic, @Nullable Integer lastN, @Nullable String keyword, @Nullable Integer page,
-		@Nullable Integer pageSize, @Nullable String branch, boolean excludeArchived) {
+		boolean excludeSynthetic, @Nullable Integer lastN, @Nullable String keyword,
+		@Nullable List<String> keywords, @Nullable MatchMode matchMode, @Nullable Pattern pattern,
+		@Nullable Integer page, @Nullable Integer pageSize, @Nullable String branch, boolean excludeArchived) {
+
+	/**
+	 * How multiple {@link #keywords()} combine when matching an event's text.
+	 */
+	public enum MatchMode {
+
+		/** Match if the text contains at least one of the keywords. */
+		ANY,
+
+		/** Match only if the text contains all of the keywords. */
+		ALL
+
+	}
 
 	public EventFilter {
 		keyword = (keyword != null && !keyword.isBlank()) ? keyword.toLowerCase() : null;
+		keywords = (keywords != null && !keywords.isEmpty())
+				? keywords.stream().filter(k -> k != null && !k.isBlank()).map(String::toLowerCase).toList() : null;
+		keywords = (keywords != null && keywords.isEmpty()) ? null : keywords;
+		matchMode = (keywords != null) ? (matchMode != null ? matchMode : MatchMode.ANY) : null;
 		messageTypes = (messageTypes != null && !messageTypes.isEmpty()) ? messageTypes : null;
 		if (lastN != null && lastN <= 0) {
 			throw new IllegalArgumentException("lastN must be greater than 0");
@@ -101,7 +121,10 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		return new EventFilter(other.from != null ? other.from : this.from, other.to != null ? other.to : this.to,
 				other.messageTypes != null ? other.messageTypes : this.messageTypes,
 				other.excludeSynthetic || this.excludeSynthetic, other.lastN != null ? other.lastN : this.lastN,
-				other.keyword != null ? other.keyword : this.keyword, other.page != null ? other.page : this.page,
+				other.keyword != null ? other.keyword : this.keyword,
+				other.keywords != null ? other.keywords : this.keywords,
+				other.matchMode != null ? other.matchMode : this.matchMode,
+				other.pattern != null ? other.pattern : this.pattern, other.page != null ? other.page : this.page,
 				other.pageSize != null ? other.pageSize : this.pageSize,
 				other.branch != null ? other.branch : this.branch, other.excludeArchived || this.excludeArchived);
 	}
@@ -153,6 +176,35 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	 */
 	public static EventFilter keywordSearch(String keyword, int page, int pageSize) {
 		return builder().keyword(keyword).page(page).pageSize(pageSize).build();
+	}
+
+	/**
+	 * Returns the first page of events whose message text contains, depending on
+	 * {@code matchMode}, any or all of {@code terms} (case-insensitive substring match
+	 * per term). Uses {@link #DEFAULT_PAGE_SIZE}.
+	 */
+	public static EventFilter keywordsSearch(List<String> terms, MatchMode matchMode) {
+		return builder().keywords(terms).matchMode(matchMode).page(0).pageSize(DEFAULT_PAGE_SIZE).build();
+	}
+
+	/**
+	 * Returns the first page of events whose message text matches the given regular
+	 * expression. Uses {@link #DEFAULT_PAGE_SIZE}. Case sensitivity is controlled by the
+	 * caller via {@link Pattern#CASE_INSENSITIVE} on the compiled {@code pattern}.
+	 *
+	 * <p>
+	 * <strong>Security:</strong> {@code pattern} must be a {@link Pattern} the calling
+	 * <em>code</em> compiled from a fixed or developer-authored expression. Never call
+	 * {@link Pattern#compile(String)} on a string sourced from a user, an LLM tool-call
+	 * argument, or any other untrusted input and pass the result here (or to
+	 * {@link Builder#pattern(Pattern)}) — an attacker-chosen regular expression can exhibit
+	 * catastrophic backtracking (ReDoS) when evaluated against attacker-influenced message
+	 * text such as {@link SessionEvent} content, causing denial of service. This type
+	 * intentionally has no {@code @Tool}-annotated entry point that accepts a raw regex
+	 * string for exactly this reason — keep it that way.
+	 */
+	public static EventFilter patternSearch(Pattern pattern) {
+		return builder().pattern(pattern).page(0).pageSize(DEFAULT_PAGE_SIZE).build();
 	}
 
 	/**
@@ -211,6 +263,24 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 				return false;
 			}
 		}
+		if (this.keywords != null) {
+			String text = event.getMessage().getText();
+			if (text == null) {
+				return false;
+			}
+			String lowerText = text.toLowerCase();
+			boolean matched = (this.matchMode == MatchMode.ALL) ? this.keywords.stream().allMatch(lowerText::contains)
+					: this.keywords.stream().anyMatch(lowerText::contains);
+			if (!matched) {
+				return false;
+			}
+		}
+		if (this.pattern != null) {
+			String text = event.getMessage().getText();
+			if (text == null || !this.pattern.matcher(text).find()) {
+				return false;
+			}
+		}
 		if (this.branch != null) {
 			String eventBranch = event.getBranch();
 			if (eventBranch != null) {
@@ -247,6 +317,12 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		private @Nullable Integer lastN;
 
 		private @Nullable String keyword;
+
+		private @Nullable List<String> keywords;
+
+		private @Nullable MatchMode matchMode;
+
+		private @Nullable Pattern pattern;
 
 		private @Nullable Integer page;
 
@@ -307,6 +383,41 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		}
 
 		/**
+		 * Case-insensitive terms to match against {@code message.getText()}, combined
+		 * according to {@link #matchMode(MatchMode)} (default {@link MatchMode#ANY} if
+		 * left unset while {@code keywords} is set).
+		 */
+		public Builder keywords(@Nullable List<String> keywords) {
+			this.keywords = keywords;
+			return this;
+		}
+
+		/**
+		 * How {@link #keywords(List)} combine — {@link MatchMode#ANY} (at least one term
+		 * present) or {@link MatchMode#ALL} (every term present). Ignored unless
+		 * {@code keywords} is also set.
+		 */
+		public Builder matchMode(@Nullable MatchMode matchMode) {
+			this.matchMode = matchMode;
+			return this;
+		}
+
+		/**
+		 * A compiled regular expression evaluated against {@code message.getText()} via
+		 * {@link Pattern#matcher(CharSequence)}{@code .find()}. Events whose text is
+		 * {@code null} or does not match are excluded.
+		 *
+		 * <p>
+		 * <strong>Security:</strong> see the warning on {@link EventFilter#patternSearch(Pattern)}
+		 * — only pass a {@link Pattern} compiled from a fixed or developer-authored
+		 * expression, never one compiled from untrusted (e.g. LLM tool-call) input.
+		 */
+		public Builder pattern(@Nullable Pattern pattern) {
+			this.pattern = pattern;
+			return this;
+		}
+
+		/**
 		 * Zero-indexed page number for paginated results. Applied after per-event
 		 * filtering in chronological order (oldest first), so page 0 contains the oldest
 		 * matching events. Requires {@link #pageSize(Integer)} to be set.
@@ -346,7 +457,8 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		/** Constructs the {@link EventFilter}. */
 		public EventFilter build() {
 			return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, this.lastN,
-					this.keyword, this.page, this.pageSize, this.branch, this.excludeArchived);
+					this.keyword, this.keywords, this.matchMode, this.pattern, this.page, this.pageSize, this.branch,
+					this.excludeArchived);
 		}
 
 	}

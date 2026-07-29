@@ -10,6 +10,12 @@ active window are flagged `SessionEvent.isArchived()` and kept in the log. The a
 context window the advisor injects is the `EventFilter.active()` view (archived events
 excluded), while `conversation_search` searches the whole log (archived events included).
 
+!!! tip "Need to search across a user's other sessions, not just this one?"
+    `conversation_search` is deliberately scoped to a single session, resolved
+    automatically from the live request — the model never chooses which session it
+    searches. For a background/maintenance agent that needs to mine signal across **every**
+    session a user has, see [Cross-Session Recall](cross-session-recall.md) instead.
+
 ---
 
 ## Registration
@@ -90,3 +96,11 @@ page=1  →  next 10 matching events
 
 The model can call `conversation_search` multiple times with incrementing `page` values to
 paginate through the full history until it finds what it needs.
+
+---
+
+## See also
+
+- [Cross-Session Recall](cross-session-recall.md) — the analogous tool scoped to *every*
+  session belonging to a user, for background/maintenance agents
+- [Event Filtering](event-filtering.md) — the full `EventFilter` API this tool builds on
