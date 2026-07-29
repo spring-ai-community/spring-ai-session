@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import javax.sql.DataSource;
 
@@ -31,6 +32,7 @@ import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventFilter.MatchMode;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -314,6 +316,93 @@ class JdbcSessionRepositoryTests {
 		List<SessionEvent> results = this.repository.findEvents(session.id(), EventFilter.keywordSearch("hello"));
 		assertThat(results).hasSize(2);
 		assertThat(results).allMatch(e -> e.getMessage().getText().toLowerCase().contains("hello"));
+	}
+
+	@Test
+	void findEventsKeywordsAnyMatchSearch() {
+		Session session = buildSession("user-kws-any");
+		this.repository.save(session);
+
+		this.repository.appendEvent(
+				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("we decided to ship it")).build());
+		this.repository.appendEvent(SessionEvent.builder()
+			.sessionId(session.id())
+			.message(new UserMessage("let's go with option B"))
+			.build());
+		this.repository.appendEvent(
+				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("unrelated message")).build());
+
+		List<SessionEvent> results = this.repository.findEvents(session.id(),
+				EventFilter.keywordsSearch(List.of("we decided", "let's go with"), MatchMode.ANY));
+
+		assertThat(results).extracting(e -> e.getMessage().getText())
+			.containsExactlyInAnyOrder("we decided to ship it", "let's go with option B");
+	}
+
+	@Test
+	void findEventsKeywordsAllMatchSearchRequiresEveryTerm() {
+		Session session = buildSession("user-kws-all");
+		this.repository.save(session);
+
+		this.repository.appendEvent(SessionEvent.builder()
+			.sessionId(session.id())
+			.message(new UserMessage("actually, let's use this instead"))
+			.build());
+		this.repository.appendEvent(
+				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("actually that's fine as-is")).build());
+
+		List<SessionEvent> results = this.repository.findEvents(session.id(),
+				EventFilter.keywordsSearch(List.of("actually", "instead"), MatchMode.ALL));
+
+		assertThat(results).extracting(e -> e.getMessage().getText())
+			.containsExactly("actually, let's use this instead");
+	}
+
+	@Test
+	void findEventsPatternSearch() {
+		Session session = buildSession("user-pattern");
+		this.repository.save(session);
+
+		this.repository.appendEvent(
+				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("we decided on option B")).build());
+		this.repository.appendEvent(
+				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("we haven't decided yet")).build());
+
+		List<SessionEvent> results = this.repository.findEvents(session.id(),
+				EventFilter.patternSearch(Pattern.compile("\\bwe decided\\b")));
+
+		assertThat(results).extracting(e -> e.getMessage().getText()).containsExactly("we decided on option B");
+	}
+
+	@Test
+	void findEventsPatternSearchCombinedWithPagination() {
+		Session session = buildSession("user-pattern-page");
+		this.repository.save(session);
+
+		// Ordering is by insertion-derived `seq`, not timestamp, so the non-matching
+		// event must be interleaved by *append order* — inserted between entry 2 and
+		// entry 3 — to actually prove the pattern filter is applied before pagination
+		// slices the result, not just after (offset=2 on the unfiltered 7-row set would
+		// wrongly land on "no match here" instead of entry 3 if pagination ran in SQL).
+		appendEntry(session.id(), 1);
+		appendEntry(session.id(), 2);
+		this.repository.appendEvent(
+				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("no match here")).build());
+		appendEntry(session.id(), 3);
+		appendEntry(session.id(), 4);
+		appendEntry(session.id(), 5);
+		appendEntry(session.id(), 6);
+
+		List<SessionEvent> page0 = this.repository.findEvents(session.id(),
+				EventFilter.builder().pattern(Pattern.compile("^entry \\d$")).page(0).pageSize(2).build());
+		List<SessionEvent> page1 = this.repository.findEvents(session.id(),
+				EventFilter.builder().pattern(Pattern.compile("^entry \\d$")).page(1).pageSize(2).build());
+		List<SessionEvent> page2 = this.repository.findEvents(session.id(),
+				EventFilter.builder().pattern(Pattern.compile("^entry \\d$")).page(2).pageSize(2).build());
+
+		assertThat(page0).extracting(e -> e.getMessage().getText()).containsExactly("entry 1", "entry 2");
+		assertThat(page1).extracting(e -> e.getMessage().getText()).containsExactly("entry 3", "entry 4");
+		assertThat(page2).extracting(e -> e.getMessage().getText()).containsExactly("entry 5", "entry 6");
 	}
 
 	@Test
@@ -674,6 +763,11 @@ class JdbcSessionRepositoryTests {
 
 	private Session buildSession(String userId) {
 		return Session.builder().id(UUID.randomUUID().toString()).userId(userId).build();
+	}
+
+	private void appendEntry(String sessionId, int n) {
+		this.repository
+			.appendEvent(SessionEvent.builder().sessionId(sessionId).message(new UserMessage("entry " + n)).build());
 	}
 
 	// -------------------------------------------------------------------------

@@ -25,6 +25,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import javax.sql.DataSource;
 
@@ -290,6 +291,16 @@ public final class JdbcSessionRepository implements SessionRepository {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(filter, "filter must not be null");
 
+		// A java.util.regex.Pattern cannot be safely translated to portable SQL — H2,
+		// MySQL, and PostgreSQL each have their own regex dialect, none of which is a
+		// strict superset of Java's regex syntax (backreferences, lookaround, named
+		// groups). When `pattern` is set, every other criterion is still pushed down to
+		// SQL as usual, but LIMIT/OFFSET is deferred: the pattern (and, redundantly but
+		// harmlessly, every other criterion) is re-checked in Java via EventFilter.matches
+		// against the full SQL-filtered result, then lastN/page/pageSize is applied
+		// in-memory — mirroring how InMemorySessionRepository filters and paginates.
+		boolean patternRequiresInMemoryFiltering = filter.pattern() != null;
+
 		StringBuilder sql = new StringBuilder(SELECT_EVENTS_BASE);
 		List<Object> params = new ArrayList<>();
 		params.add(sessionId);
@@ -328,8 +339,23 @@ public final class JdbcSessionRepository implements SessionRepository {
 			sql.append(this.dialect.getKeywordFilterFragment()).append(" ");
 			params.add("%" + filter.keyword() + "%");
 		}
+		if (filter.keywords() != null) {
+			sql.append("AND (");
+			String joiner = filter.matchMode() == EventFilter.MatchMode.ALL ? " AND " : " OR ";
+			for (int i = 0; i < filter.keywords().size(); i++) {
+				if (i > 0) {
+					sql.append(joiner);
+				}
+				sql.append(this.dialect.getKeywordPredicateFragment());
+				params.add("%" + filter.keywords().get(i) + "%");
+			}
+			sql.append(") ");
+		}
 
-		if (filter.lastN() != null) {
+		if (patternRequiresInMemoryFiltering) {
+			sql.append("ORDER BY e.seq ASC ");
+		}
+		else if (filter.lastN() != null) {
 			sql.append("ORDER BY e.seq DESC LIMIT ? ");
 			params.add(filter.lastN());
 		}
@@ -346,12 +372,43 @@ public final class JdbcSessionRepository implements SessionRepository {
 		List<SessionEvent> result = this.jdbcTemplate.query(sql.toString(), new SessionEventRowMapper(),
 				params.toArray());
 
-		if (filter.lastN() != null) {
+		if (patternRequiresInMemoryFiltering) {
+			result = result.stream().filter(filter::matches).collect(Collectors.toCollection(ArrayList::new));
+			result = applyInMemoryPagination(result, filter);
+		}
+		else if (filter.lastN() != null) {
 			result = new ArrayList<>(result);
 			Collections.reverse(result);
 		}
 
 		return Collections.unmodifiableList(result);
+	}
+
+	/**
+	 * Applies {@code lastN} / {@code page}+{@code pageSize} slicing to an already
+	 * fully-filtered, seq-ascending event list. Only used on the {@code pattern}
+	 * in-memory-filtering path above, where SQL-level LIMIT/OFFSET can't be used because
+	 * the pattern criterion is only evaluated after the query runs. Mirrors
+	 * InMemorySessionRepository's pagination so both backends behave identically.
+	 */
+	private static List<SessionEvent> applyInMemoryPagination(List<SessionEvent> matched, EventFilter filter) {
+		if (filter.lastN() != null) {
+			if (matched.size() > filter.lastN()) {
+				return new ArrayList<>(matched.subList(matched.size() - filter.lastN(), matched.size()));
+			}
+			return matched;
+		}
+		if (filter.pageSize() != null) {
+			int page = filter.page() != null ? filter.page() : 0;
+			long fromIndexLong = (long) page * filter.pageSize();
+			if (fromIndexLong >= matched.size()) {
+				return new ArrayList<>();
+			}
+			int fromIndex = (int) fromIndexLong;
+			int toIndex = (int) Math.min(fromIndexLong + filter.pageSize(), matched.size());
+			return new ArrayList<>(matched.subList(fromIndex, toIndex));
+		}
+		return matched;
 	}
 
 	// -------------------------------------------------------------------------
