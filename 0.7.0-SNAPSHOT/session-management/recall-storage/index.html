@@ -16,7 +16,7 @@
         <link rel="prev" href="../multi-agent/">
       
       
-        <link rel="next" href="../../session-jdbc/">
+        <link rel="next" href="../cross-session-recall/">
       
       
         
@@ -431,6 +431,8 @@
       
         
       
+        
+      
     
     
     
@@ -729,10 +731,49 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cross-session-recall/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Session Recall
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -919,6 +960,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -996,6 +1048,13 @@ exchange on demand rather than relying solely on what fits in the prompt.</p>
 active window are flagged <code>SessionEvent.isArchived()</code> and kept in the log. The active
 context window the advisor injects is the <code>EventFilter.active()</code> view (archived events
 excluded), while <code>conversation_search</code> searches the whole log (archived events included).</p>
+<div class="admonition tip">
+<p class="admonition-title">Need to search across a user's other sessions, not just this one?</p>
+<p><code>conversation_search</code> is deliberately scoped to a single session, resolved
+automatically from the live request — the model never chooses which session it
+searches. For a background/maintenance agent that needs to mine signal across <strong>every</strong>
+session a user has, see <a href="../cross-session-recall/">Cross-Session Recall</a> instead.</p>
+</div>
 <hr />
 <h2 id="registration">Registration<a class="headerlink" href="#registration" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1">// Default page size (EventFilter.DEFAULT_PAGE_SIZE = 10)</span>
@@ -1081,6 +1140,13 @@ builder (<code>SessionEventTools.builder(sessionService).pageSize(20).build()</c
 </span></code></pre></div>
 <p>The model can call <code>conversation_search</code> multiple times with incrementing <code>page</code> values to
 paginate through the full history until it finds what it needs.</p>
+<hr />
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../cross-session-recall/">Cross-Session Recall</a> — the analogous tool scoped to <em>every</em>
+  session belonging to a user, for background/maintenance agents</li>
+<li><a href="../event-filtering/">Event Filtering</a> — the full <code>EventFilter</code> API this tool builds on</li>
+</ul>
 
 
 

@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://spring-ai-community.github.io/spring-ai-session/0.7.0-SNAPSHOT/session-jdbc/">
       
       
-        <link rel="prev" href="../session-management/recall-storage/">
+        <link rel="prev" href="../session-management/cross-session-recall/">
       
       
         <link rel="next" href="auto-configuration/">
@@ -429,6 +429,8 @@
       
         
       
+        
+      
     
     
     
@@ -629,6 +631,34 @@
     
   
     Recall Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session-management/cross-session-recall/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Session Recall
   
 
     
@@ -1077,6 +1107,20 @@ compaction safe under concurrent access.</p>
 <p><strong><code>synthetic</code> column</strong> — stored as a dedicated <code>BOOLEAN</code> column (not only in the metadata
 JSON blob) so <code>EventFilter.excludeSynthetic()</code> translates to a SQL predicate instead of
 an in-process scan.</p>
+<p><strong><code>EventFilter.keyword()</code>/<code>keywords()</code></strong> both translate to SQL <code>LIKE</code> predicates —
+<code>keyword</code> as a single <code>AND LOWER(...) LIKE ?</code> clause, <code>keywords</code> as N such clauses joined
+with <code>AND</code>/<code>OR</code> per <code>matchMode</code>, one bound parameter per term. Every term is bound as a
+JDBC parameter, never concatenated into the SQL text.</p>
+<p><strong><code>EventFilter.pattern()</code> falls back to in-memory filtering.</strong> A <code>java.util.regex.Pattern</code>
+cannot be safely translated to portable SQL — H2, MySQL, and PostgreSQL each have their
+own regex dialect, none a strict superset of Java's regex syntax (backreferences,
+lookaround, named groups). When <code>pattern</code> is set, every other criterion is still pushed
+down to SQL as usual, but pagination (<code>lastN</code>/<code>page</code>/<code>pageSize</code>) is deferred: the full
+SQL-filtered result set is fetched, <code>pattern</code> (and, redundantly but harmlessly, every
+other criterion) is re-checked via <code>EventFilter.matches()</code> in Java, and pagination is
+applied afterward — mirroring how <code>InMemorySessionRepository</code> filters and paginates.
+Expect a <code>pattern</code> query to scan more of a session's event history than an equivalent
+<code>keyword</code>/<code>keywords</code> query.</p>
 <hr />
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>

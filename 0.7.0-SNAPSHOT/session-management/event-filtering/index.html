@@ -431,6 +431,8 @@
       
         
       
+        
+      
     
     
     
@@ -760,6 +762,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cross-session-recall/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Session Recall
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1056,9 +1086,30 @@ the builder.</p>
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="c1">// Keyword search — explicit page and page size</span>
 </span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">keywordSearch</span><span class="p">(</span><span class="s">&quot;Spring AI&quot;</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">));</span>
 </span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="c1">// Events visible to a specific agent branch (own + ancestor events only)</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">forBranch</span><span class="p">(</span><span class="s">&quot;orch.researcher&quot;</span><span class="p">));</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="c1">// Multi-term search — match ANY of the terms (case-insensitive substring per term)</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">keywordsSearch</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;no,&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;don&#39;t&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;actually&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">MatchMode</span><span class="p">.</span><span class="na">ANY</span><span class="p">));</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="c1">// Multi-term search — match ALL of the terms</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">keywordsSearch</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;we decided&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;going forward&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">MatchMode</span><span class="p">.</span><span class="na">ALL</span><span class="p">));</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="c1">// Regular-expression search — first page (default page size 10)</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">patternSearch</span><span class="p">(</span><span class="n">Pattern</span><span class="p">.</span><span class="na">compile</span><span class="p">(</span><span class="s">&quot;\\bwe decided\\b&quot;</span><span class="p">)));</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="c1">// Events visible to a specific agent branch (own + ancestor events only)</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">forBranch</span><span class="p">(</span><span class="s">&quot;orch.researcher&quot;</span><span class="p">));</span>
 </span></code></pre></div>
+<div class="admonition danger">
+<p class="admonition-title">Never compile an untrusted string into the <code>pattern</code> argument</p>
+<p><code>patternSearch(Pattern)</code> and <code>Builder.pattern(Pattern)</code> take an already-compiled
+<code>java.util.regex.Pattern</code> — a <strong>Java-level API</strong>, not a tool-call parameter. Never call
+<code>Pattern.compile(...)</code> on a string sourced from a user, an LLM tool-call argument, or
+any other untrusted input and pass the result here: an attacker-chosen expression can
+exhibit catastrophic backtracking (ReDoS) when evaluated against attacker-influenced
+message text. Only pass patterns compiled from a fixed or developer-authored
+expression. This is exactly why no <code>@Tool</code>-annotated method in this library accepts a
+raw regex string — see <a href="../cross-session-recall/">Cross-Session Recall</a>, which
+deliberately exposes only plain-substring <code>keywords</code>/<code>matchMode</code> search instead.</p>
+</div>
 <hr />
 <h2 id="builder">Builder<a class="headerlink" href="#builder" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">EventFilter</span><span class="w"> </span><span class="n">filter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
@@ -1069,9 +1120,15 @@ the builder.</p>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="p">.</span><span class="na">excludeSynthetic</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span><span class="w">                                </span><span class="c1">// exclude summary events</span>
 </span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">50</span><span class="p">)</span><span class="w">                                             </span><span class="c1">// keep newest 50 matches</span>
 </span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="p">.</span><span class="na">keyword</span><span class="p">(</span><span class="s">&quot;Spring AI&quot;</span><span class="p">)</span><span class="w">                                  </span><span class="c1">// case-insensitive substring</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="p">.</span><span class="na">branch</span><span class="p">(</span><span class="s">&quot;orch.researcher&quot;</span><span class="p">)</span><span class="w">                             </span><span class="c1">// branch isolation</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="p">.</span><span class="na">keywords</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;no,&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;actually&quot;</span><span class="p">))</span><span class="w">                  </span><span class="c1">// multi-term substring match</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="p">.</span><span class="na">matchMode</span><span class="p">(</span><span class="n">MatchMode</span><span class="p">.</span><span class="na">ANY</span><span class="p">)</span><span class="w">                               </span><span class="c1">// ANY (default) or ALL of keywords</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="p">.</span><span class="na">pattern</span><span class="p">(</span><span class="n">Pattern</span><span class="p">.</span><span class="na">compile</span><span class="p">(</span><span class="s">&quot;\\bwe decided\\b&quot;</span><span class="p">))</span><span class="w">          </span><span class="c1">// compiled regex — developer-authored only</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="p">.</span><span class="na">branch</span><span class="p">(</span><span class="s">&quot;orch.researcher&quot;</span><span class="p">)</span><span class="w">                             </span><span class="c1">// branch isolation</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </span></code></pre></div>
+<p><code>keyword</code>, <code>keywords</code>, and <code>pattern</code> are independent criteria that all compose with
+AND-together semantics in <code>matches()</code> — set more than one and an event must satisfy every
+one of them, not just one. In practice, callers set exactly one of the three.</p>
 <hr />
 <h2 id="fields-reference">Fields reference<a class="headerlink" href="#fields-reference" title="Permanent link">&para;</a></h2>
 <table>
@@ -1114,6 +1171,21 @@ the builder.</p>
 <td>Case-insensitive substring match on <code>message.getText()</code></td>
 </tr>
 <tr>
+<td><code>keywords</code></td>
+<td><code>List&lt;String&gt;</code></td>
+<td>Multiple case-insensitive substring terms, combined per <code>matchMode</code></td>
+</tr>
+<tr>
+<td><code>matchMode</code></td>
+<td><code>MatchMode</code></td>
+<td><code>ANY</code> (at least one term present) or <code>ALL</code> (every term present) — only meaningful when <code>keywords</code> is set</td>
+</tr>
+<tr>
+<td><code>pattern</code></td>
+<td><code>Pattern</code></td>
+<td>Compiled regular expression matched against <code>message.getText()</code> via <code>Matcher.find()</code>. <strong>Only ever pass a developer-authored <code>Pattern</code></strong> — see the ReDoS warning above</td>
+</tr>
+<tr>
 <td><code>page</code></td>
 <td><code>Integer</code></td>
 <td>Zero-indexed page in chronological order (oldest first, page 0 = oldest)</td>
@@ -1145,6 +1217,12 @@ the builder.</p>
 <li><strong>Setting <code>pageSize</code> without <code>page</code></strong> is allowed — <code>page</code> defaults to <code>0</code> (first page).</li>
 <li><strong><code>keyword</code></strong> is normalised on construction: blank or empty strings become <code>null</code>;
   non-null values are lowercased for case-insensitive matching.</li>
+<li><strong><code>keywords</code></strong> is normalised on construction the same way, term by term: <code>null</code>/blank
+  entries are dropped and survivors are lowercased. An empty or all-blank list normalises
+  to <code>null</code> (equivalent to no multi-term filter).</li>
+<li><strong><code>matchMode</code></strong> defaults to <code>ANY</code> when <code>keywords</code> is set and <code>matchMode</code> is left <code>null</code>.
+  If <code>keywords</code> is <code>null</code>, <code>matchMode</code> is forced to <code>null</code> too — even if you set one
+  explicitly — since it has nothing to apply to.</li>
 <li><strong><code>messageTypes</code></strong> is normalised on construction: an empty set becomes <code>null</code>
   (equivalent to no type filter).</li>
 </ul>

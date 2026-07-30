@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://spring-ai-community.github.io/spring-ai-session/0.7.0-SNAPSHOT/session-management/multi-agent/">
+        <link rel="canonical" href="https://spring-ai-community.github.io/spring-ai-session/0.7.0-SNAPSHOT/session-management/cross-session-recall/">
       
       
-        <link rel="prev" href="../chat-client/">
+        <link rel="prev" href="../recall-storage/">
       
       
-        <link rel="next" href="../recall-storage/">
+        <link rel="next" href="../../session-jdbc/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Multi-Agent Branch Isolation - Spring AI Session</title>
+        <title>Cross-Session Recall - Spring AI Session</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#multi-agent-branch-isolation" class="md-skip">
+        <a href="#cross-session-recall" class="md-skip">
           Skip to content
         </a>
       
@@ -118,7 +118,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Multi-Agent Branch Isolation
+              Cross-Session Recall
             
           </span>
         </div>
@@ -597,37 +597,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Multi-Agent Branch Isolation
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../multi-agent/" class="md-nav__link">
         
   
   
@@ -643,92 +616,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#branch-format" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Branch format
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#tagging-events" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Tagging events
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#filtering-by-branch" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Filtering by branch
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#visibility-rules" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Visibility rules
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#synthetic-events-and-branch" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Synthetic events and branch
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#compaction-and-branches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Compaction and branches
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -766,10 +653,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../cross-session-recall/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Session Recall
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -785,6 +699,103 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-this-differs-from-conversation_search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How this differs from conversation_search
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#registration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-signature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool signature
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multi-term-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-term queries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#date-scoped-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Date-scoped queries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#design-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -928,10 +939,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#branch-format" class="md-nav__link">
+  <a href="#how-this-differs-from-conversation_search" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Branch format
+        How this differs from conversation_search
       
     </span>
   </a>
@@ -939,10 +950,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#tagging-events" class="md-nav__link">
+  <a href="#registration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Tagging events
+        Registration
       
     </span>
   </a>
@@ -950,10 +961,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#filtering-by-branch" class="md-nav__link">
+  <a href="#tool-signature" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Filtering by branch
+        Tool signature
       
     </span>
   </a>
@@ -961,10 +972,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#visibility-rules" class="md-nav__link">
+  <a href="#multi-term-queries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Visibility rules
+        Multi-term queries
       
     </span>
   </a>
@@ -972,10 +983,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#synthetic-events-and-branch" class="md-nav__link">
+  <a href="#date-scoped-queries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Synthetic events and branch
+        Date-scoped queries
       
     </span>
   </a>
@@ -983,10 +994,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#compaction-and-branches" class="md-nav__link">
+  <a href="#design-notes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Compaction and branches
+        Design notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
       
     </span>
   </a>
@@ -1061,132 +1083,180 @@
   
 
 
-<h1 id="multi-agent-branch-isolation">Multi-Agent Branch Isolation<a class="headerlink" href="#multi-agent-branch-isolation" title="Permanent link">&para;</a></h1>
-<p>When an orchestrator delegates work to several sub-agents running in parallel, all agents
-can share the same <code>Session</code> — but each sub-agent must see only its own history plus its
-ancestors'. Peer agents on sibling branches must be invisible to each other.</p>
-<p>This design mirrors the <a href="https://github.com/google/adk-java/blob/main/core/src/main/java/com/google/adk/events/Event.java">Google ADK Java <code>Event.branch</code></a>
-field and the isolation semantics it defines.</p>
+<h1 id="cross-session-recall">Cross-Session Recall<a class="headerlink" href="#cross-session-recall" title="Permanent link">&para;</a></h1>
+<p><code>CrossSessionRecallTools</code> searches <strong>every session belonging to one user</strong>, not just the
+session the current request is scoped to. It exists for background/maintenance agents —
+the motivating case is a memory-consolidation agent that periodically mines a user's full
+conversation history for signal (corrections, explicit "remember this" requests,
+decisions) — not for the live conversational agent answering the user directly.</p>
 <hr />
-<h2 id="branch-format">Branch format<a class="headerlink" href="#branch-format" title="Permanent link">&para;</a></h2>
-<p><code>SessionEvent.branch</code> is a dot-separated path that records the agent hierarchy that
-produced the event:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>orchestrator                        branch = &quot;orch&quot;
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>├── researcher                      branch = &quot;orch.researcher&quot;
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>│   └── summarizer                  branch = &quot;orch.researcher.summarizer&quot;
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>└── writer                          branch = &quot;orch.writer&quot;
-</span></code></pre></div>
-<p>Events produced before any delegation (e.g. the initial user message) have
-<code>branch = null</code> and are visible to every agent in the session.</p>
-<hr />
-<h2 id="tagging-events">Tagging events<a class="headerlink" href="#tagging-events" title="Permanent link">&para;</a></h2>
-<p>Each agent tags its own events with its branch when appending to the session:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">// Root event (no branch) — visible to all agents</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">service</span><span class="p">.</span><span class="na">appendEvent</span><span class="p">(</span><span class="n">SessionEvent</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="p">.</span><span class="na">sessionId</span><span class="p">(</span><span class="n">sessionId</span><span class="p">)</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="p">.</span><span class="na">message</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">UserMessage</span><span class="p">(</span><span class="s">&quot;Summarise the news today&quot;</span><span class="p">))</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">());</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1">// Orchestrator tags its own planning events</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">service</span><span class="p">.</span><span class="na">appendEvent</span><span class="p">(</span><span class="n">SessionEvent</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="p">.</span><span class="na">sessionId</span><span class="p">(</span><span class="n">sessionId</span><span class="p">)</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="p">.</span><span class="na">message</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">AssistantMessage</span><span class="p">(</span><span class="s">&quot;Delegating to researcher and writer&quot;</span><span class="p">))</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="p">.</span><span class="na">branch</span><span class="p">(</span><span class="s">&quot;orch&quot;</span><span class="p">)</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">());</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="c1">// Each sub-agent tags its events with its own branch</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="n">service</span><span class="p">.</span><span class="na">appendEvent</span><span class="p">(</span><span class="n">SessionEvent</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="p">.</span><span class="na">sessionId</span><span class="p">(</span><span class="n">sessionId</span><span class="p">)</span>
-</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">    </span><span class="p">.</span><span class="na">message</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">AssistantMessage</span><span class="p">(</span><span class="s">&quot;Research findings...&quot;</span><span class="p">))</span>
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">    </span><span class="p">.</span><span class="na">branch</span><span class="p">(</span><span class="s">&quot;orch.researcher&quot;</span><span class="p">)</span>
-</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">());</span>
-</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="n">service</span><span class="p">.</span><span class="na">appendEvent</span><span class="p">(</span><span class="n">SessionEvent</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
-</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">    </span><span class="p">.</span><span class="na">sessionId</span><span class="p">(</span><span class="n">sessionId</span><span class="p">)</span>
-</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="w">    </span><span class="p">.</span><span class="na">message</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">AssistantMessage</span><span class="p">(</span><span class="s">&quot;Draft article...&quot;</span><span class="p">))</span>
-</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="w">    </span><span class="p">.</span><span class="na">branch</span><span class="p">(</span><span class="s">&quot;orch.writer&quot;</span><span class="p">)</span>
-</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">());</span>
-</span></code></pre></div>
-<hr />
-<h2 id="filtering-by-branch">Filtering by branch<a class="headerlink" href="#filtering-by-branch" title="Permanent link">&para;</a></h2>
-<p>Pass <code>EventFilter.forBranch(agentBranch)</code> when loading history for a sub-agent:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// Researcher sees: null-branch events + &quot;orch&quot; events + own &quot;orch.researcher&quot; events</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1">// Hidden from researcher: &quot;orch.writer&quot; (sibling), &quot;orch.researcher.summarizer&quot; (child)</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">researcherHistory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">forBranch</span><span class="p">(</span><span class="s">&quot;orch.researcher&quot;</span><span class="p">));</span>
-</span></code></pre></div>
-<p>To apply branch isolation automatically inside <code>SessionMemoryAdvisor</code>, configure the
-<code>eventFilter</code> on the builder:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">researcherAdvisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="p">.</span><span class="na">eventFilter</span><span class="p">(</span><span class="n">EventFilter</span><span class="p">.</span><span class="na">forBranch</span><span class="p">(</span><span class="s">&quot;orch.researcher&quot;</span><span class="p">))</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1">// Pass the shared session ID on every request</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">chatClient</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="n">userMessage</span><span class="p">)</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sharedSessionId</span><span class="p">))</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
-</span></code></pre></div>
-<p>This ensures the advisor only injects events visible to <code>orch.researcher</code> into the
-prompt — root events and its own events — while sibling events from <code>orch.writer</code> remain
-hidden.</p>
-<hr />
-<h2 id="visibility-rules">Visibility rules<a class="headerlink" href="#visibility-rules" title="Permanent link">&para;</a></h2>
-<p><code>EventFilter.matches()</code> applies the following rule per event:</p>
+<h2 id="how-this-differs-from-conversation_search">How this differs from <code>conversation_search</code><a class="headerlink" href="#how-this-differs-from-conversation_search" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Event branch</th>
-<th>Visible to <code>orch.researcher</code>?</th>
-<th>Reason</th>
+<th></th>
+<th><a href="../recall-storage/"><code>conversation_search</code></a></th>
+<th><code>cross_session_search</code></th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>null</code></td>
-<td><strong>yes</strong></td>
-<td>Root event — visible to all</td>
+<td>Scope</td>
+<td>One session</td>
+<td>Every session belonging to one user</td>
 </tr>
 <tr>
-<td><code>"orch"</code></td>
-<td><strong>yes</strong></td>
-<td>Direct ancestor</td>
+<td>Session/user resolved from</td>
+<td><code>ToolContext</code>, automatically, per request</td>
+<td>Bound once at <strong>construction time</strong></td>
 </tr>
 <tr>
-<td><code>"orch.researcher"</code></td>
-<td><strong>yes</strong></td>
-<td>Own branch</td>
+<td>Who can change the scope</td>
+<td>The calling application, via <code>SessionMemoryAdvisor</code></td>
+<td>Nobody at runtime — fixed for the tool instance's lifetime</td>
 </tr>
 <tr>
-<td><code>"orch.writer"</code></td>
-<td>no</td>
-<td>Sibling branch</td>
+<td>Intended caller</td>
+<td>The live conversational agent, mid-chat</td>
+<td>A background/maintenance agent running out-of-band</td>
 </tr>
 <tr>
-<td><code>"orch.researcher.summarizer"</code></td>
-<td>no</td>
-<td>Child branch</td>
+<td>Query power</td>
+<td>Single keyword</td>
+<td>Multi-term (<code>ANY</code>/<code>ALL</code>), plus <code>since</code> date scoping</td>
+</tr>
+<tr>
+<td>Result shape</td>
+<td><code>timestamp</code>, <code>type</code>, <code>text</code></td>
+<td>Same, plus <code>sessionId</code></td>
 </tr>
 </tbody>
 </table>
-<p>The dot-separator check (<code>filterBranch.startsWith(eventBranch + ".")</code>) ensures that a
-branch named <code>"orch"</code> is never confused with one named <code>"orchestra"</code>.</p>
+<p>The scope difference is deliberate, not incidental. The target user is bound in Java code
+via <a href="#registration"><code>builder(SessionService, String)</code></a> rather than accepted as a tool-call
+parameter, specifically so a misbehaving or manipulated prompt cannot talk the tool into
+scanning a different user's sessions — the model never gets a parameter through which it
+could choose. Register <code>CrossSessionRecallTools</code> only on the <code>ChatClient</code> instances that
+should have this broader capability (e.g. an isolated background-agent <code>ChatClient</code>); never
+alongside <code>conversation_search</code> on the live user-facing agent, which should keep the
+narrower, request-scoped tool.</p>
 <hr />
-<h2 id="synthetic-events-and-branch">Synthetic events and branch<a class="headerlink" href="#synthetic-events-and-branch" title="Permanent link">&para;</a></h2>
-<p>Synthetic summary events produced by <code>RecursiveSummarizationCompactionStrategy</code> always
-have <code>branch = null</code>. This ensures compaction summaries remain visible to every agent in
-the session after context has been pruned, regardless of which branch was active when
-compaction ran.</p>
+<h2 id="registration">Registration<a class="headerlink" href="#registration" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">CrossSessionRecallTools</span><span class="w"> </span><span class="n">tools</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CrossSessionRecallTools</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;alice&quot;</span><span class="p">).</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1">// Custom page size (default EventFilter.DEFAULT_PAGE_SIZE = 10)</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">CrossSessionRecallTools</span><span class="w"> </span><span class="n">tools</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CrossSessionRecallTools</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;alice&quot;</span><span class="p">)</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="p">.</span><span class="na">pageSize</span><span class="p">(</span><span class="mi">20</span><span class="p">)</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">ChatClient</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ChatClient</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatModel</span><span class="p">)</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultTools</span><span class="p">(</span><span class="n">tools</span><span class="p">)</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span></code></pre></div>
+<p>There is no advisor dependency here — unlike <code>SessionEventTools</code>, <code>CrossSessionRecallTools</code>
+does not read anything from <code>ToolContext</code>. The <code>userId</code> passed to <code>builder(...)</code> is fixed
+for the tool instance's entire lifetime.</p>
 <hr />
-<h2 id="compaction-and-branches">Compaction and branches<a class="headerlink" href="#compaction-and-branches" title="Permanent link">&para;</a></h2>
-<p>Compaction strategies are branch-aware. When computing the cut point, <code>snapToTurnStart</code>
-only considers root-level (<code>branch == null</code>) <code>USER</code> events as valid turn boundaries.
-Branched <code>UserMessage</code> events represent prompts sent <em>to</em> a sub-agent and are
-turn-internal — snapping to one would split the root turn that contains the sub-agent
-exchange.</p>
-<p>See <a href="../compaction/#turn-boundary-safety">Turn-boundary Safety</a> in the compaction reference
-for the full explanation and event-log diagram.</p>
+<h2 id="tool-signature">Tool signature<a class="headerlink" href="#tool-signature" title="Permanent link">&para;</a></h2>
+<p>The <code>cross_session_search</code> tool is automatically discovered by Spring AI's tool mechanism.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>innerThought</code></td>
+<td>yes</td>
+<td>Agent's private reasoning (not returned to the caller)</td>
+</tr>
+<tr>
+<td><code>query</code></td>
+<td>yes</td>
+<td>Case-insensitive keyword, or comma-separated keywords (up to 20 terms per call)</td>
+</tr>
+<tr>
+<td><code>matchMode</code></td>
+<td>no</td>
+<td><code>"any"</code> (default) or <code>"all"</code> — how multiple comma-separated keywords in <code>query</code> combine</td>
+</tr>
+<tr>
+<td><code>since</code></td>
+<td>no</td>
+<td>ISO-8601 instant (e.g. <code>2026-07-01T00:00:00Z</code>); only events at or after this time are considered. Omit to search the full history</td>
+</tr>
+<tr>
+<td><code>page</code></td>
+<td>no</td>
+<td>Zero-indexed result page; defaults to <code>0</code>; negative values are clamped to <code>0</code></td>
+</tr>
+</tbody>
+</table>
+<p>Results are aggregated across every session belonging to the configured user, sorted
+chronologically by the actual event <code>Instant</code> (not a string comparison — see
+<a href="#design-notes">Design notes</a>), and returned as a JSON array:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">[</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;sessionId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sess-123&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2025-06-01T12:00:00Z&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;We decided to use PostgreSQL&quot;</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;sessionId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sess-456&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2025-06-03T09:15:00Z&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Actually, let&#39;s go with blue-green deploys&quot;</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">]</span>
+</span></code></pre></div>
+<p>When nothing matches: <code>"No results found."</code> is returned.</p>
+<hr />
+<h2 id="multi-term-queries">Multi-term queries<a class="headerlink" href="#multi-term-queries" title="Permanent link">&para;</a></h2>
+<p>Supply comma-separated terms in <code>query</code> to search for more than one term at once:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>query = &quot;we decided, let&#39;s go with&quot;        matchMode = (omitted → &quot;any&quot;)
+</span></code></pre></div>
+<p>matches an event whose text contains <strong>either</strong> term. Set <code>matchMode = "all"</code> to require
+<strong>every</strong> term to be present in the same event's text. A <code>query</code> that yields zero usable
+terms after splitting and trimming (e.g. <code>","</code> or <code>", "</code>) is rejected with an error rather
+than silently falling back to "no filter" — see <a href="#design-notes">Design notes</a>.</p>
+<p>The term count is capped at 20 per call (<code>CrossSessionRecallTools.MAX_QUERY_TERMS</code>). Each
+term becomes its own predicate — and, on a JDBC-backed <code>SessionService</code>, its own bound SQL
+parameter — so an unbounded term count would let a single call grow the generated query
+without limit. This is a sanity limit, not a security boundary in itself: every term is
+still safely bound, never concatenated into SQL text, regardless of the cap.</p>
+<hr />
+<h2 id="date-scoped-queries">Date-scoped queries<a class="headerlink" href="#date-scoped-queries" title="Permanent link">&para;</a></h2>
+<p>Pass <code>since</code> to only consider events at or after a given instant — useful for an agent
+that runs periodically and only wants to see what's new since its last pass:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>since = &quot;2026-07-01T00:00:00Z&quot;
+</span></code></pre></div>
+<p>A malformed <code>since</code> (e.g. a date without a time component) is rejected with a clear error
+naming the expected format, rather than propagating a raw parser exception.</p>
+<hr />
+<h2 id="design-notes">Design notes<a class="headerlink" href="#design-notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Read-only.</strong> <code>CrossSessionRecallTools</code> has no append/compact/delete capability — it can
+  only call <code>SessionService.findByUserId(...)</code> and <code>SessionService.getEvents(...)</code>.</li>
+<li><strong>Aggregation happens client-side.</strong> Because results span multiple sessions, each
+  matching session is queried individually via <code>SessionService.getEvents(sessionId,
+  filter)</code>, and the results are merged and sorted afterward — by the events' actual
+  <code>Instant</code> timestamps, not by comparing their string renderings (<code>Instant.toString()</code>
+  omits the fractional-seconds component when it is exactly zero but includes it
+  otherwise, so two rendered timestamps of different lengths do not always compare in
+  chronological order).</li>
+<li><strong>No per-session pagination pushdown.</strong> Each session's full matching event set is
+  fetched before pagination is applied to the aggregate — cost scales with a user's total
+  historical event count across all sessions, not just the page size requested. Fine for
+  typical usage; worth keeping in mind for a user with a very large number of long-lived
+  sessions.</li>
+<li><strong><code>pattern</code>/regex is intentionally not exposed here.</strong> <code>EventFilter</code> supports a
+  <code>pattern</code> criterion (see <a href="../event-filtering/">Event Filtering</a>), but
+  <code>cross_session_search</code> only exposes plain-substring <code>keywords</code>/<code>matchMode</code> search — never
+  a raw regex string a model could supply. See the ReDoS warning on
+  <a href="../event-filtering/#static-factory-shortcuts">Event Filtering</a> for why.</li>
+</ul>
+<hr />
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../recall-storage/">Recall Storage</a> — the single-session <code>conversation_search</code> tool this
+  complements</li>
+<li><a href="../event-filtering/">Event Filtering</a> — the full <code>EventFilter</code> API, including
+  <code>keywords</code>/<code>matchMode</code>/<code>pattern</code></li>
+</ul>
 
 
 

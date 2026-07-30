@@ -529,6 +529,8 @@
       
         
       
+        
+      
     
     
     
@@ -729,6 +731,34 @@
     
   
     Recall Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="session-management/cross-session-recall/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Session Recall
   
 
     
@@ -1030,8 +1060,8 @@ the model may still need.</p>
 <ul>
 <li><strong>Event-sourced conversation log</strong> — append-only, immutable <code>SessionEvent</code> records
   wrapping Spring AI <code>Message</code> types</li>
-<li><strong>Composable event filtering</strong> — filter by message type, time range, keyword, branch,
-  last-N, or pagination</li>
+<li><strong>Composable event filtering</strong> — filter by message type, time range, single or
+  multi-term keyword (<code>ANY</code>/<code>ALL</code>), regular expression, branch, last-N, or pagination</li>
 <li><strong>Four compaction strategies</strong> out of the box:<ul>
 <li><code>SlidingWindowCompactionStrategy</code> — keep the last N real events</li>
 <li><code>TurnWindowCompactionStrategy</code> — keep the last N complete turns</li>
@@ -1046,8 +1076,10 @@ the model may still need.</p>
   concurrent requests without locking</li>
 <li><strong>Multi-agent branch isolation</strong> — dot-separated branch labels let peer sub-agents share
   one session while hiding each other's events</li>
-<li><strong>Recall storage tool</strong> — <code>SessionEventTools</code> gives the model a <code>conversation_search</code>
-  tool to keyword-search the full verbatim history even after compaction</li>
+<li><strong>Recall storage tools</strong> — <code>SessionEventTools</code> gives the model a <code>conversation_search</code>
+  tool to keyword-search the full verbatim history of the current session even after
+  compaction; <code>CrossSessionRecallTools</code> gives a background/maintenance agent a
+  <code>cross_session_search</code> tool to mine signal across <em>every</em> session a user has</li>
 <li><strong>Spring Boot auto-configuration</strong> for the JDBC repository (schema init, dialect
   detection, <code>JdbcSessionRepository</code> bean)</li>
 </ul>
