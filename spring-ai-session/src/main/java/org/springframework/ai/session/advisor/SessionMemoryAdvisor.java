@@ -77,6 +77,15 @@ import org.springframework.util.Assert;
  * so only the first writer succeeds; the second detects the version mismatch and skips
  * silently. No compaction result is lost or corrupted.
  *
+ * <p>
+ * <strong>Event id generation:</strong> by default every persisted event gets a fresh
+ * random id ({@link SessionEventRequestIdGenerator#random()} /
+ * {@link SessionEventResponseIdGenerator#random()}), so a retried append is always a new
+ * event. Configure {@link Builder#requestEventIdGenerator} / {@link Builder#responseEventIdGenerator}
+ * with a deterministic derivation (e.g. content-addressable, or reusing an upstream
+ * durability layer's own idempotency key) to make a retried append an idempotent no-op
+ * instead, via {@code SessionRepository.appendEvent}'s id-based replay contract.
+ *
  * @author Christian Tzolov
  * @since 2.0.0
  */
@@ -112,12 +121,17 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	private final MessageFilter messageFilter;
 
+	private final SessionEventRequestIdGenerator requestEventIdGenerator;
+
+	private final SessionEventResponseIdGenerator responseEventIdGenerator;
+
 	@Nullable private final CompactionTrigger compactionTrigger;
 
 	@Nullable private final CompactionStrategy compactionStrategy;
 
 	private SessionMemoryAdvisor(SessionService sessionService, String defaultUserId, int order, Scheduler scheduler,
-			EventFilter eventFilter, MessageFilter messageFilter, @Nullable CompactionTrigger compactionTrigger,
+			EventFilter eventFilter, MessageFilter messageFilter, SessionEventRequestIdGenerator requestEventIdGenerator,
+			SessionEventResponseIdGenerator responseEventIdGenerator, @Nullable CompactionTrigger compactionTrigger,
 			@Nullable CompactionStrategy compactionStrategy) {
 		this.sessionService = sessionService;
 		this.defaultUserId = defaultUserId;
@@ -125,6 +139,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		this.scheduler = scheduler;
 		this.eventFilter = eventFilter;
 		this.messageFilter = messageFilter;
+		this.requestEventIdGenerator = requestEventIdGenerator;
+		this.responseEventIdGenerator = responseEventIdGenerator;
 		this.compactionTrigger = compactionTrigger;
 		this.compactionStrategy = compactionStrategy;
 	}
@@ -205,7 +221,11 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// untouched.
 		Message userMessage = request.prompt().getLastUserOrToolResponseMessage();
 		if (userMessage != null && shouldPersist(userMessage, sessionId)) {
-			this.sessionService.appendMessage(sessionId, userMessage);
+			this.sessionService.appendEvent(SessionEvent.builder()
+				.id(this.requestEventIdGenerator.generate(request, userMessage))
+				.sessionId(sessionId)
+				.message(userMessage)
+				.build());
 		}
 
 		return request.mutate().prompt(request.prompt().mutate().messages(combined).build()).build();
@@ -224,7 +244,11 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 				.stream()
 				.map(g -> (Message) g.getOutput())
 				.filter(msg -> shouldPersist(msg, sessionId))
-				.forEach(msg -> this.sessionService.appendMessage(sessionId, msg));
+				.forEach(msg -> this.sessionService.appendEvent(SessionEvent.builder()
+					.id(this.responseEventIdGenerator.generate(response, msg))
+					.sessionId(sessionId)
+					.message(msg)
+					.build()));
 		}
 
 		// 2. Compact synchronously if configured — the full turn (user + assistant) is
@@ -300,6 +324,10 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		private MessageFilter messageFilter = MessageFilter.skipEmptyMessages();
 
+		private SessionEventRequestIdGenerator requestEventIdGenerator = SessionEventRequestIdGenerator.random();
+
+		private SessionEventResponseIdGenerator responseEventIdGenerator = SessionEventResponseIdGenerator.random();
+
 		@Nullable private CompactionTrigger compactionTrigger;
 
 		@Nullable private CompactionStrategy compactionStrategy;
@@ -373,13 +401,38 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			return this;
 		}
 
+		/**
+		 * Overrides how the id is derived for the session event persisted in
+		 * {@code before()} (the current user/tool-response message). Defaults to
+		 * {@link SessionEventRequestIdGenerator#random()} -- a fresh random id every
+		 * call, i.e. today's behaviour. Supply a deterministic generator to make a
+		 * retried append idempotent instead of a duplicate.
+		 */
+		public Builder requestEventIdGenerator(SessionEventRequestIdGenerator requestEventIdGenerator) {
+			Assert.notNull(requestEventIdGenerator, "requestEventIdGenerator must not be null");
+			this.requestEventIdGenerator = requestEventIdGenerator;
+			return this;
+		}
+
+		/**
+		 * Overrides how the id is derived for each session event persisted in
+		 * {@code after()} (the assistant reply message(s)). Defaults to
+		 * {@link SessionEventResponseIdGenerator#random()}.
+		 */
+		public Builder responseEventIdGenerator(SessionEventResponseIdGenerator responseEventIdGenerator) {
+			Assert.notNull(responseEventIdGenerator, "responseEventIdGenerator must not be null");
+			this.responseEventIdGenerator = responseEventIdGenerator;
+			return this;
+		}
+
 		public SessionMemoryAdvisor build() {
 			if ((this.compactionTrigger == null) != (this.compactionStrategy == null)) {
 				throw new IllegalArgumentException(
 						"compactionTrigger and compactionStrategy must be set together — set both or neither");
 			}
 			return new SessionMemoryAdvisor(this.sessionService, this.defaultUserId, this.order, this.scheduler,
-					this.eventFilter, this.messageFilter, this.compactionTrigger, this.compactionStrategy);
+					this.eventFilter, this.messageFilter, this.requestEventIdGenerator, this.responseEventIdGenerator,
+					this.compactionTrigger, this.compactionStrategy);
 		}
 
 	}
