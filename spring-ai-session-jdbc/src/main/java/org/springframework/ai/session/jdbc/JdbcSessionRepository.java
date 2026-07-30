@@ -45,6 +45,7 @@ import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -83,6 +84,13 @@ import org.springframework.util.Assert;
  * every {@link #appendEvent} and {@link #compactEvents} call. {@code compactEvents} guards
  * compaction by issuing a conditional {@code UPDATE … WHERE event_version = ?} first; if
  * zero rows are updated the swap is abandoned and {@code false} is returned.
+ *
+ * <h2>Idempotent append</h2>
+ * <p>
+ * {@code AI_SESSION_EVENT.id} is the table's primary key, so {@link #appendEvent} relies
+ * on the resulting unique-constraint violation (translated by Spring JDBC to
+ * {@link org.springframework.dao.DuplicateKeyException}) to detect a retried append of an
+ * event whose id was already committed, and treats it as a no-op instead of propagating.
  *
  * <h2>Event ordering</h2>
  * <p>
@@ -217,11 +225,22 @@ public final class JdbcSessionRepository implements SessionRepository {
 		Assert.notNull(event, "event must not be null");
 		String sessionId = event.getSessionId();
 		requireSessionExists(sessionId);
-		this.transactionTemplate.execute(status -> {
-			insertEvent(event);
-			this.jdbcTemplate.update(INCREMENT_EVENT_VERSION, sessionId);
-			return null;
-		});
+		try {
+			this.transactionTemplate.execute(status -> {
+				insertEvent(event);
+				this.jdbcTemplate.update(INCREMENT_EVENT_VERSION, sessionId);
+				return null;
+			});
+		}
+		catch (DuplicateKeyException ex) {
+			// Idempotent replay: an event with this id (SessionEvent#getId()) was
+			// already committed, e.g. a retried append after a crash between the insert
+			// and the caller receiving confirmation. Treat as a no-op rather than
+			// propagating -- the transaction above has already rolled back, so neither
+			// the insert nor the version increment took effect twice.
+			logger.debug("appendEvent: event {} already exists for session {}; treating as an idempotent replay",
+					event.getId(), sessionId);
+		}
 	}
 
 	@Override

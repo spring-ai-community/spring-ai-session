@@ -80,6 +80,29 @@ ChatClient client = ChatClient.builder(chatModel)
 
 ---
 
+## Idempotent session-event ids {#idempotent-session-event-ids}
+
+By default every persisted event gets a random id, so a retried write always creates a
+new event. Configure `requestEventIdGenerator`/`responseEventIdGenerator` to derive a
+deterministic id instead — a retry with the same id becomes a no-op (see [Idempotent
+`appendEvent`](concepts.md)):
+
+```java
+IdempotentSessionEventIdGenerator idGenerator = new IdempotentSessionEventIdGenerator();
+
+SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
+    .requestEventIdGenerator(idGenerator)
+    .responseEventIdGenerator(idGenerator)
+    .build();
+```
+
+`IdempotentSessionEventIdGenerator` reuses the model's own tool-call/tool-response ids
+where present, otherwise hashes a configurable context-key fingerprint (session id by
+default). Pass additional keys — e.g. a per-request run id — to scope ids more tightly,
+so retries still dedupe but distinct calls with identical content don't collide.
+
+---
+
 ## Passing a session ID per request
 
 Pass a session ID at call time via the advisor context:

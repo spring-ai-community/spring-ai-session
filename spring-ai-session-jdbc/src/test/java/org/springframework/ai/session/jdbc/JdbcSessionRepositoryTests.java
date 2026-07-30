@@ -187,6 +187,37 @@ class JdbcSessionRepositoryTests {
 	}
 
 	@Test
+	void appendEventWithSameIdIsIdempotent() {
+		Session session = buildSession("user-1");
+		this.repository.save(session);
+		SessionEvent event = SessionEvent.builder()
+			.id("deterministic-event-id")
+			.sessionId(session.id())
+			.message(new UserMessage("hi"))
+			.build();
+
+		this.repository.appendEvent(event);
+		long versionAfterFirst = this.repository.getEventVersion(session.id());
+		this.repository.appendEvent(event);
+		long versionAfterReplay = this.repository.getEventVersion(session.id());
+
+		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).hasSize(1);
+		assertThat(versionAfterReplay).isEqualTo(versionAfterFirst);
+	}
+
+	@Test
+	void appendEventWithDifferentIdIsNotTreatedAsDuplicate() {
+		Session session = buildSession("user-1");
+		this.repository.save(session);
+		this.repository.appendEvent(
+				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("first")).build());
+		this.repository.appendEvent(
+				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("second")).build());
+
+		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).hasSize(2);
+	}
+
+	@Test
 	void appendedEventsAreReturnedInChronologicalOrder() {
 		Session session = buildSession("user-order");
 		this.repository.save(session);
