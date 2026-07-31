@@ -186,20 +186,14 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// If the request context contains an EventFilter, merge it with the advisor's
 		// configured filter so that request-level parameters override the advisor
 		// defaults
-		EventFilter eventFilter = this.eventFilter;
-		if (request.context().containsKey(EVENT_FILTER_CONTEXT_KEY)) {
-			EventFilter requestEventFilter = (EventFilter) request.context().get(EVENT_FILTER_CONTEXT_KEY);
-			if (requestEventFilter != null) {
-				eventFilter = this.eventFilter.merge(requestEventFilter);
-			}
-		}
+		EventFilter eventFilter = getEventFilter(request.context());
 
 		// Always exclude archived events from the active context window — they were
 		// compacted out and live on only for Recall Storage search. Merging forces the
 		// flag on regardless of the configured or per-request filter.
-		eventFilter = eventFilter.merge(EventFilter.active());
+		EventFilter fetchFilter = eventFilter.merge(EventFilter.active());
 
-		List<SessionEvent> events = this.sessionService.getEvents(sessionId, eventFilter);
+		List<SessionEvent> events = this.sessionService.getEvents(sessionId, fetchFilter);
 		List<Message> history = events.stream().map(SessionEvent::getMessage).toList();
 
 		List<Message> combined = new ArrayList<>(history);
@@ -224,6 +218,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			this.sessionService.appendEvent(SessionEvent.builder()
 				.id(this.requestEventIdGenerator.generate(request, userMessage))
 				.sessionId(sessionId)
+				.branch(eventFilter.branch())
 				.message(userMessage)
 				.build());
 		}
@@ -239,6 +234,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// configured message filter. By default excludes messages that carry no
 		// content — blank text, no tool calls, and no media.
 		if (response.chatResponse() != null) {
+			Map<String, @Nullable Object> context = response.context();
+			String branch = getEventFilter(context).branch();
 			response.chatResponse()
 				.getResults()
 				.stream()
@@ -247,6 +244,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 				.forEach(msg -> this.sessionService.appendEvent(SessionEvent.builder()
 					.id(this.responseEventIdGenerator.generate(response, msg))
 					.sessionId(sessionId)
+					.branch(branch)
 					.message(msg)
 					.build()));
 		}
@@ -282,6 +280,15 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		throw new IllegalStateException(
 				"No session ID found in advisor context. " + "Set SESSION_ID_CONTEXT_KEY on every request: "
 						+ ".advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))");
+	}
+
+	private EventFilter getEventFilter(Map<String, @Nullable Object> context) {
+		EventFilter filter = this.eventFilter;
+		EventFilter requestFilter = (EventFilter) context.get(EVENT_FILTER_CONTEXT_KEY);
+		if (requestFilter != null) {
+			filter = filter.merge(requestFilter);
+		}
+		return filter;
 	}
 
 	private String getUserId(Map<String, @Nullable Object> context) {
