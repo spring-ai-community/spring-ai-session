@@ -46,6 +46,7 @@ nav:
       - ChatClient Integration: session-management/chat-client.md
       - Multi-Agent Branch Isolation: session-management/multi-agent.md
       - Recall Storage: session-management/recall-storage.md
+      - Cross-Session Recall: session-management/cross-session-recall.md
   - Session JDBC:
       - Overview & Setup: session-jdbc/index.md
       - Auto-configuration: session-jdbc/auto-configuration.md

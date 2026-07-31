@@ -17,11 +17,14 @@
 package org.springframework.ai.session;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.session.EventFilter.MatchMode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -80,6 +83,23 @@ class EventFilterMergeTests {
 		EventFilter base = EventFilter.builder().keyword("spring").pageSize(5).build();
 		EventFilter other = EventFilter.builder().keyword("ai").pageSize(5).build();
 		assertThat(base.merge(other).keyword()).isEqualTo("ai");
+	}
+
+	@Test
+	void otherKeywordsAndMatchModeOverrideBase() {
+		EventFilter base = EventFilter.keywordsSearch(List.of("spring"), MatchMode.ANY);
+		EventFilter other = EventFilter.keywordsSearch(List.of("actually", "instead"), MatchMode.ALL);
+		EventFilter merged = base.merge(other);
+		assertThat(merged.keywords()).containsExactly("actually", "instead");
+		assertThat(merged.matchMode()).isEqualTo(MatchMode.ALL);
+	}
+
+	@Test
+	void otherPatternOverridesBase() {
+		EventFilter base = EventFilter.patternSearch(Pattern.compile("we decided"));
+		EventFilter other = EventFilter.patternSearch(Pattern.compile("let's go with"));
+		EventFilter merged = base.merge(other);
+		assertThat(merged.pattern().pattern()).isEqualTo("let's go with");
 	}
 
 	@Test

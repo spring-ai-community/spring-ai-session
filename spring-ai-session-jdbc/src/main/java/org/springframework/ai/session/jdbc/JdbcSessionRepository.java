@@ -25,6 +25,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import javax.sql.DataSource;
 
@@ -45,6 +46,7 @@ import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -83,6 +85,13 @@ import org.springframework.util.Assert;
  * every {@link #appendEvent} and {@link #compactEvents} call. {@code compactEvents} guards
  * compaction by issuing a conditional {@code UPDATE … WHERE event_version = ?} first; if
  * zero rows are updated the swap is abandoned and {@code false} is returned.
+ *
+ * <h2>Idempotent append</h2>
+ * <p>
+ * {@code AI_SESSION_EVENT.id} is the table's primary key, so {@link #appendEvent} relies
+ * on the resulting unique-constraint violation (translated by Spring JDBC to
+ * {@link org.springframework.dao.DuplicateKeyException}) to detect a retried append of an
+ * event whose id was already committed, and treats it as a no-op instead of propagating.
  *
  * <h2>Event ordering</h2>
  * <p>
@@ -217,11 +226,22 @@ public final class JdbcSessionRepository implements SessionRepository {
 		Assert.notNull(event, "event must not be null");
 		String sessionId = event.getSessionId();
 		requireSessionExists(sessionId);
-		this.transactionTemplate.execute(status -> {
-			insertEvent(event);
-			this.jdbcTemplate.update(INCREMENT_EVENT_VERSION, sessionId);
-			return null;
-		});
+		try {
+			this.transactionTemplate.execute(status -> {
+				insertEvent(event);
+				this.jdbcTemplate.update(INCREMENT_EVENT_VERSION, sessionId);
+				return null;
+			});
+		}
+		catch (DuplicateKeyException ex) {
+			// Idempotent replay: an event with this id (SessionEvent#getId()) was
+			// already committed, e.g. a retried append after a crash between the insert
+			// and the caller receiving confirmation. Treat as a no-op rather than
+			// propagating -- the transaction above has already rolled back, so neither
+			// the insert nor the version increment took effect twice.
+			logger.debug("appendEvent: event {} already exists for session {}; treating as an idempotent replay",
+					event.getId(), sessionId);
+		}
 	}
 
 	@Override
@@ -271,6 +291,16 @@ public final class JdbcSessionRepository implements SessionRepository {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(filter, "filter must not be null");
 
+		// A java.util.regex.Pattern cannot be safely translated to portable SQL — H2,
+		// MySQL, and PostgreSQL each have their own regex dialect, none of which is a
+		// strict superset of Java's regex syntax (backreferences, lookaround, named
+		// groups). When `pattern` is set, every other criterion is still pushed down to
+		// SQL as usual, but LIMIT/OFFSET is deferred: the pattern (and, redundantly but
+		// harmlessly, every other criterion) is re-checked in Java via EventFilter.matches
+		// against the full SQL-filtered result, then lastN/page/pageSize is applied
+		// in-memory — mirroring how InMemorySessionRepository filters and paginates.
+		boolean patternRequiresInMemoryFiltering = filter.pattern() != null;
+
 		StringBuilder sql = new StringBuilder(SELECT_EVENTS_BASE);
 		List<Object> params = new ArrayList<>();
 		params.add(sessionId);
@@ -309,8 +339,23 @@ public final class JdbcSessionRepository implements SessionRepository {
 			sql.append(this.dialect.getKeywordFilterFragment()).append(" ");
 			params.add("%" + filter.keyword() + "%");
 		}
+		if (filter.keywords() != null) {
+			sql.append("AND (");
+			String joiner = filter.matchMode() == EventFilter.MatchMode.ALL ? " AND " : " OR ";
+			for (int i = 0; i < filter.keywords().size(); i++) {
+				if (i > 0) {
+					sql.append(joiner);
+				}
+				sql.append(this.dialect.getKeywordPredicateFragment());
+				params.add("%" + filter.keywords().get(i) + "%");
+			}
+			sql.append(") ");
+		}
 
-		if (filter.lastN() != null) {
+		if (patternRequiresInMemoryFiltering) {
+			sql.append("ORDER BY e.seq ASC ");
+		}
+		else if (filter.lastN() != null) {
 			sql.append("ORDER BY e.seq DESC LIMIT ? ");
 			params.add(filter.lastN());
 		}
@@ -327,12 +372,43 @@ public final class JdbcSessionRepository implements SessionRepository {
 		List<SessionEvent> result = this.jdbcTemplate.query(sql.toString(), new SessionEventRowMapper(),
 				params.toArray());
 
-		if (filter.lastN() != null) {
+		if (patternRequiresInMemoryFiltering) {
+			result = result.stream().filter(filter::matches).collect(Collectors.toCollection(ArrayList::new));
+			result = applyInMemoryPagination(result, filter);
+		}
+		else if (filter.lastN() != null) {
 			result = new ArrayList<>(result);
 			Collections.reverse(result);
 		}
 
 		return Collections.unmodifiableList(result);
+	}
+
+	/**
+	 * Applies {@code lastN} / {@code page}+{@code pageSize} slicing to an already
+	 * fully-filtered, seq-ascending event list. Only used on the {@code pattern}
+	 * in-memory-filtering path above, where SQL-level LIMIT/OFFSET can't be used because
+	 * the pattern criterion is only evaluated after the query runs. Mirrors
+	 * InMemorySessionRepository's pagination so both backends behave identically.
+	 */
+	private static List<SessionEvent> applyInMemoryPagination(List<SessionEvent> matched, EventFilter filter) {
+		if (filter.lastN() != null) {
+			if (matched.size() > filter.lastN()) {
+				return new ArrayList<>(matched.subList(matched.size() - filter.lastN(), matched.size()));
+			}
+			return matched;
+		}
+		if (filter.pageSize() != null) {
+			int page = filter.page() != null ? filter.page() : 0;
+			long fromIndexLong = (long) page * filter.pageSize();
+			if (fromIndexLong >= matched.size()) {
+				return new ArrayList<>();
+			}
+			int fromIndex = (int) fromIndexLong;
+			int toIndex = (int) Math.min(fromIndexLong + filter.pageSize(), matched.size());
+			return new ArrayList<>(matched.subList(fromIndex, toIndex));
+		}
+		return matched;
 	}
 
 	// -------------------------------------------------------------------------

@@ -72,6 +72,26 @@ public interface JdbcSessionRepositoryDialect {
 	String getKeywordFilterFragment();
 
 	/**
+	 * Case-insensitive substring <em>predicate</em> — no leading {@code AND}, exactly one
+	 * {@code ?} placeholder — against the event's message content. Used by
+	 * {@code JdbcSessionRepository} to build the multi-term
+	 * {@link org.springframework.ai.session.EventFilter#keywords()} /
+	 * {@link org.springframework.ai.session.EventFilter#matchMode()} filter, repeating
+	 * this predicate once per term and joining with {@code AND}/{@code OR} depending on
+	 * match mode (e.g. {@code AND (pred OR pred OR pred)}).
+	 *
+	 * <p>
+	 * Defaults to the same expression as {@link #getKeywordFilterFragment()} minus the
+	 * {@code AND } prefix, which is correct for every dialect shipped today (they all use
+	 * identical {@code LOWER(COALESCE(...)) LIKE ?} SQL — only branch-visibility
+	 * concatenation actually differs across databases). Override only if a future dialect
+	 * needs different substring-match SQL.
+	 */
+	default String getKeywordPredicateFragment() {
+		return "LOWER(COALESCE(e.message_content, '')) LIKE ?";
+	}
+
+	/**
 	 * Branch visibility filter fragment for multi-agent event isolation. The clause
 	 * matches events that are visible to the given branch: root events (null branch),
 	 * exact branch match, or ancestor branches (the caller is a descendant).

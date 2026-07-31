@@ -140,6 +140,22 @@ compaction safe under concurrent access.
 JSON blob) so `EventFilter.excludeSynthetic()` translates to a SQL predicate instead of
 an in-process scan.
 
+**`EventFilter.keyword()`/`keywords()`** both translate to SQL `LIKE` predicates —
+`keyword` as a single `AND LOWER(...) LIKE ?` clause, `keywords` as N such clauses joined
+with `AND`/`OR` per `matchMode`, one bound parameter per term. Every term is bound as a
+JDBC parameter, never concatenated into the SQL text.
+
+**`EventFilter.pattern()` falls back to in-memory filtering.** A `java.util.regex.Pattern`
+cannot be safely translated to portable SQL — H2, MySQL, and PostgreSQL each have their
+own regex dialect, none a strict superset of Java's regex syntax (backreferences,
+lookaround, named groups). When `pattern` is set, every other criterion is still pushed
+down to SQL as usual, but pagination (`lastN`/`page`/`pageSize`) is deferred: the full
+SQL-filtered result set is fetched, `pattern` (and, redundantly but harmlessly, every
+other criterion) is re-checked via `EventFilter.matches()` in Java, and pagination is
+applied afterward — mirroring how `InMemorySessionRepository` filters and paginates.
+Expect a `pattern` query to scan more of a session's event history than an equivalent
+`keyword`/`keywords` query.
+
 ---
 
 ## See also

@@ -62,6 +62,14 @@ public interface SessionRepository {
 	 * Appends a single event to the session's event log. The target session is identified
 	 * by {@link SessionEvent#getSessionId()}. Also updates {@code lastActiveAt} on the
 	 * session.
+	 * <p>
+	 * <strong>Idempotent by id:</strong> if an event with the same
+	 * {@link SessionEvent#getId()} already exists for this session, this call is a no-op
+	 * — it does not throw, and it does not append a duplicate row or increment the
+	 * event-log version. This makes a retried append (e.g. after a crash between the
+	 * write and the caller receiving confirmation) safe to repeat. Callers that want this
+	 * safety should supply a deterministic id (e.g. derived from a durable run/turn id)
+	 * rather than relying on {@link SessionEvent.Builder}'s random default.
 	 * @throws IllegalArgumentException if the session does not exist
 	 */
 	void appendEvent(SessionEvent event);
@@ -103,8 +111,10 @@ public interface SessionRepository {
 
 	/**
 	 * Returns the current event-log version for the given session. The version is
-	 * incremented atomically on every {@link #appendEvent} and {@link #compactEvents}
-	 * call. Returns {@code 0} when the session does not exist or has no events yet.
+	 * incremented atomically on every {@link #appendEvent} call that actually appends a
+	 * new event, and on every {@link #compactEvents} call (an idempotent replay of an
+	 * already-applied {@link #appendEvent} does not increment it). Returns {@code 0} when
+	 * the session does not exist or has no events yet.
 	 * <p>
 	 * Read this <em>before</em> calling {@link #findEvents} to obtain a version that is
 	 * guaranteed to be ≤ the version of the events you subsequently read, which is the

@@ -67,6 +67,35 @@ class InMemorySessionRepositoryTests {
 	}
 
 	@Test
+	void appendEventWithSameIdIsIdempotent() {
+		Session session = this.repository.save(buildSession("user-1"));
+		SessionEvent event = SessionEvent.builder()
+			.id("deterministic-event-id")
+			.sessionId(session.id())
+			.message(new UserMessage("hi"))
+			.build();
+
+		this.repository.appendEvent(event);
+		long versionAfterFirst = this.repository.getEventVersion(session.id());
+		this.repository.appendEvent(event);
+		long versionAfterReplay = this.repository.getEventVersion(session.id());
+
+		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).hasSize(1);
+		assertThat(versionAfterReplay).isEqualTo(versionAfterFirst);
+	}
+
+	@Test
+	void appendEventWithDifferentIdIsNotTreatedAsDuplicate() {
+		Session session = this.repository.save(buildSession("user-1"));
+		this.repository.appendEvent(
+				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("first")).build());
+		this.repository.appendEvent(
+				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("second")).build());
+
+		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).hasSize(2);
+	}
+
+	@Test
 	void findEventsLastNReturnsOnlyLastNEvents() {
 		Session session = buildSession("user-2");
 		this.repository.save(session);

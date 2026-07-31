@@ -665,6 +665,54 @@ class SessionMemoryAdvisorIT {
 		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
 	}
 
+	// --- Pluggable event id generation ---
+
+	@Test
+	void requestEventIdGeneratorMakesRetriedBeforeCallIdempotent() {
+		// A fixed id simulates a caller supplying a deterministic id for retry safety
+		// (e.g. derived from an upstream durability layer's own idempotency key).
+		SessionMemoryAdvisor deterministicAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.requestEventIdGenerator((request, message) -> "fixed-request-id")
+			.build();
+
+		ChatClientRequest request = buildRequest(this.sessionId, "hello");
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		deterministicAdvisor.before(request, chain);
+		deterministicAdvisor.before(request, chain);
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).hasSize(1);
+	}
+
+	@Test
+	void responseEventIdGeneratorMakesRetriedAfterCallIdempotent() {
+		SessionMemoryAdvisor deterministicAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.responseEventIdGenerator((response, message) -> "fixed-response-id")
+			.build();
+
+		ChatClientResponse response = buildResponse(this.sessionId, "answer");
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		deterministicAdvisor.after(response, chain);
+		deterministicAdvisor.after(response, chain);
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).hasSize(1);
+	}
+
+	@Test
+	void defaultEventIdGeneratorsProduceDistinctIdsAcrossRepeatedCalls() {
+		// Regression guard: without a custom generator, retried calls with identical
+		// content must NOT be deduped -- the random default must keep producing fresh
+		// ids, matching the pre-existing appendMessage() behaviour.
+		ChatClientRequest request = buildRequest(this.sessionId, "hello");
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		this.advisor.before(request, chain);
+		this.advisor.before(request, chain);
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).hasSize(2);
+	}
+
 	// --- Builder validation ---
 
 	@Test

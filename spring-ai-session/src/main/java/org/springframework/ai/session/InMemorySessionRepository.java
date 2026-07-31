@@ -106,6 +106,13 @@ public final class InMemorySessionRepository implements SessionRepository {
 			if (existing == null) {
 				throw new IllegalArgumentException("Session not found: " + sessionId);
 			}
+			boolean alreadyAppended = existing.events().stream().anyMatch(e -> e.getId().equals(event.getId()));
+			if (alreadyAppended) {
+				// Idempotent replay: an event with this id was already committed, e.g. a
+				// retried append after a crash. No-op -- do not duplicate the event or
+				// increment the version.
+				return existing;
+			}
 			List<SessionEvent> newEvents = new ArrayList<>(existing.events());
 			newEvents.add(event);
 			return existing.withEvents(newEvents);

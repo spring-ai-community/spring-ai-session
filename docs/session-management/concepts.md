@@ -209,6 +209,15 @@ CAS returns `false` — the caller treats this as a no-op rather than retrying. 
 implementations (JDBC, Redis) should map this to a database-level optimistic-lock column
 or a Redis `WATCH`.
 
+**Idempotent `appendEvent`**
+
+A retried `appendEvent` call for an id that was already committed is a no-op, not an
+error or a duplicate — both `InMemorySessionRepository` and `JdbcSessionRepository`
+check by `SessionEvent.getId()` (the table's primary key in the JDBC case) before
+writing. The default id is still a random UUID, so this only applies when a caller
+supplies its own deterministic id — see [`SessionMemoryAdvisor`'s pluggable id
+generators](chat-client.md#idempotent-session-event-ids).
+
 **Event ordering**
 
 Events are returned in insertion (logical conversation) order, not by wall-clock
