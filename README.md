@@ -52,7 +52,7 @@ spring-ai-session/
         <dependency>
             <groupId>org.springaicommunity</groupId>
             <artifactId>spring-ai-session-bom</artifactId>
-            <version>0.6.0</version>
+            <version>0.7.0</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
