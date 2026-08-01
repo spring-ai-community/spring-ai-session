@@ -102,10 +102,11 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 			}
 		}
 
-		// Snap the raw cut forward to the nearest root-level USER event so the kept
-		// window always starts at a turn boundary. Sub-agent USER messages (branch != null)
-		// are skipped — they are turn-internal, not turn starts.
-		int cutIndex = CompactionUtils.snapToTurnStart(real, rawCutIndex);
+		// Snap the raw cut forward to the nearest turn-boundary USER event (root-level for
+		// session scope; on-branch for branch scope) so the kept window always starts at a
+		// turn boundary. Turn-internal USER messages are skipped — they are turn-internal,
+		// not turn starts.
+		int cutIndex = CompactionUtils.snapToTurnStart(real, rawCutIndex, context.scope());
 
 		// Build kept and archived lists in chronological order
 		List<SessionEvent> kept = new ArrayList<>(real.subList(cutIndex, real.size()));

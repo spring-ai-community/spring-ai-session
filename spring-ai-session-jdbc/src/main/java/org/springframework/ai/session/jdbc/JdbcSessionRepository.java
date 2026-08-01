@@ -156,6 +156,15 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private static final String DELETE_ACTIVE_EVENTS =
 		"DELETE FROM AI_SESSION_EVENT WHERE session_id = ? AND archived = false";
 
+	// Scoped variant: only removes active events owned by scopeBranch (itself or a
+	// dot-prefix sub-branch), leaving root events and sibling branches untouched. The LIKE
+	// pattern is built in Java and bound as a parameter, so this is dialect-independent —
+	// unlike the ancestor-inclusive branch-visibility fragment used by findEvents(), no
+	// dialect override is needed here.
+	private static final String DELETE_ACTIVE_EVENTS_FOR_BRANCH =
+		"DELETE FROM AI_SESSION_EVENT WHERE session_id = ? AND archived = false"
+		+ " AND (branch = ? OR branch LIKE ?)";
+
 	private static final String SELECT_EVENTS_BASE =
 		"SELECT e.id, e.session_id, e.timestamp, e.message_type, e.message_content,"
 		+ "       e.message_data, e.synthetic, e.archived, e.branch, e.metadata"
@@ -245,7 +254,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public boolean compactEvents(String sessionId, List<SessionEvent> archivedEvents,
+	public boolean compactEvents(String sessionId, @Nullable String scopeBranch, List<SessionEvent> archivedEvents,
 			List<SessionEvent> retainedEvents, long expectedVersion) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(archivedEvents, "archivedEvents must not be null");
@@ -266,9 +275,17 @@ public final class JdbcSessionRepository implements SessionRepository {
 						(ps, event) -> ps.setString(1, event.getId()));
 			}
 
-			// Replace the active window with the retained events. Archived events
-			// remain untouched and preserve their original ordering.
-			this.jdbcTemplate.update(DELETE_ACTIVE_EVENTS, sessionId);
+			// Replace the active window with the retained events. Archived events remain
+			// untouched. For whole-session scope (scopeBranch == null) every active event
+			// is eligible for replacement, exactly as before. For branch scope, only active
+			// events owned by scopeBranch (itself or a dot-prefix sub-branch) are removed —
+			// root events and sibling branches are left in place.
+			if (scopeBranch == null) {
+				this.jdbcTemplate.update(DELETE_ACTIVE_EVENTS, sessionId);
+			}
+			else {
+				this.jdbcTemplate.update(DELETE_ACTIVE_EVENTS_FOR_BRANCH, sessionId, scopeBranch, scopeBranch + ".%");
+			}
 
 			if (!retainedEvents.isEmpty()) {
 				batchInsertEvents(retainedEvents);

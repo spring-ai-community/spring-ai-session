@@ -77,25 +77,26 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 		Assert.notNull(request, "request must not be null");
 
 		List<SessionEvent> events = request.events();
+		CompactionScope scope = request.scope();
 
 		// 1. Separate synthetic summary events — always preserved, always first
 		List<SessionEvent> synthetic = events.stream().filter(SessionEvent::isSynthetic).toList();
 		List<SessionEvent> real = events.stream().filter(e -> !e.isSynthetic()).toList();
 
-		// 2. Collect any preamble events that appear before the first user message
-		// (e.g., pre-seeded tool context). These are kept verbatim.
+		// 2. Collect any preamble events that appear before the first turn-boundary user
+		// message (e.g., pre-seeded tool context). These are kept verbatim.
 		List<SessionEvent> preamble = new ArrayList<>();
 		int firstUserIdx = 0;
-		while (firstUserIdx < real.size()
-				&& !(real.get(firstUserIdx).isRootEvent()
-						&& real.get(firstUserIdx).getMessageType() == MessageType.USER)) {
+		while (firstUserIdx < real.size() && !(scope.isTurnBoundary(real.get(firstUserIdx))
+				&& real.get(firstUserIdx).getMessageType() == MessageType.USER)) {
 			preamble.add(real.get(firstUserIdx));
 			firstUserIdx++;
 		}
 		List<SessionEvent> afterPreamble = real.subList(firstUserIdx, real.size());
 
-		// 3. Group into turns — each turn starts at a root-level user message
-		List<List<SessionEvent>> turns = groupIntoTurns(afterPreamble);
+		// 3. Group into turns — each turn starts at a turn-boundary user message (root-level
+		// for session scope; on-branch for branch scope)
+		List<List<SessionEvent>> turns = groupIntoTurns(afterPreamble, scope);
 
 		// 4. No-op if within budget
 		if (turns.size() <= this.maxTurns) {
@@ -123,17 +124,19 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 	}
 
 	/**
-	 * Groups a flat list of events into turns. Each turn starts with a root-level
-	 * ({@code branch == null}) {@link MessageType#USER} event. Sub-agent branch events are
-	 * grouped with the enclosing root turn. Assumes {@code events} begins with a root user
-	 * message (preamble has already been stripped).
+	 * Groups a flat list of events into turns. Each turn starts with an event that is a
+	 * turn boundary under {@code scope} (root-level for session scope; on-branch for
+	 * branch scope) and a {@link MessageType#USER} event. Events that are turn-internal
+	 * under {@code scope} (sub-agent branch events for session scope; sub-branch events for
+	 * branch scope) are grouped with the enclosing turn. Assumes {@code events} begins with
+	 * a turn-boundary user message (preamble has already been stripped).
 	 */
-	private static List<List<SessionEvent>> groupIntoTurns(List<SessionEvent> events) {
+	private static List<List<SessionEvent>> groupIntoTurns(List<SessionEvent> events, CompactionScope scope) {
 		List<List<SessionEvent>> turns = new ArrayList<>();
 		List<SessionEvent> currentTurn = null;
 
 		for (SessionEvent event : events) {
-			if (event.isRootEvent() && event.getMessageType() == MessageType.USER) {
+			if (scope.isTurnBoundary(event) && event.getMessageType() == MessageType.USER) {
 				if (currentTurn != null) {
 					turns.add(currentTurn);
 				}

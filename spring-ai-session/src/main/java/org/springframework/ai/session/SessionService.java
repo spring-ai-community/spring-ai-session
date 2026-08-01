@@ -23,6 +23,7 @@ import org.jspecify.annotations.Nullable;
 
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.session.compaction.CompactionResult;
+import org.springframework.ai.session.compaction.CompactionScope;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 
@@ -106,6 +107,22 @@ public interface SessionService {
 	 * {@link org.springframework.ai.session.compaction.CompactionResult#archivedEvents()}
 	 * is empty when the trigger did not fire or when the strategy archived nothing
 	 */
-	CompactionResult compact(String sessionId, CompactionTrigger trigger, CompactionStrategy strategy);
+	default CompactionResult compact(String sessionId, CompactionTrigger trigger, CompactionStrategy strategy) {
+		return compact(sessionId, CompactionScope.session(), trigger, strategy);
+	}
+
+	/**
+	 * Scoped variant of {@link #compact(String, CompactionTrigger, CompactionStrategy)}.
+	 * {@link CompactionScope#session()} reproduces the whole-session behaviour of the
+	 * 3-arg overload exactly. {@link CompactionScope#branch(String)} restricts both the
+	 * event window fed to the trigger/strategy and the repository write to events owned by
+	 * that branch (the branch itself and its dot-prefix sub-branches) — root events and
+	 * sibling branches are loaded and archived independently and are never affected.
+	 * @param scope what this compaction pass may archive/rewrite and what counts as a turn
+	 * boundary
+	 * @return the compaction result, scoped the same way
+	 */
+	CompactionResult compact(String sessionId, CompactionScope scope, CompactionTrigger trigger,
+			CompactionStrategy strategy);
 
 }
