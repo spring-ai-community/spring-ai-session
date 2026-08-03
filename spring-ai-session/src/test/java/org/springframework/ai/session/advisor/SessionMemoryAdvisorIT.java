@@ -173,6 +173,50 @@ class SessionMemoryAdvisorIT {
 	}
 
 	@Test
+	void beforeSkipsDuplicatingHistoryWhenNestedInsideToolCallingLoop() {
+		// Simulates a looping advisor such as ToolCallingAdvisor re-entering the chain
+		// once per tool-call round (see the class Javadoc "Nesting inside a
+		// tool-calling loop" section). From round 2 onward, the incoming prompt
+		// already carries this turn's messages -- the same messages round 1's
+		// before()/after() just persisted -- so before() must not prepend them again.
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		UserMessage userMessage = new UserMessage("What is the weather in Paris?");
+		AssistantMessage toolCallMessage = AssistantMessage.builder()
+			.toolCalls(
+					List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"city\":\"Paris\"}")))
+			.build();
+
+		// Round 1: only the user message is in the prompt.
+		this.advisor.before(buildRequest(this.sessionId, userMessage.getText()), chain);
+		this.advisor.after(buildResponseFromMessages(this.sessionId, toolCallMessage), chain);
+
+		// Round 2: the prompt already contains this turn's user message and tool-call
+		// message, plus the fresh tool response.
+		ToolResponseMessage toolResponse = ToolResponseMessage.builder()
+			.responses(
+					List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "15 degrees and sunny")))
+			.build();
+		Prompt round2Prompt = new Prompt(List.of(userMessage, toolCallMessage, toolResponse));
+		ChatClientRequest round2Request = ChatClientRequest.builder()
+			.prompt(round2Prompt)
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build();
+
+		ChatClientRequest modified = this.advisor.before(round2Request, chain);
+
+		// No duplication: the user message and tool-call message must not appear twice.
+		List<Message> instructions = modified.prompt().getInstructions();
+		assertThat(instructions).containsExactly(userMessage, toolCallMessage, toolResponse);
+
+		// The tool response is persisted for the first time; the user/assistant pair
+		// from round 1 is not persisted again.
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(3);
+		assertThat(events.get(2).getMessage()).isEqualTo(toolResponse);
+	}
+
+	@Test
 	void compactionIsTriggeredAfterThreshold() {
 		// Wire advisor with a very low compaction threshold (1 turn) and small window
 		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
