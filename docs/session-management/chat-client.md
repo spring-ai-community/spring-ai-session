@@ -70,13 +70,27 @@ ChatClient client = ChatClient.builder(chatModel)
     Setting only one of `compactionTrigger` or `compactionStrategy` throws
     `IllegalStateException`. Set both or neither.
 
-!!! note "Default advisor order"
+!!! note "Default advisor order — nested inside the tool-calling loop"
     The default order is `Ordered.HIGHEST_PRECEDENCE + 1000` (≈ `Integer.MIN_VALUE + 1000`),
-    giving `SessionMemoryAdvisor` higher precedence than `ToolAdvisor` (order `300`).
-    Higher precedence means `before()` runs first and `after()` runs last, so
-    `SessionMemoryAdvisor` wraps the tool advisor — tool results are fully resolved before
-    the session write in `after()`. Override with `.order(n)` if your pipeline requires a
-    different position.
+    numerically higher — i.e. **lower precedence** — than `ToolCallingAdvisor`'s default
+    order (`HIGHEST_PRECEDENCE + 300`). Advisors are sorted ascending by order and the
+    lowest value wraps everything after it, so at default orders `ToolCallingAdvisor` wraps
+    `SessionMemoryAdvisor`, not the other way round: `SessionMemoryAdvisor.before()`/`after()`
+    run once per round of the tool-call loop, not once per outer call.
+
+    This is deliberate and safe. From round 2 onward, the prompt handed to `before()`
+    already contains the current turn's messages (persisted by the previous round), and
+    `before()` detects that its retrieved history is already a contiguous run in that
+    prompt and skips prepending it again — so no duplicate messages reach the model.
+    Persisted events aren't duplicated either: only the round's trailing
+    user/tool-response message and the model's own reply are ever appended. This means
+    `SessionMemoryAdvisor` nests correctly under a default-configured `ToolCallingAdvisor`
+    with its internal conversation history left **enabled** — you don't need
+    `.disableInternalConversationHistory()` to avoid duplication.
+
+    Override with `.order(n)` (a value lower than the tool-calling advisor's) if your
+    pipeline instead needs `SessionMemoryAdvisor` to wrap the loop and write to the
+    session only once, after tool results are fully resolved.
 
 ---
 
