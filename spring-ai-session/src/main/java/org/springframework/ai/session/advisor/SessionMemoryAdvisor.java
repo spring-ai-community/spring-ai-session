@@ -86,6 +86,20 @@ import org.springframework.util.Assert;
  * durability layer's own idempotency key) to make a retried append an idempotent no-op
  * instead, via {@code SessionRepository.appendEvent}'s id-based replay contract.
  *
+ * <p>
+ * <strong>Nesting inside a tool-calling loop:</strong> an advisor such as
+ * {@code ToolCallingAdvisor} that implements its own tool-call loop re-enters the rest of
+ * the advisor chain once per round, so if this advisor's order places it deeper in the
+ * chain than the looping advisor, {@code before()}/{@code after()} run once per round too.
+ * From round 2 onward the prompt passed in already carries this turn's messages (they were
+ * persisted to the session by the previous round), so {@code before()} detects that the
+ * session history it just retrieved is already a contiguous run within the prompt and skips
+ * prepending it again -- avoiding duplicate messages in the prompt sent to the model. Actual
+ * persistence is unaffected by nesting depth: only the current turn's trailing
+ * user/tool-response message and the model's own reply are ever appended, and with a
+ * deterministic {@link IdempotentSessionEventIdGenerator} configured, a re-derived id makes
+ * a repeated append of the same message an idempotent no-op rather than a duplicate event.
+ *
  * @author Christian Tzolov
  * @since 2.0.0
  */
@@ -202,8 +216,21 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, eventFilter);
 		List<Message> history = events.stream().map(SessionEvent::getMessage).toList();
 
-		List<Message> combined = new ArrayList<>(history);
-		combined.addAll(request.prompt().getInstructions());
+		// 2.1. Skip re-prepending history that the prompt already carries. This
+		// happens when this advisor is nested inside a looping advisor -- e.g. a
+		// ToolCallingAdvisor with an order placing it deeper in the chain (see the
+		// order Javadoc on the Builder) -- whose tool-call loop re-enters before()
+		// once per round. From round 2 onward, request.prompt().getInstructions()
+		// already contains this turn's user/assistant/tool messages, persisted to
+		// the session by the previous round's before()/after(); without this guard
+		// getEvents() would return that same prefix and it would be prepended a
+		// second time.
+		List<Message> promptMessages = request.prompt().getInstructions();
+		List<Message> combined = new ArrayList<>();
+		if (!isHistoryAlreadyInPrompt(promptMessages, history)) {
+			combined.addAll(history);
+		}
+		combined.addAll(promptMessages);
 
 		// 3. Ensure all system messages appear first (preserving their relative order).
 		// A single pass collects every SystemMessage, removes them in place, then
@@ -290,6 +317,39 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	}
 
 	/**
+	 * Returns {@code true} if {@code history} already occurs as a contiguous run
+	 * somewhere in {@code promptMessages}, in which case prepending it again would
+	 * duplicate it. Meant to guard against the same class of duplication when a memory
+	 * advisor is re-entered inside a tool-calling loop.
+	 */
+	private static boolean isHistoryAlreadyInPrompt(List<Message> promptMessages, List<Message> history) {
+		if (history.isEmpty()) {
+			return true;
+		}
+		if (promptMessages.size() < history.size()) {
+			return false;
+		}
+		for (int offset = 0; offset <= promptMessages.size() - history.size(); offset++) {
+			if (startsWith(promptMessages, history, offset)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean startsWith(List<Message> messages, List<Message> prefix, int offset) {
+		if (messages.size() - offset < prefix.size()) {
+			return false;
+		}
+		for (int i = 0; i < prefix.size(); i++) {
+			if (!messages.get(i + offset).equals(prefix.get(i))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
 	 * Returns {@code true} if the message should be persisted to the session, delegating
 	 * to the configured {@link MessageFilter}. Rejected messages are logged and not
 	 * replayed on later requests.
@@ -313,9 +373,13 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		private String defaultUserId = "default-user";
 
-		// Higher precedence than default ToolCallingAdvisor: before() runs first, after()
-		// runs last, so tool results are fully resolved before being written to session
-		// history.
+		// Deliberately higher (lower-precedence) than ToolCallingAdvisor's default order
+		// (HIGHEST_PRECEDENCE + 300): with ascending order sort, the lower value runs
+		// outer, so this places SessionMemoryAdvisor nested inside a default-configured
+		// ToolCallingAdvisor's tool-call loop rather than wrapping it -- before()/after()
+		// then run once per round, which is what the isHistoryAlreadyInPrompt() guard in
+		// before() is built to tolerate (see the class Javadoc "Nesting inside a
+		// tool-calling loop" section).
 		private int order = Ordered.HIGHEST_PRECEDENCE + 1000;
 
 		private Scheduler scheduler = BaseAdvisor.DEFAULT_SCHEDULER;
