@@ -32,29 +32,44 @@ import org.springframework.util.Assert;
  * @param currentEventCount total number of events in the session
  * @param currentTurnCount total number of turns in the session (a turn is a user message
  * plus all subsequent events up to the next user message)
+ * @param scope what this compaction pass may archive/rewrite and what counts as a turn
+ * boundary; {@link CompactionScope#session()} reproduces pre-scope behaviour exactly
  * @author Christian Tzolov
  * @since 2.0.0
  */
 public record CompactionRequest(Session session, List<SessionEvent> events, int currentEventCount,
-		int currentTurnCount) {
+		int currentTurnCount, CompactionScope scope) {
 
 	/**
-	 * Creates a {@code CompactionRequest} from the given session and its event list.
+	 * Creates a whole-session-scoped {@code CompactionRequest} from the given session and
+	 * its event list. Equivalent to {@code of(session, events, CompactionScope.session())}.
 	 */
 	public static CompactionRequest of(Session session, List<SessionEvent> events) {
+		return of(session, events, CompactionScope.session());
+	}
+
+	/**
+	 * Creates a {@code CompactionRequest} scoped to the given {@link CompactionScope}.
+	 * <p>
+	 * {@code currentTurnCount} counts only non-synthetic USER messages that are turn
+	 * boundaries under {@code scope} (see {@link CompactionScope#isTurnBoundary(SessionEvent)}).
+	 * For session scope this is exactly the original root-only count: sub-agents write
+	 * USER messages attributed to their own branch, and counting those would inflate the
+	 * root turn count and cause premature compaction of the root conversation. For branch
+	 * scope, the equivalent rule applies one level down — only USER messages on exactly
+	 * that branch count; USER messages on sub-branches are turn-internal.
+	 */
+	public static CompactionRequest of(Session session, List<SessionEvent> events, CompactionScope scope) {
 		Assert.notNull(session, "session must not be null");
 		Assert.notNull(events, "events must not be null");
+		Assert.notNull(scope, "scope must not be null");
 		int eventCount = events.size();
-		// Count only non-synthetic, root-level (branch == null) USER messages.
-		// Sub-agents in multi-agent sessions write USER messages attributed to their own
-		// branch; counting those would inflate the turn count and cause premature
-		// compaction of the root conversation.
 		int turnCount = (int) events.stream()
 			.filter(e -> !e.isSynthetic())
 			.filter(e -> e.getMessageType() == MessageType.USER)
-			.filter(SessionEvent::isRootEvent)
+			.filter(scope::isTurnBoundary)
 			.count();
-		return new CompactionRequest(session, events, eventCount, turnCount);
+		return new CompactionRequest(session, events, eventCount, turnCount, scope);
 	}
 
 }

@@ -26,6 +26,7 @@ import org.jspecify.annotations.Nullable;
 
 import org.springframework.ai.session.compaction.CompactionRequest;
 import org.springframework.ai.session.compaction.CompactionResult;
+import org.springframework.ai.session.compaction.CompactionScope;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 import org.springframework.util.Assert;
@@ -112,8 +113,9 @@ public class DefaultSessionService implements SessionService {
 	}
 
 	@Override
-	public CompactionResult compact(String sessionId, CompactionTrigger trigger, CompactionStrategy strategy) {
+	public CompactionResult compact(String sessionId, CompactionScope scope, CompactionTrigger trigger, CompactionStrategy strategy) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		Assert.notNull(scope, "scope must not be null");
 		Assert.notNull(trigger, "trigger must not be null");
 		Assert.notNull(strategy, "strategy must not be null");
 
@@ -126,15 +128,26 @@ public class DefaultSessionService implements SessionService {
 		// guaranteed to be ≤ the version of the events we subsequently read. If another
 		// writer (append or compaction) mutates the log between our read and our write,
 		// the CAS will detect the version mismatch and return false — we skip silently,
-		// as the concurrent writer already handled the session.
+		// as the concurrent writer already handled the session. The version remains
+		// session-level (not per-branch) even for branch scope: a concurrent write to any
+		// branch causes a branch-scoped compaction to no-op and retry next turn, which is
+		// conservative but never loses or corrupts data. Per-branch version vectors are a
+		// possible future optimization, not required for correctness.
 		long version = this.sessionRepository.getEventVersion(session.id());
 
 		// Operate on the active context window only — already-archived events are
 		// retained for Recall Storage and must not be re-processed (or re-summarized) by
-		// compaction.
-		List<SessionEvent> events = this.sessionRepository.findEvents(session.id(), EventFilter.active());
+		// compaction. For branch scope, further restrict to events owned by that branch
+		// (root events and sibling branches are excluded so a branch-scoped compaction
+		// never inspects, let alone archives, events it does not own). v1: filtered in
+		// Java after loading the full active window; a dedicated owned-only repository
+		// query would be more index-efficient for sessions with many branches — a
+		// follow-up, not required for correctness.
+		List<SessionEvent> activeEvents = this.sessionRepository.findEvents(session.id(), EventFilter.active());
+		List<SessionEvent> events = scope.isSession() ? activeEvents
+				: activeEvents.stream().filter(scope::owns).toList();
 
-		CompactionRequest request = CompactionRequest.of(session, events);
+		CompactionRequest request = CompactionRequest.of(session, events, scope);
 
 		if (!trigger.shouldCompact(request)) {
 			return new CompactionResult(events, List.of(), 0);
@@ -143,8 +156,8 @@ public class DefaultSessionService implements SessionService {
 		CompactionResult result = strategy.compact(request);
 
 		if (!result.archivedEvents().isEmpty()) {
-			boolean replaced = this.sessionRepository.compactEvents(session.id(), result.archivedEvents(),
-					result.compactedEvents(), version);
+			boolean replaced = this.sessionRepository.compactEvents(session.id(), scope.branch(),
+					result.archivedEvents(), result.compactedEvents(), version);
 			if (!replaced) {
 				// CAS rejected — a concurrent writer already mutated the log; skip
 				// silently.

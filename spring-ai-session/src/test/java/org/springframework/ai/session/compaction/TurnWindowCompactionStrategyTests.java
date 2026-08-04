@@ -22,6 +22,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.Session;
@@ -344,6 +345,49 @@ class TurnWindowCompactionStrategyTests {
 		assertThat(result.compactedEvents()).hasSize(4); // [sub-q, sub-a, u2, a2]
 		assertThat(result.compactedEvents().get(0).getMessage().getText()).isEqualTo("sub-q");
 		assertThat(result.compactedEvents().get(2).getMessage().getText()).isEqualTo("u2");
+	}
+
+	// --- branch scope ---
+
+	@Test
+	void branchScopeCompactsOnlyThePlannerBranchLeavingRootAndSiblingsIntact() {
+		// planner: 3 turns; researcher: 1 turn (sibling — must be untouched); root: 1 turn
+		// (must be untouched). maxTurns=1 under CompactionScope.branch("planner") should
+		// archive planner's first 2 turns and keep only its last turn, root and researcher untouched.
+		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(1).build();
+
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("root-q")).build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("root-a")).build());
+		events.add(branchEvent(new UserMessage("planner-q1"), "planner"));
+		events.add(branchEvent(new AssistantMessage("planner-a1"), "planner"));
+		events.add(branchEvent(new UserMessage("planner-q2"), "planner"));
+		events.add(branchEvent(new AssistantMessage("planner-a2"), "planner"));
+		events.add(branchEvent(new UserMessage("planner-q3"), "planner"));
+		events.add(branchEvent(new AssistantMessage("planner-a3"), "planner"));
+		events.add(branchEvent(new UserMessage("researcher-q"), "researcher"));
+		events.add(branchEvent(new AssistantMessage("researcher-a"), "researcher"));
+
+		Session session = Session.builder().id(SESSION_ID).userId("test-user").build();
+		CompactionRequest request = CompactionRequest.of(session, events, CompactionScope.branch("planner"));
+
+		CompactionResult result = strategy.compact(request);
+
+		// Archived: only planner's first two turns (4 events) — root and researcher are
+		// never touched by a "planner"-scoped compaction.
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("planner-q1", "planner-a1", "planner-q2", "planner-a2");
+
+		// Kept: root turn (not a "planner" turn boundary, so it never entered the turn
+		// grouping and rides along as preamble) + planner's last turn + the researcher
+		// turn (turn-internal relative to "planner" scope, bundled with the enclosing kept
+		// planner turn — never archived, exactly like branch events ride along with root).
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("root-q", "root-a", "planner-q3", "planner-a3", "researcher-q", "researcher-a");
+	}
+
+	private static SessionEvent branchEvent(Message message, String branch) {
+		return SessionEvent.builder().sessionId(SESSION_ID).message(message).branch(branch).build();
 	}
 
 	// --- helpers ---

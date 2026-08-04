@@ -43,6 +43,7 @@ import org.springframework.ai.session.MessageFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.compaction.CompactionScope;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 import org.springframework.core.Ordered;
@@ -252,9 +253,16 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		}
 
 		// 2. Compact synchronously if configured — the full turn (user + assistant) is
-		// already written at this point so there is no race.
+		// already written at this point so there is no race. Scoped to the advisor's
+		// configured branch (set via eventFilter(EventFilter.forBranch(...))), if any, so
+		// that a branch-dedicated advisor instance compacts only its own branch's turns —
+		// root and sibling branches are never inspected or archived by this call. Without a
+		// configured branch this is whole-session scope, identical to before this overload
+		// existed.
 		if (this.compactionTrigger != null && this.compactionStrategy != null) {
-			this.sessionService.compact(sessionId, this.compactionTrigger, this.compactionStrategy);
+			CompactionScope scope = (this.eventFilter.branch() != null) ? CompactionScope.branch(this.eventFilter.branch())
+					: CompactionScope.session();
+			this.sessionService.compact(sessionId, scope, this.compactionTrigger, this.compactionStrategy);
 		}
 
 		return response;
