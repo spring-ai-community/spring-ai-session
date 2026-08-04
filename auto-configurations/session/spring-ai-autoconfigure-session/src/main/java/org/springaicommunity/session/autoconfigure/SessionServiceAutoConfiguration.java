@@ -42,8 +42,8 @@ import org.springframework.context.annotation.Bean;
  * @author Christian Tzolov
  * @since 2.0.0
  */
-@AutoConfiguration(
-		afterName = "org.springaicommunity.session.jdbc.autoconfigure.JdbcSessionRepositoryAutoConfiguration")
+@AutoConfiguration(afterName = { "org.springaicommunity.session.jdbc.autoconfigure.JdbcSessionRepositoryAutoConfiguration",
+		"org.springaicommunity.session.mongodb.autoconfigure.MongoSessionRepositoryAutoConfiguration" })
 @ConditionalOnClass(SessionService.class)
 @ConditionalOnBean(SessionRepository.class)
 @ConditionalOnMissingBean(SessionService.class)
