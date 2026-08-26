@@ -1,5 +1,33 @@
 # Migration Guide
 
+## Upgrading to 0.8.0
+
+No breaking API or schema changes. Two things to be aware of:
+
+### Behavior change: `SessionMemoryAdvisor` no longer duplicates history inside a tool-calling loop
+
+At default orders, `ToolCallingAdvisor` (order `HIGHEST_PRECEDENCE + 300`) wraps
+`SessionMemoryAdvisor` (order `HIGHEST_PRECEDENCE + 1000`), so the advisor's
+`before()`/`after()` run once per round of the tool-call loop. Before 0.8.0, from round 2
+onward `before()` prepended the session history again even though the prompt already
+carried this turn's messages, sending duplicate messages to the model.
+
+`before()` now detects that the retrieved history is already a contiguous run in the
+prompt and skips prepending it (the same guard as Spring AI's
+`MessageChatMemoryAdvisor`, spring-ai GH-6211). Persisted events were never duplicated;
+only the prompt sent to the model was affected.
+
+**Action needed:** none. If you worked around the duplication — e.g. by calling
+`ToolCallingAdvisor`'s `.disableInternalConversationHistory()` or giving
+`SessionMemoryAdvisor` a custom order so it wraps the loop — those setups still work, but
+the workaround is no longer required at default orders. See the "Default advisor order"
+note in the ChatClient reference doc for details.
+
+### Dependency baseline: Spring AI 2.0.1, Spring Boot 4.1.1
+
+0.8.0 builds against Spring AI 2.0.1 and Spring Boot 4.1.1 (previously 2.0.0 / 4.0.7).
+Align your application's Spring AI BOM and Spring Boot versions accordingly.
+
 ## Upgrading to 0.6.0
 
 Compaction now **archives** events instead of deleting them, so the full history stays
