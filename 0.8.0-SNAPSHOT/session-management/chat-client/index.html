@@ -1166,7 +1166,7 @@ expanded prompt, the <strong>after</strong> phase appends the assistant message 
 <hr />
 <h2 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultUserId</span><span class="p">(</span><span class="s">&quot;alice&quot;</span><span class="p">)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultUserId</span><span class="p">(</span><span class="s">"alice"</span><span class="p">)</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="c1">// Compact when 20 turns accumulate, using LLM summarization to retain context</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="p">.</span><span class="na">compactionTrigger</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">TurnCountTrigger</span><span class="p">(</span><span class="mi">20</span><span class="p">))</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="p">.</span><span class="na">compactionStrategy</span><span class="p">(</span>
@@ -1192,13 +1192,25 @@ session ID would silently merge history across different users.</p>
 <code>IllegalStateException</code>. Set both or neither.</p>
 </div>
 <div class="admonition note">
-<p class="admonition-title">Default advisor order</p>
+<p class="admonition-title">Default advisor order — nested inside the tool-calling loop</p>
 <p>The default order is <code>Ordered.HIGHEST_PRECEDENCE + 1000</code> (≈ <code>Integer.MIN_VALUE + 1000</code>),
-giving <code>SessionMemoryAdvisor</code> higher precedence than <code>ToolAdvisor</code> (order <code>300</code>).
-Higher precedence means <code>before()</code> runs first and <code>after()</code> runs last, so
-<code>SessionMemoryAdvisor</code> wraps the tool advisor — tool results are fully resolved before
-the session write in <code>after()</code>. Override with <code>.order(n)</code> if your pipeline requires a
-different position.</p>
+numerically higher — i.e. <strong>lower precedence</strong> — than <code>ToolCallingAdvisor</code>'s default
+order (<code>HIGHEST_PRECEDENCE + 300</code>). Advisors are sorted ascending by order and the
+lowest value wraps everything after it, so at default orders <code>ToolCallingAdvisor</code> wraps
+<code>SessionMemoryAdvisor</code>, not the other way round: <code>SessionMemoryAdvisor.before()</code>/<code>after()</code>
+run once per round of the tool-call loop, not once per outer call.</p>
+<p>This is deliberate and safe. From round 2 onward, the prompt handed to <code>before()</code>
+already contains the current turn's messages (persisted by the previous round), and
+<code>before()</code> detects that its retrieved history is already a contiguous run in that
+prompt and skips prepending it again — so no duplicate messages reach the model.
+Persisted events aren't duplicated either: only the round's trailing
+user/tool-response message and the model's own reply are ever appended. This means
+<code>SessionMemoryAdvisor</code> nests correctly under a default-configured <code>ToolCallingAdvisor</code>
+with its internal conversation history left <strong>enabled</strong> — you don't need
+<code>.disableInternalConversationHistory()</code> to avoid duplication.</p>
+<p>Override with <code>.order(n)</code> (a value lower than the tool-calling advisor's) if your
+pipeline instead needs <code>SessionMemoryAdvisor</code> to wrap the loop and write to the
+session only once, after tool results are fully resolved.</p>
 </div>
 <hr />
 <h2 id="idempotent-session-event-ids">Idempotent session-event ids<a class="headerlink" href="#idempotent-session-event-ids" title="Permanent link">&para;</a></h2>
@@ -1221,8 +1233,8 @@ so retries still dedupe but distinct calls with identical content don't collide.
 <h2 id="passing-a-session-id-per-request">Passing a session ID per request<a class="headerlink" href="#passing-a-session-id-per-request" title="Permanent link">&para;</a></h2>
 <p>Pass a session ID at call time via the advisor context:</p>
 <div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">String</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Hello!&quot;</span><span class="p">)</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session-abc&quot;</span><span class="p">))</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">"Hello!"</span><span class="p">)</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="s">"session-abc"</span><span class="p">))</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
@@ -1238,10 +1250,10 @@ another user's session if session IDs are ever guessable or shared.</p>
 which rely solely on <code>defaultUserId</code> (or do their own authorization upstream) are
 not affected.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Hello!&quot;</span><span class="p">)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">"Hello!"</span><span class="p">)</span>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session-abc&quot;</span><span class="p">)</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">USER_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;alice&quot;</span><span class="p">)</span><span class="w">  </span><span class="c1">// enforced</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="s">"session-abc"</span><span class="p">)</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">USER_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="s">"alice"</span><span class="p">)</span><span class="w">  </span><span class="c1">// enforced</span>
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="p">)</span>
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
@@ -1282,7 +1294,7 @@ retrieval on a single call without reconfiguring the advisor:</p>
 <div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1">// Advisor is configured with EventFilter.all() (default).</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1">// This request overrides to see only the last 5 events.</span>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">String</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">&quot;Quick summary please&quot;</span><span class="p">)</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">"Quick summary please"</span><span class="p">)</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span>
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">)</span>
 </span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">EVENT_FILTER_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">5</span><span class="p">))</span>
@@ -1365,9 +1377,9 @@ prompt is unaffected — filtering applies to persistence only.</p>
 </table>
 <p><code>MessageFilter</code> is a <code>@FunctionalInterface</code>, so a lambda works too, and filters compose
 via <code>and()</code>, <code>or()</code>, and <code>negate()</code>:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1">// Never persist messages containing &quot;confidential&quot;</span>
+<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1">// Never persist messages containing "confidential"</span>
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="p">.</span><span class="na">messageFilter</span><span class="p">(</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="n">MessageFilter</span><span class="p">.</span><span class="na">containsText</span><span class="p">(</span><span class="s">&quot;confidential&quot;</span><span class="p">).</span><span class="na">negate</span><span class="p">()</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="n">MessageFilter</span><span class="p">.</span><span class="na">containsText</span><span class="p">(</span><span class="s">"confidential"</span><span class="p">).</span><span class="na">negate</span><span class="p">()</span>
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">        </span><span class="p">.</span><span class="na">and</span><span class="p">(</span><span class="n">MessageFilter</span><span class="p">.</span><span class="na">skipEmptyMessages</span><span class="p">())</span>
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="p">)</span>
 </span></code></pre></div>
