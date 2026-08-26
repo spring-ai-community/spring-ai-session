@@ -804,6 +804,45 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#upgrading-to-080" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrading to 0.8.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Upgrading to 0.8.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#behavior-change-sessionmemoryadvisor-no-longer-duplicates-history-inside-a-tool-calling-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior change: SessionMemoryAdvisor no longer duplicates history inside a tool-calling loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dependency-baseline-spring-ai-201-spring-boot-411" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency baseline: Spring AI 2.0.1, Spring Boot 4.1.1
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#upgrading-to-060" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -921,6 +960,26 @@
 
 
 <h1 id="migration-guide">Migration Guide<a class="headerlink" href="#migration-guide" title="Permanent link">&para;</a></h1>
+<h2 id="upgrading-to-080">Upgrading to 0.8.0<a class="headerlink" href="#upgrading-to-080" title="Permanent link">&para;</a></h2>
+<p>No breaking API or schema changes. Two things to be aware of:</p>
+<h3 id="behavior-change-sessionmemoryadvisor-no-longer-duplicates-history-inside-a-tool-calling-loop">Behavior change: <code>SessionMemoryAdvisor</code> no longer duplicates history inside a tool-calling loop<a class="headerlink" href="#behavior-change-sessionmemoryadvisor-no-longer-duplicates-history-inside-a-tool-calling-loop" title="Permanent link">&para;</a></h3>
+<p>At default orders, <code>ToolCallingAdvisor</code> (order <code>HIGHEST_PRECEDENCE + 300</code>) wraps
+<code>SessionMemoryAdvisor</code> (order <code>HIGHEST_PRECEDENCE + 1000</code>), so the advisor's
+<code>before()</code>/<code>after()</code> run once per round of the tool-call loop. Before 0.8.0, from round 2
+onward <code>before()</code> prepended the session history again even though the prompt already
+carried this turn's messages, sending duplicate messages to the model.</p>
+<p><code>before()</code> now detects that the retrieved history is already a contiguous run in the
+prompt and skips prepending it (the same guard as Spring AI's
+<code>MessageChatMemoryAdvisor</code>, spring-ai GH-6211). Persisted events were never duplicated;
+only the prompt sent to the model was affected.</p>
+<p><strong>Action needed:</strong> none. If you worked around the duplication — e.g. by calling
+<code>ToolCallingAdvisor</code>'s <code>.disableInternalConversationHistory()</code> or giving
+<code>SessionMemoryAdvisor</code> a custom order so it wraps the loop — those setups still work, but
+the workaround is no longer required at default orders. See the "Default advisor order"
+note in the ChatClient reference doc for details.</p>
+<h3 id="dependency-baseline-spring-ai-201-spring-boot-411">Dependency baseline: Spring AI 2.0.1, Spring Boot 4.1.1<a class="headerlink" href="#dependency-baseline-spring-ai-201-spring-boot-411" title="Permanent link">&para;</a></h3>
+<p>0.8.0 builds against Spring AI 2.0.1 and Spring Boot 4.1.1 (previously 2.0.0 / 4.0.7).
+Align your application's Spring AI BOM and Spring Boot versions accordingly.</p>
 <h2 id="upgrading-to-060">Upgrading to 0.6.0<a class="headerlink" href="#upgrading-to-060" title="Permanent link">&para;</a></h2>
 <p>Compaction now <strong>archives</strong> events instead of deleting them, so the full history stays
 searchable through Recall Storage (issue #21). This introduces four breaking changes.</p>
