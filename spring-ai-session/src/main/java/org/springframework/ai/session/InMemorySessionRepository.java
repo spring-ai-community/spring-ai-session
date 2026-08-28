@@ -120,7 +120,7 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public boolean compactEvents(String sessionId, List<SessionEvent> archivedEvents,
+	public boolean compactEvents(String sessionId, @Nullable String scopeBranch, List<SessionEvent> archivedEvents,
 			List<SessionEvent> retainedEvents, long expectedVersion) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(archivedEvents, "archivedEvents must not be null");
@@ -134,16 +134,35 @@ public final class InMemorySessionRepository implements SessionRepository {
 				return existing;
 			}
 			success[0] = true;
-			// Preserve previously-archived events (always the oldest prefix), then the
-			// newly-archived events (marked archived), then the new active window. Any other
-			// previously-active event (e.g. a superseded synthetic summary) is dropped.
+			// Preserve previously-archived events (always the oldest prefix), then any
+			// currently-active event NOT owned by scopeBranch (root events and sibling
+			// branches — untouched by a branch-scoped compaction; for whole-session scope
+			// (scopeBranch == null) every event is owned, so nothing survives this step),
+			// then the newly-archived events (marked archived), then the new active window
+			// for the owned scope.
 			List<SessionEvent> newEvents = new ArrayList<>();
 			existing.events().stream().filter(SessionEvent::isArchived).forEach(newEvents::add);
+			existing.events()
+				.stream()
+				.filter(e -> !e.isArchived() && !isOwnedBy(e.getBranch(), scopeBranch))
+				.forEach(newEvents::add);
 			archivedEvents.forEach(e -> newEvents.add(e.asArchived()));
 			newEvents.addAll(retainedEvents);
 			return existing.withEvents(List.copyOf(newEvents));
 		});
 		return success[0];
+	}
+
+	/**
+	 * Returns {@code true} if {@code eventBranch} is owned by {@code scopeBranch}:
+	 * {@code scopeBranch == null} (whole-session scope) owns every event; otherwise the
+	 * event's branch must equal {@code scopeBranch} or be a dot-prefix descendant of it.
+	 */
+	private static boolean isOwnedBy(@Nullable String eventBranch, @Nullable String scopeBranch) {
+		if (scopeBranch == null) {
+			return true;
+		}
+		return eventBranch != null && (eventBranch.equals(scopeBranch) || eventBranch.startsWith(scopeBranch + "."));
 	}
 
 	@Override

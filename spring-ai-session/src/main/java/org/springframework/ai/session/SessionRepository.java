@@ -106,8 +106,37 @@ public interface SessionRepository {
 	 * @return {@code true} when the swap succeeded, {@code false} on a version mismatch
 	 * @throws IllegalArgumentException if the session does not exist
 	 */
-	boolean compactEvents(String sessionId, List<SessionEvent> archivedEvents, List<SessionEvent> retainedEvents,
-			long expectedVersion);
+	default boolean compactEvents(String sessionId, List<SessionEvent> archivedEvents, List<SessionEvent> retainedEvents, long expectedVersion) {
+		return compactEvents(sessionId, null, archivedEvents, retainedEvents, expectedVersion);
+	}
+
+	/**
+	 * Scoped variant of {@link #compactEvents(String, List, List, long)}.
+	 * <p>
+	 * {@code scopeBranch == null} reproduces the whole-session swap exactly: every active
+	 * event in the session is eligible to be replaced by {@code retainedEvents} (this is
+	 * what the 4-arg overload delegates to).
+	 * <p>
+	 * {@code scopeBranch != null} restricts the swap to events <em>owned</em> by that
+	 * branch — the branch itself and its dot-prefix sub-branches (e.g. scope
+	 * {@code "planner"} owns {@code "planner"} and {@code "planner.sub"}). Root events and
+	 * sibling branches are left untouched: only the active events owned by
+	 * {@code scopeBranch} are eligible for replacement by {@code retainedEvents}, and
+	 * {@code retainedEvents} must itself only contain events owned by {@code scopeBranch}
+	 * (a compaction pass must never write outside the scope it was given).
+	 * @param sessionId the session whose log is being compacted
+	 * @param scopeBranch the branch this compaction pass owns, or {@code null} for
+	 * whole-session scope
+	 * @param archivedEvents events to mark archived (must already exist in the log, and be
+	 * owned by {@code scopeBranch})
+	 * @param retainedEvents the new active event set for the owned scope, in chronological
+	 * order
+	 * @param expectedVersion the event-log version the caller observed
+	 * @return {@code true} when the swap succeeded, {@code false} on a version mismatch
+	 * @throws IllegalArgumentException if the session does not exist
+	 */
+	boolean compactEvents(String sessionId, @Nullable String scopeBranch, List<SessionEvent> archivedEvents,
+			List<SessionEvent> retainedEvents, long expectedVersion);
 
 	/**
 	 * Returns the current event-log version for the given session. The version is
