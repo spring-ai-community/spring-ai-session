@@ -22,6 +22,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
@@ -137,7 +138,41 @@ class CompactionRequestTests {
 		assertThatThrownBy(() -> CompactionRequest.of(null, List.of())).isInstanceOf(IllegalArgumentException.class);
 	}
 
+	@Test
+	void ofWithoutScopeDefaultsToSessionScope() {
+		CompactionRequest request = requestWith(List.of());
+		assertThat(request.scope()).isEqualTo(CompactionScope.session());
+	}
+
+	// --- branch scope ---
+
+	@Test
+	void branchScopeCountsOnlyOwnBranchUserMessagesAsTurns() {
+		// planner turn 1: [planner-q1, planner-a1]; planner.sub exchange inside it;
+		// planner turn 2: [planner-q2, planner-a2]; a root turn interleaved (must not count)
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(branchEvent(new UserMessage("planner-q1"), "planner"));
+		events.add(branchEvent(new AssistantMessage("planner-a1"), "planner"));
+		events.add(branchEvent(new UserMessage("sub-q"), "planner.sub"));
+		events.add(branchEvent(new AssistantMessage("sub-a"), "planner.sub"));
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("root-q")).build());
+		events.add(branchEvent(new UserMessage("planner-q2"), "planner"));
+		events.add(branchEvent(new AssistantMessage("planner-a2"), "planner"));
+
+		Session session = Session.builder().id(SESSION_ID).userId("test-user").build();
+		CompactionRequest request = CompactionRequest.of(session, events, CompactionScope.branch("planner"));
+
+		// Only planner-q1 and planner-q2 count; planner.sub-q and root-q do not.
+		assertThat(request.currentTurnCount()).isEqualTo(2);
+		assertThat(request.currentEventCount()).isEqualTo(7);
+		assertThat(request.scope()).isEqualTo(CompactionScope.branch("planner"));
+	}
+
 	// --- helper ---
+
+	private static SessionEvent branchEvent(Message message, String branch) {
+		return SessionEvent.builder().sessionId(SESSION_ID).message(message).branch(branch).build();
+	}
 
 	private CompactionRequest requestWith(List<SessionEvent> events) {
 		Session session = Session.builder().id(SESSION_ID).userId("test-user").build();
