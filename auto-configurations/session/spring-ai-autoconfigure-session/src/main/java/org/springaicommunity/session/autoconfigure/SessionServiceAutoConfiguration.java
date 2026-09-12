@@ -36,14 +36,15 @@ import org.springframework.context.annotation.Bean;
  * implementation is in use — in-memory, JDBC, Redis, etc.
  *
  * <p>
- * The auto-configuration is ordered after the JDBC repository auto-configuration so that
- * the repository bean is guaranteed to be available when this configuration runs.
+ * The auto-configuration is ordered after the repository auto-configurations so that the
+ * repository bean is guaranteed to be available when this configuration runs.
  *
  * @author Christian Tzolov
  * @since 2.0.0
  */
-@AutoConfiguration(
-		afterName = "org.springaicommunity.session.jdbc.autoconfigure.JdbcSessionRepositoryAutoConfiguration")
+@AutoConfiguration(afterName = {
+		"org.springaicommunity.session.jdbc.autoconfigure.JdbcSessionRepositoryAutoConfiguration",
+		"org.springaicommunity.session.redis.autoconfigure.RedisSessionRepositoryAutoConfiguration" })
 @ConditionalOnClass(SessionService.class)
 @ConditionalOnBean(SessionRepository.class)
 @ConditionalOnMissingBean(SessionService.class)

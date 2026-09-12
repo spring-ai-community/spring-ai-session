@@ -136,6 +136,34 @@ Import the BOM so all module versions stay in sync:
     }
     ```
 
+=== "Redis"
+
+    Add the Redis starter:
+
+    ```xml
+    <dependency>
+        <groupId>org.springaicommunity</groupId>
+        <artifactId>spring-ai-starter-session-redis</artifactId>
+    </dependency>
+    ```
+
+    That auto-configures a `RedisClient` (unless one is already declared), a
+    `RedisSessionRepository`, and a `DefaultSessionService`. No schema to apply and no
+    Redis modules required. Point it at your server:
+
+    ```yaml
+    spring:
+      ai:
+        session:
+          repository:
+            redis:
+              host: localhost
+              port: 6379
+    ```
+
+    Redis sessions are removed by an application-driven sweep rather than by key TTL —
+    see [Session Redis → Expiry](session-redis/index.md#expiry).
+
 === "In-memory (testing only)"
 
     Add the session management module:
@@ -161,7 +189,7 @@ Import the BOM so all module versions stay in sync:
     !!! warning
         `InMemorySessionRepository` is not suitable for production — sessions are lost on
         restart and not shared across instances. Use the [Spring Boot starter](#choose-a-setup)
-        or the JDBC repository for persistence.
+        or the JDBC or Redis repository for persistence.
 
 ---
 
@@ -227,3 +255,4 @@ Spring AI Session is available from the Spring snapshot repository:
 - [Context Compaction](session-management/compaction.md) — configure triggers and strategies
 - [Multi-Agent Branch Isolation](session-management/multi-agent.md) — share sessions across agents safely
 - [Session JDBC](session-jdbc/index.md) — persistent JDBC-backed repository
+- [Session Redis](session-redis/index.md) — persistent Redis-backed repository

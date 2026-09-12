@@ -23,12 +23,15 @@ spring-ai-session/
 ├── spring-ai-session-bom/                               # Bill of Materials for version 
 ├── spring-ai-session/                                   # Core SPI, compaction framework, SessionMemoryAdvisor
 ├── spring-ai-session-jdbc/                              # JDBC-backed SessionRepository (PostgreSQL, MySQL, H2) management
+├── spring-ai-session-redis/                             # Redis-backed SessionRepository
 └── auto-configurations/
     └── session/
         ├── spring-ai-autoconfigure-session/             # Spring Boot auto-configuration for DefaultSessionService
-        └── spring-ai-autoconfigure-session-jdbc/        # Spring Boot auto-configuration for the JDBC repository
+        ├── spring-ai-autoconfigure-session-jdbc/        # Spring Boot auto-configuration for the JDBC repository
+        └── spring-ai-autoconfigure-session-redis/       # Spring Boot auto-configuration for the Redis repository
 └── boot-starters/
-    └── spring-ai-starter-session-jdbc/                  # Spring Boot starter (JDBC session, one-dependency setup)
+    ├── spring-ai-starter-session-jdbc/                  # Spring Boot starter (JDBC session, one-dependency setup)
+    └── spring-ai-starter-session-redis/                 # Spring Boot starter (Redis session, one-dependency setup)
 ```
 
 ## Modules
@@ -37,9 +40,12 @@ spring-ai-session/
 |--------|----------|-------------|
 | **Session Management** | `spring-ai-session` | `Session`, `SessionEvent`, `SessionService`, `SessionRepository` SPI, compaction framework, `SessionMemoryAdvisor` |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
+| **Session Redis** | `spring-ai-session-redis` | Redis-backed `SessionRepository` — no schema, no Redis modules required |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
+| **Session Redis Auto-configuration** | `spring-ai-autoconfigure-session-redis` | Spring Boot auto-configuration for the Redis repository |
 | **Session JDBC Starter** | `spring-ai-starter-session-jdbc` | Spring Boot starter — pulls in JDBC repository, auto-configurations, and `spring-boot-starter` |
+| **Session Redis Starter** | `spring-ai-starter-session-redis` | Spring Boot starter — pulls in Redis repository, auto-configurations, and `spring-boot-starter` |
 | **Session BOM** | `spring-ai-session-bom` | Bill of Materials for managing all module versions together |
 
 ## Quick Start
@@ -74,6 +80,12 @@ spring-ai-session/
     <groupId>org.springaicommunity</groupId>
     <artifactId>spring-ai-starter-session-jdbc</artifactId>
 </dependency>
+
+<!-- Or Redis starter (Spring Boot, recommended) -->
+<dependency>
+    <groupId>org.springaicommunity</groupId>
+    <artifactId>spring-ai-starter-session-redis</artifactId>
+</dependency>
 ```
 
 **3. Wire a `SessionMemoryAdvisor` into your `ChatClient`:**
@@ -107,7 +119,7 @@ Full reference documentation is available at:
 
 Topics covered:
 
-- [Getting Started](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/getting-started/) — setup options (in-memory, JDBC auto-config, JDBC manual)
+- [Getting Started](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/getting-started/) — setup options (in-memory, JDBC, Redis)
 - [Session Concepts](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/concepts/) — `Session`, `SessionEvent`, turns, and architecture
 - [Event Filtering](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/event-filtering/) — composable `EventFilter` API
 - [Context Compaction](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/compaction/) — triggers, strategies, turn-boundary safety
@@ -115,6 +127,7 @@ Topics covered:
 - [Multi-Agent Branch Isolation](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/multi-agent/) — sharing sessions across parallel agents
 - [Recall Storage](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/recall-storage/) — keyword search over the full verbatim history
 - [Session JDBC](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-jdbc/) — JDBC repository setup, schema, and design notes
+- [Session Redis](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-redis/) — Redis repository setup, key layout, and design notes
 
 ## Requirements
 
