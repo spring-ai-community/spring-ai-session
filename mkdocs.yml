@@ -50,6 +50,9 @@ nav:
   - Session JDBC:
       - Overview & Setup: session-jdbc/index.md
       - Auto-configuration: session-jdbc/auto-configuration.md
+  - Session Redis:
+      - Overview & Setup: session-redis/index.md
+      - Auto-configuration: session-redis/auto-configuration.md
 
 markdown_extensions:
   - admonition
