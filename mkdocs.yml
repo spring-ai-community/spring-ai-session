@@ -53,6 +53,9 @@ nav:
   - Session JDBC:
       - Overview & Setup: session-jdbc/index.md
       - Auto-configuration: session-jdbc/auto-configuration.md
+  - Session Redis:
+      - Overview & Setup: session-redis/index.md
+      - Auto-configuration: session-redis/auto-configuration.md
   - ChatClient:
       - ChatClient Integration: chat-client/chat-client.md
   - Migration Guide: migration.md

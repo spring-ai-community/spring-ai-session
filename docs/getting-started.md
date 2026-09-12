@@ -97,6 +97,34 @@ or to a snapshot version (see [Maven Repositories](#maven-repositories)):
     }
     ```
 
+=== "Redis"
+
+    Add the Redis starter:
+
+    ```xml
+    <dependency>
+        <groupId>org.springaicommunity</groupId>
+        <artifactId>spring-ai-starter-session-redis</artifactId>
+    </dependency>
+    ```
+
+    That auto-configures a `RedisClient` (unless one is already declared), a
+    `RedisSessionRepository`, and a `DefaultSessionService`. No schema to apply and no
+    Redis modules required. Point it at your server:
+
+    ```yaml
+    spring:
+      ai:
+        session:
+          repository:
+            redis:
+              host: localhost
+              port: 6379
+    ```
+
+    Redis sessions are removed by an application-driven sweep rather than by key TTL —
+    see [Session Redis → Expiry](session-redis/index.md#expiry).
+
 === "In-memory (testing only)"
 
     Add the session management module:
@@ -122,7 +150,7 @@ or to a snapshot version (see [Maven Repositories](#maven-repositories)):
     !!! warning
         `InMemorySessionRepository` is not suitable for production — sessions are lost on
         restart and not shared across instances. Use the [Spring Boot starter](#choose-a-setup)
-        or the JDBC repository for persistence.
+        or the JDBC or Redis repository for persistence.
 
 ---
 
@@ -192,3 +220,4 @@ To use a `-SNAPSHOT` version, add the Central Portal snapshot repository:
 - [Multi-Agent](session-management/multi-agent.md) — give each sub-agent its own session
 - [Session JDBC](session-jdbc/index.md) — persistent JDBC-backed repository
 - [Migration Guide](migration.md) — upgrade notes between versions
+- [Session Redis](session-redis/index.md) — persistent Redis-backed repository
