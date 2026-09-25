@@ -44,11 +44,12 @@ public final class Session {
 
 	private final Instant createdAt;
 
-	private final Instant expiresAt;
+	@Nullable private final Instant expiresAt;
 
 	private final Map<String, Object> metadata;
 
-	private Session(String id, String userId, Instant createdAt, Instant expiresAt, Map<String, Object> metadata) {
+	private Session(String id, String userId, Instant createdAt, @Nullable Instant expiresAt,
+			Map<String, Object> metadata) {
 		this.id = id;
 		this.userId = userId;
 		this.createdAt = createdAt;
@@ -73,6 +74,9 @@ public final class Session {
 
 	/**
 	 * When this session expires (TTL-based lifecycle). {@code null} means no expiry.
+	 * Sessions created through {@link SessionService#create(CreateSessionRequest)} always
+	 * have an expiry (the request's or the service's default time-to-live); {@code null}
+	 * only occurs for sessions built directly with {@code expiresAt(null)}.
 	 */
 	@Nullable public Instant expiresAt() {
 		return this.expiresAt;
@@ -95,7 +99,7 @@ public final class Session {
 
 		private Instant createdAt = Instant.now();
 
-		private Instant expiresAt = Instant.now().plus(Duration.ofDays(60));
+		@Nullable private Instant expiresAt = Instant.now().plus(Duration.ofDays(60));
 
 		private Map<String, Object> metadata = new HashMap<>();
 
@@ -114,7 +118,11 @@ public final class Session {
 			return this;
 		}
 
-		public Builder expiresAt(Instant expiresAt) {
+		/**
+		 * Sets the expiry. Defaults to 60 days from now; pass {@code null} for a session
+		 * that never expires.
+		 */
+		public Builder expiresAt(@Nullable Instant expiresAt) {
 			this.expiresAt = expiresAt;
 			return this;
 		}

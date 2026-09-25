@@ -43,8 +43,9 @@ import org.springframework.util.Assert;
  * <ol>
  * <li>Separate synthetic summary events from real conversation events.</li>
  * <li>Keep the last {@code maxEventsToKeep} real events intact (the <em>active
- * window</em>), snapping the cut point back to the nearest turn boundary so a partial
- * turn is never kept.</li>
+ * window</em>), snapping the cut point forward to the next turn boundary so a partial
+ * turn is never kept. If no later turn boundary exists, the most recent turn is kept
+ * even when it exceeds {@code maxEventsToKeep}.</li>
  * <li>Everything before the active window — plus any prior synthetic summaries — forms
  * the <em>events to summarize</em>.</li>
  * <li>An LLM call condenses them into a rolling summary, optionally including the last
@@ -177,11 +178,19 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		// Snap forward to the nearest root-level turn start (USER message) so the active
 		// window always begins at a turn boundary and is never a partial turn.
 		// Sub-agent USER messages (branch != null) are skipped — they are turn-internal.
-		int cutIndex = CompactionUtils.snapToTurnStart(realEvents, rawCutIndex);
+		// If no later turn start exists (the newest turn alone exceeds the budget), keep
+		// that last turn rather than archiving the whole active window.
+		int cutIndex = CompactionUtils.retainLastTurn(realEvents,
+				CompactionUtils.snapToTurnStart(realEvents, rawCutIndex));
 
 		// Split real events: archive the older ones, keep the newest window
 		List<SessionEvent> toArchive = realEvents.subList(0, cutIndex);
 		List<SessionEvent> activeWindow = realEvents.subList(cutIndex, realEvents.size());
+
+		if (toArchive.isEmpty()) {
+			// The whole history is a single (oversize) turn — nothing to summarize.
+			return new CompactionResult(events, List.of(), 0);
+		}
 
 		// Overlap: the first `overlapSize` events from the active window are also fed
 		// into the summary prompt so the LLM has continuity context

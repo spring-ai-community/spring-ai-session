@@ -113,10 +113,15 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 
 		// Snap forward to the nearest turn start (USER message) so we never keep a
 		// partial turn — e.g. an assistant reply without its originating user message.
-		int cutIndex = CompactionUtils.snapToTurnStart(real, rawCutIndex);
+		// If no later turn start exists (the newest turn alone exceeds the budget), keep
+		// that last turn rather than archiving the whole active window.
+		int cutIndex = CompactionUtils.retainLastTurn(real, CompactionUtils.snapToTurnStart(real, rawCutIndex));
 
 		List<SessionEvent> keptReal = new ArrayList<>(real.subList(cutIndex, real.size()));
 		List<SessionEvent> removedReal = real.subList(0, cutIndex);
+		if (removedReal.isEmpty()) {
+			return new CompactionResult(events, List.of(), 0);
+		}
 
 		List<SessionEvent> compacted = new ArrayList<>(synthetic);
 		compacted.addAll(keptReal);
@@ -146,11 +151,13 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 		}
 
 		public Builder maxEvents(int maxEvents) {
+			Assert.isTrue(maxEvents > 0, "maxEvents must be greater than 0");
 			this.maxEvents = maxEvents;
 			return this;
 		}
 
 		public Builder tokenCountEstimator(TokenCountEstimator tokenCountEstimator) {
+			Assert.notNull(tokenCountEstimator, "tokenCountEstimator must not be null");
 			this.tokenCountEstimator = tokenCountEstimator;
 			return this;
 		}

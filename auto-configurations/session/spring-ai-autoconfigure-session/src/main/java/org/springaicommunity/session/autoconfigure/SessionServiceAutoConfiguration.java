@@ -20,9 +20,9 @@ import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandidate;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 
@@ -30,8 +30,8 @@ import org.springframework.context.annotation.Bean;
  * Auto-configuration for {@link DefaultSessionService}.
  *
  * <p>
- * Creates a {@link DefaultSessionService} bean whenever a {@link SessionRepository} bean
- * is present in the application context and no {@link SessionService} bean has been
+ * Creates a {@link DefaultSessionService} bean whenever a single (or primary)
+ * {@link SessionRepository} bean is present in the application context and no {@link SessionService} bean has been
  * declared by the application. This applies regardless of which {@link SessionRepository}
  * implementation is in use — in-memory, JDBC, Redis, etc.
  *
@@ -45,7 +45,7 @@ import org.springframework.context.annotation.Bean;
 @AutoConfiguration(
 		afterName = "org.springaicommunity.session.jdbc.autoconfigure.JdbcSessionRepositoryAutoConfiguration")
 @ConditionalOnClass(SessionService.class)
-@ConditionalOnBean(SessionRepository.class)
+@ConditionalOnSingleCandidate(SessionRepository.class)
 @ConditionalOnMissingBean(SessionService.class)
 @EnableConfigurationProperties(SessionServiceProperties.class)
 public class SessionServiceAutoConfiguration {

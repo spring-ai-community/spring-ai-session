@@ -35,8 +35,7 @@ import org.springframework.ai.session.SessionEvent;
  * forward whatever the request's context held.
  *
  * <p>
- * The default, {@link #random()}, reproduces the id-less behaviour
- * {@code SessionService.appendMessage} always had before this SPI existed.
+ * The default, {@link #random()}, assigns a fresh random id every call.
  *
  * @see SessionEventRequestIdGenerator the counterpart used in {@link SessionMemoryAdvisor#before}
  */

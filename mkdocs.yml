@@ -50,6 +50,7 @@ nav:
   - Session JDBC:
       - Overview & Setup: session-jdbc/index.md
       - Auto-configuration: session-jdbc/auto-configuration.md
+  - Migration Guide: migration.md
 
 markdown_extensions:
   - admonition

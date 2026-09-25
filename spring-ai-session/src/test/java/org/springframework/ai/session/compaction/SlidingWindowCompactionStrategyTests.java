@@ -287,6 +287,40 @@ class SlidingWindowCompactionStrategyTests {
 		assertThat(result.compactedEvents()).hasSize(6);
 	}
 
+	@Test
+	void oversizeLastTurnIsKeptInsteadOfArchivingEverything() {
+		// The last turn (u2..a4) alone holds more root events than maxEvents; the cut
+		// would snap past the end — the last turn must still be kept.
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(2).build();
+		List<SessionEvent> events = List.of(user("u1"), assistant("a1"), user("u2"), assistant("a2"), assistant("a3"),
+				assistant("a4"));
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("u1", "a1");
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("u2", "a2", "a3", "a4");
+	}
+
+	@Test
+	void singleOversizeTurnIsNotCompacted() {
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(2).build();
+		List<SessionEvent> events = List.of(user("u1"), assistant("a1"), assistant("a2"), assistant("a3"));
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		assertThat(result.archivedEvents()).isEmpty();
+		assertThat(result.compactedEvents()).hasSize(4);
+	}
+
+	private static SessionEvent user(String text) {
+		return SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage(text)).build();
+	}
+
+	private static SessionEvent assistant(String text) {
+		return SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage(text)).build();
+	}
+
 	private List<SessionEvent> buildRealEvents(int count) {
 		List<SessionEvent> events = new ArrayList<>();
 		for (int i = 1; i <= count; i++) {

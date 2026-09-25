@@ -71,17 +71,19 @@ public final class TokenCountTrigger implements CompactionTrigger {
 
 		private int threshold;
 
-		private TokenCountEstimator tokenCountEstimator;
+		private TokenCountEstimator tokenCountEstimator = new JTokkitTokenCountEstimator();
 
 		private Builder() {
 		}
 
 		public Builder threshold(int threshold) {
+			Assert.isTrue(threshold > 0, "threshold must be greater than 0");
 			this.threshold = threshold;
 			return this;
 		}
 
 		public Builder tokenCountEstimator(TokenCountEstimator tokenCountEstimator) {
+			Assert.notNull(tokenCountEstimator, "tokenCountEstimator must not be null");
 			this.tokenCountEstimator = tokenCountEstimator;
 			return this;
 		}

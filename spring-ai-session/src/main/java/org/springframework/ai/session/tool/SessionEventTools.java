@@ -19,9 +19,11 @@ package org.springframework.ai.session.tool;
 import java.util.List;
 import java.util.Map;
 
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.SessionEvent;
@@ -40,12 +42,11 @@ import org.springframework.util.StringUtils;
  * context compaction has pruned older events from the active context window.
  *
  * <p>
- * The session to search is resolved from {@link ToolContext} using
+ * The session to search is resolved from {@link ToolContext} using the
+ * {@link ChatMemory#CONVERSATION_ID} key — the same key
  * {@link org.springframework.ai.session.advisor.SessionMemoryAdvisor#SESSION_ID_CONTEXT_KEY}
- * (equals {@link org.springframework.ai.chat.memory.ChatMemory#CONVERSATION_ID}), which is
- * the same key written into the context by {@code SessionMemoryAdvisor}. Register an
- * instance of this class as a tool on the
- * {@code ChatClient} alongside the advisor:
+ * reads from the advisor context. Advisor parameters are <em>not</em> propagated into the
+ * {@code ToolContext}, so the caller must pass the session ID to both on every request:
  *
  * <pre>{@code
  * SessionEventTools tools = SessionEventTools.builder(sessionService)
@@ -55,28 +56,46 @@ import org.springframework.util.StringUtils;
  *     .defaultTools(tools)
  *     .defaultAdvisors(advisor)
  *     .build();
+ *
+ * client.prompt()
+ *     .user(question)
+ *     .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
+ *     .toolContext(Map.of(ChatMemory.CONVERSATION_ID, sessionId))
+ *     .call()
+ *     .content();
  * }</pre>
  *
+ * <p>
+ * If the key is missing or blank, the tool returns an error message to the model instead
+ * of searching — it never falls back to a shared session.
+ *
  * @author Christian Tzolov
- * @since 2.0
+ * @since 2.0.0
  */
 public class SessionEventTools {
 
 	private static final Logger logger = LoggerFactory.getLogger(SessionEventTools.class);
 
 	/**
-	 * Context key used to resolve the session ID from {@link ToolContext}. Must match
+	 * Context key used to resolve the session ID from {@link ToolContext}. Equals
+	 * {@link ChatMemory#CONVERSATION_ID} and
 	 * {@link org.springframework.ai.session.advisor.SessionMemoryAdvisor#SESSION_ID_CONTEXT_KEY}.
 	 */
-	public static final String SESSION_ID_CONTEXT_KEY = "chat_memory_conversation_id";
+	public static final String SESSION_ID_CONTEXT_KEY = ChatMemory.CONVERSATION_ID;
+
+	static final String MISSING_SESSION_ID_RESULT = "Error: conversation_search is unavailable because no session ID "
+			+ "was provided in the tool context.";
 
 	private final SessionService sessionService;
 
 	private final int pageSize;
 
-	private SessionEventTools(SessionService sessionService, int pageSize) {
+	@Nullable private final String branch;
+
+	private SessionEventTools(SessionService sessionService, int pageSize, @Nullable String branch) {
 		this.sessionService = sessionService;
 		this.pageSize = pageSize;
+		this.branch = branch;
 	}
 
 	/**
@@ -96,6 +115,8 @@ public class SessionEventTools {
 		private final SessionService sessionService;
 
 		private int pageSize = EventFilter.DEFAULT_PAGE_SIZE;
+
+		@Nullable private String branch;
 
 		private Builder(SessionService sessionService) {
 			if (sessionService == null) {
@@ -119,11 +140,26 @@ public class SessionEventTools {
 		}
 
 		/**
+		 * Restricts {@code conversation_search} to events visible to the agent at this
+		 * dot-separated branch path, applying the same isolation rule as
+		 * {@link EventFilter#forBranch(String)}: root events, the agent's own events and
+		 * its ancestors' events are searchable, peer sub-agents' events are not. Set this
+		 * on the tool instance given to a sub-agent in a multi-agent session. Defaults to
+		 * {@code null} (search every event in the session).
+		 * @param branch the agent's branch path, e.g. {@code "orch.researcher"}
+		 * @return this builder
+		 */
+		public Builder branch(@Nullable String branch) {
+			this.branch = branch;
+			return this;
+		}
+
+		/**
 		 * Builds the {@link SessionEventTools} instance.
 		 * @return a configured {@code SessionEventTools}
 		 */
 		public SessionEventTools build() {
-			return new SessionEventTools(this.sessionService, this.pageSize);
+			return new SessionEventTools(this.sessionService, this.pageSize, this.branch);
 		}
 
 	}
@@ -145,7 +181,8 @@ public class SessionEventTools {
 	 * @param query case-insensitive keyword to search for
 	 * @param page zero-indexed page of results; omit or pass {@code 0} for the first page
 	 * @param toolContext Spring AI tool context carrying the session ID
-	 * @return JSON array of matching events, or {@code "No results found."} if empty
+	 * @return JSON array of matching events, {@code "No results found."} if empty, or an
+	 * error message if the tool context carries no session ID
 	 */
 	@Tool(name = "conversation_search",
 			description = "Search the full prior conversation history using case-insensitive keyword matching. "
@@ -162,19 +199,18 @@ public class SessionEventTools {
 		logger.debug("[conversation_search] innerThought: {}, query: {}, page: {}", innerThought, query, pageNumber);
 
 		Object sessionIdValue = toolContext.getContext().get(SESSION_ID_CONTEXT_KEY);
-		String sessionId;
-		if (sessionIdValue instanceof String s && !s.isBlank()) {
-			sessionId = s;
-		}
-		else {
-			sessionId = "default";
-			logger.warn("[conversation_search] '{}' not found in ToolContext — falling back to session ID 'default'. "
-					+ "Register SessionMemoryAdvisor alongside this tool so the correct session ID is propagated.",
+		if (!(sessionIdValue instanceof String sessionId) || sessionId.isBlank()) {
+			logger.warn("[conversation_search] '{}' not found in ToolContext — search skipped. Pass the session ID "
+					+ "via ChatClient's .toolContext(Map.of(ChatMemory.CONVERSATION_ID, sessionId)).",
 					SESSION_ID_CONTEXT_KEY);
+			return MISSING_SESSION_ID_RESULT;
 		}
 
-		List<SessionEvent> events = this.sessionService.getEvents(sessionId,
-				EventFilter.keywordSearch(query, pageNumber, this.pageSize));
+		EventFilter filter = EventFilter.keywordSearch(query, pageNumber, this.pageSize);
+		if (this.branch != null) {
+			filter = filter.merge(EventFilter.forBranch(this.branch));
+		}
+		List<SessionEvent> events = this.sessionService.getEvents(sessionId, filter);
 
 		List<Map<String, String>> results = events.stream()
 			.filter(e -> StringUtils.hasText(e.getMessage().getText()))

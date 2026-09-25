@@ -157,6 +157,33 @@ class CompactionUtilsTests {
 
 	// --- helpers ---
 
+	// --- retainLastTurn ---
+
+	@Test
+	void retainLastTurnLeavesNonEmptyWindowUnchanged() {
+		List<SessionEvent> events = List.of(user("u1"), assistant("a1"), user("u2"), assistant("a2"));
+
+		assertThat(CompactionUtils.retainLastTurn(events, 2)).isEqualTo(2);
+		assertThat(CompactionUtils.retainLastTurn(events, 0)).isEqualTo(0);
+	}
+
+	@Test
+	void retainLastTurnFallsBackToLastRootUser() {
+		List<SessionEvent> events = List.of(user("u1"), assistant("a1"), user("u2"), assistant("a2"),
+				user("u3", "sub"), assistant("a3"));
+
+		// sub-agent USER (index 4) is not a turn start — falls back to u2 (index 2)
+		assertThat(CompactionUtils.retainLastTurn(events, events.size())).isEqualTo(2);
+	}
+
+	@Test
+	void retainLastTurnWithoutRootUserReturnsCutUnchanged() {
+		List<SessionEvent> events = List.of(assistant("a1"), assistant("a2"));
+
+		assertThat(CompactionUtils.retainLastTurn(events, 2)).isEqualTo(2);
+		assertThat(CompactionUtils.retainLastTurn(List.of(), 0)).isEqualTo(0);
+	}
+
 	private static SessionEvent user(String text) {
 		return SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage(text)).build();
 	}

@@ -90,7 +90,7 @@ one of them, not just one. In practice, callers set exactly one of the three.
 | `lastN` | `Integer` | Keep only the most recent N matching events (must be > 0) |
 | `keyword` | `String` | Case-insensitive substring match on `message.getText()` |
 | `keywords` | `List<String>` | Multiple case-insensitive substring terms, combined per `matchMode` |
-| `matchMode` | `MatchMode` | `ANY` (at least one term present) or `ALL` (every term present) — only meaningful when `keywords` is set |
+| `matchMode` | `EventFilter.MatchMode` | `ANY` (at least one term present) or `ALL` (every term present) — only meaningful when `keywords` is set. Import `org.springframework.ai.session.EventFilter.MatchMode` |
 | `pattern` | `Pattern` | Compiled regular expression matched against `message.getText()` via `Matcher.find()`. **Only ever pass a developer-authored `Pattern`** — see the ReDoS warning above |
 | `page` | `Integer` | Zero-indexed page in chronological order (oldest first, page 0 = oldest) |
 | `pageSize` | `Integer` | Results per page (default 10; must be > 0 if set) |
@@ -137,6 +137,17 @@ EventFilter requestOverride = EventFilter.lastN(5);
 
 EventFilter merged = advisorDefault.merge(requestOverride);
 // merged.lastN() == 5  (request-level wins)
+```
+
+The retrieval modifier — `lastN` or `page`/`pageSize` — is merged as a single unit. If
+`other` sets either form, it replaces the base filter's modifier completely, so a
+per-request paginated search can override an advisor-level `lastN` window (and the other
+way round) without tripping the "`lastN` and `page`/`pageSize` are mutually exclusive"
+check:
+
+```java
+EventFilter merged = EventFilter.lastN(20).merge(EventFilter.keywordSearch("spring", 1, 5));
+// merged.lastN() == null, merged.page() == 1, merged.pageSize() == 5
 ```
 
 See [ChatClient Integration → Per-request filter override](chat-client.md#per-request-filter-override)

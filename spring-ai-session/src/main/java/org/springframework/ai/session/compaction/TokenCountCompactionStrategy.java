@@ -105,7 +105,9 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 		// Snap the raw cut forward to the nearest root-level USER event so the kept
 		// window always starts at a turn boundary. Sub-agent USER messages (branch != null)
 		// are skipped — they are turn-internal, not turn starts.
-		int cutIndex = CompactionUtils.snapToTurnStart(real, rawCutIndex);
+		// If no later turn start exists (the newest turn alone exceeds the budget), keep
+		// that last turn rather than archiving the whole active window.
+		int cutIndex = CompactionUtils.retainLastTurn(real, CompactionUtils.snapToTurnStart(real, rawCutIndex));
 
 		// Build kept and archived lists in chronological order
 		List<SessionEvent> kept = new ArrayList<>(real.subList(cutIndex, real.size()));
@@ -143,11 +145,13 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 		}
 
 		public Builder maxTokens(int maxTokens) {
+			Assert.isTrue(maxTokens > 0, "maxTokens must be greater than 0");
 			this.maxTokens = maxTokens;
 			return this;
 		}
 
 		public Builder tokenCountEstimator(TokenCountEstimator tokenCountEstimator) {
+			Assert.notNull(tokenCountEstimator, "tokenCountEstimator must not be null");
 			this.tokenCountEstimator = tokenCountEstimator;
 			return this;
 		}

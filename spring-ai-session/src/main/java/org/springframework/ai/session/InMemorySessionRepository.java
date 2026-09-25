@@ -57,12 +57,27 @@ public final class InMemorySessionRepository implements SessionRepository {
 	@Override
 	public Session save(Session session) {
 		Assert.notNull(session, "session must not be null");
-		this.store.compute(session.id(), (id, existing) -> {
-			List<SessionEvent> events = (existing != null) ? existing.events() : List.of();
-			long version = (existing != null) ? existing.version() : 0L;
-			return new SessionData(session, events, version);
+		SessionData saved = this.store.compute(session.id(), (id, existing) -> {
+			if (existing == null) {
+				return new SessionData(session, List.of(), 0L);
+			}
+			// Update: keep the original creation time, like the JDBC upsert does.
+			Session updated = Session.builder()
+				.id(session.id())
+				.userId(session.userId())
+				.createdAt(existing.session().createdAt())
+				.expiresAt(session.expiresAt())
+				.metadata(session.metadata())
+				.build();
+			return new SessionData(updated, existing.events(), existing.version());
 		});
-		return session;
+		return saved.session();
+	}
+
+	@Override
+	public boolean saveIfAbsent(Session session) {
+		Assert.notNull(session, "session must not be null");
+		return this.store.putIfAbsent(session.id(), new SessionData(session, List.of(), 0L)) == null;
 	}
 
 	@Override

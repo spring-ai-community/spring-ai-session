@@ -129,3 +129,17 @@ exchange.
 
 See [Turn-boundary Safety](compaction.md#turn-boundary-safety) in the compaction reference
 for the full explanation and event-log diagram.
+
+---
+
+## Recall search and branches
+
+`conversation_search` (see [Recall Storage](recall-storage.md)) searches the whole session
+by default, including peer sub-agents' events. To keep a sub-agent's recall inside its
+own view of the session, build its tool instance with the agent's branch:
+
+```java
+SessionEventTools researcherTools = SessionEventTools.builder(sessionService)
+    .branch("orch.researcher")
+    .build();
+```

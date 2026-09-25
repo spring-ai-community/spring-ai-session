@@ -13,7 +13,9 @@ On every request the advisor:
 1. Resolves the session ID from `SESSION_ID_CONTEXT_KEY` in the advisor context — this
    key **must** be present on every request. If the session does not exist, it is created
    automatically using the `USER_ID_CONTEXT_KEY` value (or `defaultUserId`) and the
-   resolved session ID. If the session already exists and `USER_ID_CONTEXT_KEY` is set,
+   resolved session ID (`defaultUserId` defaults to `"default-user"`, so set
+   `USER_ID_CONTEXT_KEY` or `.defaultUserId(...)` if you look sessions up by user later,
+   e.g. with `findByUserId` or `CrossSessionRecallTools`). If the session already exists and `USER_ID_CONTEXT_KEY` is set,
    the advisor validates that the requesting user owns the session and throws
    `IllegalStateException` on mismatch.
 2. Retrieves the session's event history (filtered by the configured `eventFilter`,
@@ -24,8 +26,9 @@ On every request the advisor:
    the prompt regardless of what the configured or per-request filter allows.
 3. Reorders all `SystemMessage` instances to the front of the combined message list,
    preserving their relative order.
-4. Appends the current user message to the session, if the configured `MessageFilter`
-   accepts it.
+4. Appends the prompt's last user message to the session, if the configured
+   `MessageFilter` accepts it. Inside a tool-calling loop this is the trailing
+   tool-response message instead (`Prompt.getLastUserOrToolResponseMessage()`).
 5. After the model responds, appends the assistant message(s) through the configured
    `MessageFilter` (default: `MessageFilter.skipEmptyMessages()`). By default,
    empty assistant messages (blank text, no tool calls, and no media) are skipped — some
@@ -67,8 +70,8 @@ ChatClient client = ChatClient.builder(chatModel)
     session ID would silently merge history across different users.
 
 !!! warning "Trigger and strategy must be set together"
-    Setting only one of `compactionTrigger` or `compactionStrategy` throws
-    `IllegalStateException`. Set both or neither.
+    Setting only one of `compactionTrigger` or `compactionStrategy` makes `build()` throw
+    `IllegalArgumentException`. Set both or neither.
 
 !!! note "Default advisor order — nested inside the tool-calling loop"
     The default order is `Ordered.HIGHEST_PRECEDENCE + 1000` (≈ `Integer.MIN_VALUE + 1000`),
@@ -99,7 +102,7 @@ ChatClient client = ChatClient.builder(chatModel)
 By default every persisted event gets a random id, so a retried write always creates a
 new event. Configure `requestEventIdGenerator`/`responseEventIdGenerator` to derive a
 deterministic id instead — a retry with the same id becomes a no-op (see [Idempotent
-`appendEvent`](concepts.md)):
+`appendEvent`](concepts.md#idempotent-appendevent)):
 
 ```java
 IdempotentSessionEventIdGenerator idGenerator = new IdempotentSessionEventIdGenerator();
@@ -110,10 +113,32 @@ SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
     .build();
 ```
 
-`IdempotentSessionEventIdGenerator` reuses the model's own tool-call/tool-response ids
-where present, otherwise hashes a configurable context-key fingerprint (session id by
-default). Pass additional keys — e.g. a per-request run id — to scope ids more tightly,
-so retries still dedupe but distinct calls with identical content don't collide.
+`IdempotentSessionEventIdGenerator` derives each id from two parts:
+
+- **The message.** For tool calls and tool responses it uses the model's tool-call ids. If
+  any of those ids is blank (some providers, such as Ollama, don't assign them), it uses
+  the tool names, arguments and response data instead. For every other message it uses
+  the message text.
+- **A context fingerprint.** These are the values of a list of advisor-context keys. The
+  default is just the session id.
+
+Both parts are hashed into an id of the form `<messageType>-<sha256>`, at most 74
+characters, which fits the JDBC `VARCHAR(255)` column.
+
+!!! warning "Identical messages collide"
+    With the default session-scoped fingerprint, two identical messages anywhere in the
+    same session get the same id, and the second is dropped as a replay. For example, a
+    user answering "yes" twice loses the second "yes". To avoid this, add a context key
+    that changes per request, such as a durable run id. The varargs constructor
+    *replaces* the default key list, so include the session key yourself:
+
+    ```java
+    new IdempotentSessionEventIdGenerator("run-id", SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY);
+    ```
+
+To write your own generator, implement `SessionEventRequestIdGenerator` and/or
+`SessionEventResponseIdGenerator`. The defaults are `SessionEventRequestIdGenerator.random()`
+and `SessionEventResponseIdGenerator.random()`.
 
 ---
 
@@ -185,7 +210,9 @@ String response = client.prompt()
 
 `EventFilter.merge()` semantics: every non-null field from the request filter replaces
 the corresponding field from the advisor default; the two boolean flags, `excludeSynthetic`
-and `excludeArchived`, are OR-ed so either side can opt in. A `null` value for
+and `excludeArchived`, are OR-ed so either side can opt in. A request-level `lastN` or
+`page`/`pageSize` replaces the advisor's retrieval modifier as a whole (see
+[Merging filters](event-filtering.md#merging-filters)). A `null` value for
 `EVENT_FILTER_CONTEXT_KEY` is ignored.
 
 ---

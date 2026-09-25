@@ -16,6 +16,7 @@
 
 package org.springframework.ai.session;
 
+import java.util.Locale;
 import java.util.Set;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -118,10 +119,10 @@ public interface MessageFilter {
 	 */
 	static MessageFilter containsText(String keyword) {
 		Assert.hasText(keyword, "keyword must not be blank");
-		String lowerKeyword = keyword.toLowerCase();
+		String lowerKeyword = keyword.toLowerCase(Locale.ROOT);
 		return message -> {
 			String text = message.getText();
-			return text != null && text.toLowerCase().contains(lowerKeyword);
+			return text != null && text.toLowerCase(Locale.ROOT).contains(lowerKeyword);
 		};
 	}
 

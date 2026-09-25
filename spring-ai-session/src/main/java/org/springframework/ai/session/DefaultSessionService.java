@@ -68,7 +68,13 @@ public class DefaultSessionService implements SessionService {
 			.metadata(new HashMap<>(request.metadata()))
 			.build();
 
-		return this.sessionRepository.save(session);
+		// Insert-only and atomic: never silently overwrite an existing session (an upsert
+		// would reassign its owner and TTL while keeping its event log), even when two
+		// callers create the same id concurrently.
+		if (!this.sessionRepository.saveIfAbsent(session)) {
+			throw new IllegalStateException("Session already exists: " + sessionId);
+		}
+		return session;
 	}
 
 	@Override

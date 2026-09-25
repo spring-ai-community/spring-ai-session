@@ -55,6 +55,17 @@ class JdbcSessionRepositoryMysqlAutoConfigurationIT {
 	}
 
 	@Test
+	void schemaInitializationIsRepeatable() {
+		// initialize-schema=always re-runs the script on every startup against an
+		// existing database; a second run must not fail (e.g. on duplicate indexes).
+		this.contextRunner.run(context -> {
+			var initializer = context.getBean(JdbcSessionRepositorySchemaInitializer.class);
+			assertThat(initializer.initializeDatabase()).isTrue();
+			assertThat(context.getBean(JdbcSessionRepository.class).findById("missing")).isNull();
+		});
+	}
+
+	@Test
 	void schemaInitializerNotCreatedWhenDisabled() {
 		this.contextRunner
 			.withPropertyValues(JdbcSessionRepositoryProperties.CONFIG_PREFIX + ".initialize-schema=never")

@@ -31,15 +31,25 @@ public class PostgresJdbcSessionRepositoryDialect implements JdbcSessionReposito
 				VALUES (?, ?, ?, ?, ?)
 				ON CONFLICT (id) DO UPDATE
 					SET user_id    = EXCLUDED.user_id,
-						created_at = EXCLUDED.created_at,
 						expires_at = EXCLUDED.expires_at,
 						metadata   = EXCLUDED.metadata
 				""";
 	}
 
 	@Override
+	public String getInsertSessionIfAbsentSql() {
+		// A failed INSERT would abort an enclosing PostgreSQL transaction; ignore the
+		// conflict instead and report it through the update count.
+		return """
+				INSERT INTO AI_SESSION (id, user_id, created_at, expires_at, metadata)
+				VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT (id) DO NOTHING
+				""";
+	}
+
+	@Override
 	public String getKeywordFilterFragment() {
-		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ?";
+		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
 	}
 
 }

@@ -57,7 +57,7 @@ import org.springframework.util.StringUtils;
  * Read-only: this class has no append/compact/delete capability.
  *
  * @author Christian Tzolov
- * @since 2.0
+ * @since 2.0.0
  */
 public class CrossSessionRecallTools {
 
@@ -172,32 +172,36 @@ public class CrossSessionRecallTools {
 	private EventFilter buildFilter(String query, String matchMode, String since) {
 		EventFilter.Builder builder = EventFilter.builder();
 
-		if (StringUtils.hasText(query)) {
-			List<String> terms = List.of(query.split(","))
-				.stream()
-				.map(String::trim)
-				.filter(StringUtils::hasText)
-				.toList();
-			if (terms.isEmpty()) {
-				// e.g. query = "," or ", " — has visible characters so it isn't blank,
-				// but splits into zero usable terms. Silently falling through to "no
-				// keyword filter" would turn a narrow search into "return everything for
-				// this user", so reject it explicitly instead.
-				throw new IllegalArgumentException(
-						"query '" + query + "' contained no usable search terms after splitting on ','");
-			}
-			if (terms.size() > MAX_QUERY_TERMS) {
-				throw new IllegalArgumentException("query supplied " + terms.size() + " comma-separated terms, "
-						+ "exceeding the maximum of " + MAX_QUERY_TERMS + " — narrow the search instead of "
-						+ "combining many terms into a single call");
-			}
-			if (terms.size() > 1) {
-				MatchMode mode = "all".equalsIgnoreCase(matchMode) ? MatchMode.ALL : MatchMode.ANY;
-				builder.keywords(terms).matchMode(mode);
-			}
-			else {
-				builder.keyword(terms.get(0));
-			}
+		// A blank query would apply no keyword filter and return every event of every
+		// session of this user — reject it rather than silently widening the search.
+		if (!StringUtils.hasText(query)) {
+			throw new IllegalArgumentException("query must contain at least one search term");
+		}
+		MatchMode mode = parseMatchMode(matchMode);
+
+		List<String> terms = List.of(query.split(","))
+			.stream()
+			.map(String::trim)
+			.filter(StringUtils::hasText)
+			.toList();
+		if (terms.isEmpty()) {
+			// e.g. query = "," or ", " — has visible characters so it isn't blank,
+			// but splits into zero usable terms. Silently falling through to "no
+			// keyword filter" would turn a narrow search into "return everything for
+			// this user", so reject it explicitly instead.
+			throw new IllegalArgumentException(
+					"query '" + query + "' contained no usable search terms after splitting on ','");
+		}
+		if (terms.size() > MAX_QUERY_TERMS) {
+			throw new IllegalArgumentException("query supplied " + terms.size() + " comma-separated terms, "
+					+ "exceeding the maximum of " + MAX_QUERY_TERMS + " — narrow the search instead of "
+					+ "combining many terms into a single call");
+		}
+		if (terms.size() > 1) {
+			builder.keywords(terms).matchMode(mode);
+		}
+		else {
+			builder.keyword(terms.get(0));
 		}
 
 		if (StringUtils.hasText(since)) {
@@ -211,6 +215,16 @@ public class CrossSessionRecallTools {
 		}
 
 		return builder.build();
+	}
+
+	private static MatchMode parseMatchMode(String matchMode) {
+		if (!StringUtils.hasText(matchMode) || "any".equalsIgnoreCase(matchMode.trim())) {
+			return MatchMode.ANY;
+		}
+		if ("all".equalsIgnoreCase(matchMode.trim())) {
+			return MatchMode.ALL;
+		}
+		throw new IllegalArgumentException("matchMode '" + matchMode + "' is not supported; use 'any' or 'all'");
 	}
 
 	public static final class Builder {

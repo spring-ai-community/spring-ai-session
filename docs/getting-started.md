@@ -3,8 +3,8 @@
 ## Requirements
 
 - Java 17+
-- Spring AI `2.0.0+`
-- Spring Boot `4.0.7+`
+- Spring AI `2.0.1+`
+- Spring Boot `4.1.1+`
 
 ---
 
@@ -81,7 +81,7 @@ Import the BOM so all module versions stay in sync:
 
     - a `JdbcSessionRepository` bean backed by the auto-configured `DataSource`
     - a `DefaultSessionService` bean wrapping the repository
-    - SQL dialect detection from the DataSource URL
+    - SQL dialect detection from the database metadata (PostgreSQL, MySQL, MariaDB, H2)
     - schema initialisation for embedded databases (H2)
 
     To initialise the schema for PostgreSQL or MySQL, set:
@@ -204,15 +204,18 @@ If no session exists for the given ID, the advisor creates one automatically.
 
 ---
 
-## Git Repositories
+## Maven Repositories
 
-Spring AI Session is available from the Spring snapshot repository:
+Released versions are published to **Maven Central**, so no extra repository
+configuration is needed.
+
+To use a `-SNAPSHOT` version, add the Central Portal snapshot repository:
 
 ```xml
 <repositories>
     <repository>
-        <id>spring-snapshots</id>
-        <url>https://repo.spring.io/snapshot</url>
+        <id>central-portal-snapshots</id>
+        <url>https://central.sonatype.com/repository/maven-snapshots/</url>
         <snapshots><enabled>true</enabled></snapshots>
         <releases><enabled>false</enabled></releases>
     </repository>
@@ -227,3 +230,4 @@ Spring AI Session is available from the Spring snapshot repository:
 - [Context Compaction](session-management/compaction.md) — configure triggers and strategies
 - [Multi-Agent Branch Isolation](session-management/multi-agent.md) — share sessions across agents safely
 - [Session JDBC](session-jdbc/index.md) — persistent JDBC-backed repository
+- [Migration Guide](migration.md) — upgrade notes between versions

@@ -13,8 +13,8 @@ decisions) — not for the live conversational agent answering the user directly
 | | [`conversation_search`](recall-storage.md) | `cross_session_search` |
 |---|---|---|
 | Scope | One session | Every session belonging to one user |
-| Session/user resolved from | `ToolContext`, automatically, per request | Bound once at **construction time** |
-| Who can change the scope | The calling application, via `SessionMemoryAdvisor` | Nobody at runtime — fixed for the tool instance's lifetime |
+| Session/user resolved from | `ToolContext`, per request (the caller passes `ChatMemory.CONVERSATION_ID`) | Bound once at **construction time** |
+| Who can change the scope | The calling application, via `.toolContext(...)` | Nobody at runtime — fixed for the tool instance's lifetime |
 | Intended caller | The live conversational agent, mid-chat | A background/maintenance agent running out-of-band |
 | Query power | Single keyword | Multi-term (`ANY`/`ALL`), plus `since` date scoping |
 | Result shape | `timestamp`, `type`, `text` | Same, plus `sessionId` |
@@ -58,8 +58,8 @@ The `cross_session_search` tool is automatically discovered by Spring AI's tool 
 | Parameter | Required | Description |
 |---|---|---|
 | `innerThought` | yes | Agent's private reasoning (not returned to the caller) |
-| `query` | yes | Case-insensitive keyword, or comma-separated keywords (up to 20 terms per call) |
-| `matchMode` | no | `"any"` (default) or `"all"` — how multiple comma-separated keywords in `query` combine |
+| `query` | yes | Case-insensitive keyword, or comma-separated keywords (up to 20 terms per call). A blank query, or one with no usable terms (e.g. `","`), is rejected |
+| `matchMode` | no | `"any"` (default) or `"all"` — how multiple comma-separated keywords in `query` combine. Any other value is rejected |
 | `since` | no | ISO-8601 instant (e.g. `2026-07-01T00:00:00Z`); only events at or after this time are considered. Omit to search the full history |
 | `page` | no | Zero-indexed result page; defaults to `0`; negative values are clamped to `0` |
 
@@ -91,7 +91,7 @@ matches an event whose text contains **either** term. Set `matchMode = "all"` to
 terms after splitting and trimming (e.g. `","` or `", "`) is rejected with an error rather
 than silently falling back to "no filter" — see [Design notes](#design-notes).
 
-The term count is capped at 20 per call (`CrossSessionRecallTools.MAX_QUERY_TERMS`). Each
+The term count is capped at 20 per call. Each
 term becomes its own predicate — and, on a JDBC-backed `SessionService`, its own bound SQL
 parameter — so an unbounded term count would let a single call grow the generated query
 without limit. This is a sanity limit, not a security boundary in itself: every term is

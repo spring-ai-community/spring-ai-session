@@ -241,6 +241,25 @@ class SessionMemoryAdvisorIT {
 	}
 
 	@Test
+	void compactionFailureDoesNotFailTheCall() {
+		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.compactionTrigger(request -> true)
+			.compactionStrategy(request -> {
+				throw new IllegalStateException("summarizer unavailable");
+			})
+			.build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		compactingAdvisor.before(buildRequest(this.sessionId, "question"), chain);
+		ChatClientResponse response = buildResponse(this.sessionId, "answer");
+
+		assertThat(compactingAdvisor.after(response, chain)).isSameAs(response);
+		assertThat(this.sessionService.getEvents(this.sessionId, EventFilter.active()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("question", "answer");
+	}
+
+	@Test
 	void beforePromotesAllSystemMessagesToFront() {
 		// Simulate a session whose history already contains a system message (e.g. from
 		// a previous turn that was stored), plus the current request also carries one.

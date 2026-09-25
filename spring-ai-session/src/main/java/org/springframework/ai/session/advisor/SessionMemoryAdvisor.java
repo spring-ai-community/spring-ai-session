@@ -121,6 +121,12 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	 */
 	public static final String USER_ID_CONTEXT_KEY = "chat_memory_user_id";
 
+	/**
+	 * Context key for a per-request {@link EventFilter} that is merged over the
+	 * advisor's configured filter (see {@link EventFilter#merge(EventFilter)}). The value
+	 * must be an {@code EventFilter}. Set via:
+	 * {@code .advisors(a -> a.param(SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, EventFilter.lastN(10)))}
+	 */
 	public static final String EVENT_FILTER_CONTEXT_KEY = "chat_memory_event_filter_id";
 
 	private final SessionService sessionService;
@@ -175,24 +181,20 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// 0. Resolve the session ID — must be present in the request context.
 		String sessionId = getSessionId(request.context());
 
-		// 1. Find or create the session. The Session object is cached in the request
-		// context so that after() can reuse it and skip a redundant findById()
-		// repository round-trip when compaction is configured.
+		// 1. Find or create the session.
 		Session session = this.sessionService.findById(sessionId);
 		if (session == null) {
-			String userId = getUserId(request.context());
-			session = this.sessionService.create(CreateSessionRequest.builder().id(sessionId).userId(userId).build());
+			session = createSession(sessionId, request.context());
 		}
-		else {
-			// Enforce ownership when the caller explicitly identifies a user via
-			// USER_ID_CONTEXT_KEY. Skipped when no per-request user ID is set so that
-			// callers that rely solely on defaultUserId are not broken.
-			Object userIdValue = request.context().get(USER_ID_CONTEXT_KEY);
-			if (userIdValue instanceof String requestUserId && !requestUserId.isBlank()
-					&& !requestUserId.equals(session.userId())) {
-				throw new IllegalStateException(
-						"Session '" + sessionId + "' does not belong to user '" + requestUserId + "'. Access denied.");
-			}
+
+		// Enforce ownership when the caller explicitly identifies a user via
+		// USER_ID_CONTEXT_KEY. Skipped when no per-request user ID is set so that
+		// callers that rely solely on defaultUserId are not broken.
+		Object userIdValue = request.context().get(USER_ID_CONTEXT_KEY);
+		if (userIdValue instanceof String requestUserId && !requestUserId.isBlank()
+				&& !requestUserId.equals(session.userId())) {
+			throw new IllegalStateException(
+					"Session '" + sessionId + "' does not belong to user '" + requestUserId + "'. Access denied.");
 		}
 
 		// 2. Retrieve history applying the configured filter (default: all events)
@@ -201,11 +203,13 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// configured filter so that request-level parameters override the advisor
 		// defaults
 		EventFilter eventFilter = this.eventFilter;
-		if (request.context().containsKey(EVENT_FILTER_CONTEXT_KEY)) {
-			EventFilter requestEventFilter = (EventFilter) request.context().get(EVENT_FILTER_CONTEXT_KEY);
-			if (requestEventFilter != null) {
-				eventFilter = this.eventFilter.merge(requestEventFilter);
+		Object requestFilterValue = request.context().get(EVENT_FILTER_CONTEXT_KEY);
+		if (requestFilterValue != null) {
+			if (!(requestFilterValue instanceof EventFilter requestEventFilter)) {
+				throw new IllegalArgumentException("Advisor context value for '" + EVENT_FILTER_CONTEXT_KEY
+						+ "' must be an EventFilter but was " + requestFilterValue.getClass().getName());
 			}
+			eventFilter = this.eventFilter.merge(requestEventFilter);
 		}
 
 		// Always exclude archived events from the active context window — they were
@@ -279,9 +283,18 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		}
 
 		// 2. Compact synchronously if configured — the full turn (user + assistant) is
-		// already written at this point so there is no race.
+		// already written at this point so there is no race. Compaction is best-effort:
+		// the model's reply is already produced and persisted, so a compaction failure
+		// (e.g. the summarization LLM call failing) must not fail the user's request. The
+		// log is left untouched and compaction is retried after the next turn.
 		if (this.compactionTrigger != null && this.compactionStrategy != null) {
-			this.sessionService.compact(sessionId, this.compactionTrigger, this.compactionStrategy);
+			try {
+				this.sessionService.compact(sessionId, this.compactionTrigger, this.compactionStrategy);
+			}
+			catch (RuntimeException ex) {
+				logger.warn("Compaction failed for session [{}]; the event log is unchanged and compaction will be "
+						+ "retried after the next turn", sessionId, ex);
+			}
 		}
 
 		return response;
@@ -309,6 +322,26 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		throw new IllegalStateException(
 				"No session ID found in advisor context. " + "Set SESSION_ID_CONTEXT_KEY on every request: "
 						+ ".advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))");
+	}
+
+	/**
+	 * Creates the session on first use. {@code SessionService.create} inserts atomically,
+	 * so if a concurrent request for the same new session ID created it first, this
+	 * request's create is rejected and the <em>stored</em> session is re-read instead —
+	 * the ownership check in {@code before()} then runs against its actual owner.
+	 */
+	private Session createSession(String sessionId, Map<String, @Nullable Object> context) {
+		try {
+			return this.sessionService
+				.create(CreateSessionRequest.builder().id(sessionId).userId(getUserId(context)).build());
+		}
+		catch (IllegalStateException ex) {
+			Session existing = this.sessionService.findById(sessionId);
+			if (existing == null) {
+				throw ex;
+			}
+			return existing;
+		}
 	}
 
 	private String getUserId(Map<String, @Nullable Object> context) {

@@ -157,9 +157,12 @@ class TokenCountCompactionStrategyTests {
 
 		CompactionResult result = strategy.compact(requestWith(events));
 
-		// All events archived after snap removes the orphaned assistant reply
-		assertThat(result.compactedEvents()).isEmpty();
-		assertThat(result.archivedEvents()).hasSize(4);
+		// The raw cut lands on the orphaned assistant reply a2 and snaps past the end; the
+		// last turn (u2_longtxt, a2) is kept even though it exceeds the budget, so the
+		// active window is never emptied and never starts mid-turn.
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("u1", "a1");
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("u2_longtxt", "a2");
 	}
 
 	@Test
@@ -337,6 +340,37 @@ class TokenCountCompactionStrategyTests {
 
 		assertThat(result.archivedEvents()).isNotEmpty();
 		assertThat(result.tokensEstimatedSaved()).isGreaterThan(0);
+	}
+
+	@Test
+	void oversizeLastTurnIsKeptInsteadOfArchivingEverything() {
+		// Turn 1: "User: hi" (8) + "Assistant: ok" (13) = 21 tokens.
+		// Turn 2 alone exceeds the 30-token budget.
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(30)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
+		CompactionRequest request = requestWith(turn("hi", "ok"), turn("big question", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
+
+		CompactionResult result = strategy.compact(request);
+
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("hi", "ok");
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("big question", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+	}
+
+	@Test
+	void singleOversizeTurnIsNotCompacted() {
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(30)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
+		CompactionRequest request = requestWith(turn("big question", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
+
+		CompactionResult result = strategy.compact(request);
+
+		assertThat(result.archivedEvents()).isEmpty();
+		assertThat(result.compactedEvents()).hasSize(2);
 	}
 
 	// --- helpers ---

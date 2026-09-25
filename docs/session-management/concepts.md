@@ -16,7 +16,7 @@ The event log is stored separately in the repository and fetched on demand.
 | `id` | Unique session identifier |
 | `userId` | Owning user or agent — required, used for isolation |
 | `createdAt` | Creation timestamp |
-| `expiresAt` | Expiry instant; defaults to the configured default time-to-live (60 days) from creation; `null` means no expiry. |
+| `expiresAt` | Expiry instant. Sessions created through `SessionService.create` always get one: the request's `timeToLive`, or the service's default (60 days, configurable). `null` (no expiry) is only possible for a `Session` built directly with `Session.builder().expiresAt(null)`. |
 | `metadata` | Arbitrary key/value pairs (model info, tags, etc.) |
 
 Keeping `Session` metadata-only means it can be passed across boundaries cheaply, and
@@ -144,8 +144,11 @@ events with two synthetic events that form a coherent conversation turn:
 This mirrors the OpenAI Agents SDK shadow-prompt pattern and ensures that downstream
 models always see a valid user↔assistant alternation.
 
-All compaction strategies treat synthetic events as opaque — they separate them from real
-events before processing, preserve them, and place them first in the compacted output.
+All compaction strategies separate synthetic events from real events before processing.
+The sliding-window, turn-window and token-count strategies keep them unchanged and place
+them first in the compacted output. `RecursiveSummarizationCompactionStrategy` instead
+folds the previous summary into the new one and **replaces** it: the superseded synthetic
+events are removed from the log (they are not archived).
 
 Build a synthetic summary turn explicitly:
 
@@ -188,13 +191,16 @@ operates on the event list as an explicit parameter.
 
 **Archiving instead of deleting**
 
-Compaction never deletes the events it removes from the active context window. Instead it
+Compaction never deletes the real events it removes from the active context window. Instead it
 marks them archived (`SessionEvent.isArchived()`) via `compactEvents`, leaving the full
 verbatim history in the log. The active context window — what `SessionMemoryAdvisor`
 injects into the prompt — is the `EventFilter.active()` view (`excludeArchived = true`),
 while Recall Storage searches (`EventFilter.keywordSearch(...)`) deliberately span the
 whole log, archived events included. This is what makes the MemGPT recall pattern work:
 the agent can surface any prior exchange even after it has been summarized out of context.
+The one exception is a superseded synthetic summary: when `RecursiveSummarizationCompactionStrategy`
+writes a new summary, the previous summary events are dropped rather than archived, because
+their content is carried into the new summary.
 In the JDBC repository, events newly marked archived are updated in place (their row is
 never rewritten); only the active window is replaced with the new retained events on each
 compaction pass, so the growing archived history is never re-read or re-written.
@@ -209,13 +215,19 @@ CAS returns `false` — the caller treats this as a no-op rather than retrying. 
 implementations (JDBC, Redis) should map this to a database-level optimistic-lock column
 or a Redis `WATCH`.
 
-**Idempotent `appendEvent`**
+### Idempotent appendEvent {#idempotent-appendevent}
 
 A retried `appendEvent` call for an id that was already committed is a no-op, not an
-error or a duplicate — both `InMemorySessionRepository` and `JdbcSessionRepository`
-check by `SessionEvent.getId()` (the table's primary key in the JDBC case) before
-writing. The default id is still a random UUID, so this only applies when a caller
-supplies its own deterministic id — see [`SessionMemoryAdvisor`'s pluggable id
+error or a duplicate, and does not increment the event-log version.
+`InMemorySessionRepository` checks the session's events for the id before appending.
+`JdbcSessionRepository` inserts and treats a primary-key violation on the event `id` as a
+replay.
+
+In JDBC the event `id` is the primary key of the whole `AI_SESSION_EVENT` table, not just
+of one session. Reusing an id that already belongs to a *different* session throws
+`IllegalStateException` instead of being treated as a replay, so event ids should be
+unique across sessions. The default id is a random UUID, so this only matters when a
+caller supplies its own deterministic ids. See [`SessionMemoryAdvisor`'s pluggable id
 generators](chat-client.md#idempotent-session-event-ids).
 
 **Event ordering**
@@ -245,8 +257,11 @@ Session session = service.create(
 service.appendMessage(session.id(), new UserMessage("What is Spring AI?"));
 service.appendMessage(session.id(), new AssistantMessage("Spring AI is..."));
 
-// 3. Retrieve as Message list (for passing directly to an LLM)
-List<Message> history = service.getMessages(session.id());
+// 3. Retrieve the active context window as a Message list (for passing to an LLM)
+List<Message> history = service.getActiveMessages(session.id());
+
+//    ...or the full recorded history, including events archived by compaction
+List<Message> fullHistory = service.getMessages(session.id());
 
 // 4. Retrieve as SessionEvent list (for filtering, inspection, compaction)
 List<SessionEvent> events = service.getEvents(session.id());
@@ -281,7 +296,7 @@ instant and deletes them one by one. It returns the count of sessions removed.
 ## Package Structure
 
 ```
-org.springframework.ai.session          (Java package — unchanged from upstream)
+org.springframework.ai.session          (core and JDBC modules)
 ├── Session.java                        – immutable metadata-only value object
 ├── SessionEvent.java                   – immutable wrapper around a Spring AI Message
 ├── SessionService.java                 – primary lifecycle + compaction API
@@ -293,14 +308,17 @@ org.springframework.ai.session          (Java package — unchanged from upstrea
 ├── InMemorySessionRepository.java      – ConcurrentHashMap-backed repository
 │
 ├── advisor/
-│   └── SessionMemoryAdvisor.java       – ChatClient advisor with auto-compaction
+│   ├── SessionMemoryAdvisor.java       – ChatClient advisor with auto-compaction
+│   ├── SessionEventRequestIdGenerator.java  – SPI: id of the persisted user/tool message
+│   ├── SessionEventResponseIdGenerator.java – SPI: id of the persisted assistant message
+│   └── IdempotentSessionEventIdGenerator.java – deterministic ids for retry-safe appends
 │
 ├── compaction/
 │   ├── CompactionRequest.java          – (session, events, eventCount, turnCount)
 │   ├── CompactionResult.java           – compacted events + archived events + metrics
 │   ├── CompactionStrategy.java         – strategy SPI
 │   ├── CompactionTrigger.java          – trigger SPI
-│   ├── CompactionUtils.java            – shared event formatter + turn-boundary snapping
+│   ├── CompactionUtils.java            – (package-private) event formatter + turn-boundary snapping
 │   ├── CompositeCompactionTrigger.java – OR-composite of triggers
 │   ├── TurnCountTrigger.java
 │   ├── TokenCountTrigger.java
@@ -310,5 +328,11 @@ org.springframework.ai.session          (Java package — unchanged from upstrea
 │   └── RecursiveSummarizationCompactionStrategy.java
 │
 └── tool/
-    └── SessionEventTools.java          – @Tool conversation_search (Recall Storage)
+    ├── SessionEventTools.java          – @Tool conversation_search (Recall Storage)
+    └── CrossSessionRecallTools.java    – @Tool cross_session_search (all of a user's sessions)
 ```
+
+The JDBC repository lives in `org.springframework.ai.session.jdbc`
+(`spring-ai-session-jdbc`). The Spring Boot auto-configurations use the
+`org.springaicommunity.session.autoconfigure` and
+`org.springaicommunity.session.jdbc.autoconfigure` packages.

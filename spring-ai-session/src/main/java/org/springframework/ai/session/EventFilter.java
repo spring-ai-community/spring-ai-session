@@ -18,6 +18,7 @@ package org.springframework.ai.session;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -91,9 +92,11 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	}
 
 	public EventFilter {
-		keyword = (keyword != null && !keyword.isBlank()) ? keyword.toLowerCase() : null;
-		keywords = (keywords != null && !keywords.isEmpty())
-				? keywords.stream().filter(k -> k != null && !k.isBlank()).map(String::toLowerCase).toList() : null;
+		keyword = (keyword != null && !keyword.isBlank()) ? keyword.toLowerCase(Locale.ROOT) : null;
+		keywords = (keywords != null && !keywords.isEmpty()) ? keywords.stream()
+			.filter(k -> k != null && !k.isBlank())
+			.map(k -> k.toLowerCase(Locale.ROOT))
+			.toList() : null;
 		keywords = (keywords != null && keywords.isEmpty()) ? null : keywords;
 		matchMode = (keywords != null) ? (matchMode != null ? matchMode : MatchMode.ANY) : null;
 		messageTypes = (messageTypes != null && !messageTypes.isEmpty()) ? messageTypes : null;
@@ -117,15 +120,28 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		}
 	}
 
+	/**
+	 * Returns a filter combining this (base) filter with {@code other}, where every
+	 * criterion set on {@code other} takes precedence. The {@code excludeSynthetic} and
+	 * {@code excludeArchived} flags are OR-ed (either side can only narrow the result).
+	 *
+	 * <p>
+	 * The retrieval modifier — {@link #lastN} or {@link #page}/{@link #pageSize} — is
+	 * treated as a single unit: if {@code other} sets either form, it replaces this
+	 * filter's modifier entirely. This lets a per-request paginated search override a base
+	 * {@code lastN} window (and vice versa) instead of failing on the mutually exclusive
+	 * combination.
+	 */
 	public EventFilter merge(EventFilter other) {
+		boolean otherHasRetrievalModifier = other.lastN != null || other.pageSize != null;
+		EventFilter retrieval = otherHasRetrievalModifier ? other : this;
 		return new EventFilter(other.from != null ? other.from : this.from, other.to != null ? other.to : this.to,
 				other.messageTypes != null ? other.messageTypes : this.messageTypes,
-				other.excludeSynthetic || this.excludeSynthetic, other.lastN != null ? other.lastN : this.lastN,
+				other.excludeSynthetic || this.excludeSynthetic, retrieval.lastN,
 				other.keyword != null ? other.keyword : this.keyword,
 				other.keywords != null ? other.keywords : this.keywords,
 				other.matchMode != null ? other.matchMode : this.matchMode,
-				other.pattern != null ? other.pattern : this.pattern, other.page != null ? other.page : this.page,
-				other.pageSize != null ? other.pageSize : this.pageSize,
+				other.pattern != null ? other.pattern : this.pattern, retrieval.page, retrieval.pageSize,
 				other.branch != null ? other.branch : this.branch, other.excludeArchived || this.excludeArchived);
 	}
 
@@ -259,7 +275,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		}
 		if (this.keyword != null) {
 			String text = event.getMessage().getText();
-			if (text == null || !text.toLowerCase().contains(this.keyword)) {
+			if (text == null || !text.toLowerCase(Locale.ROOT).contains(this.keyword)) {
 				return false;
 			}
 		}
@@ -268,7 +284,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 			if (text == null) {
 				return false;
 			}
-			String lowerText = text.toLowerCase();
+			String lowerText = text.toLowerCase(Locale.ROOT);
 			boolean matched = (this.matchMode == MatchMode.ALL) ? this.keywords.stream().allMatch(lowerText::contains)
 					: this.keywords.stream().anyMatch(lowerText::contains);
 			if (!matched) {
@@ -428,7 +444,10 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		}
 
 		/**
-		 * Number of results per page. Defaults to {@link EventFilter#DEFAULT_PAGE_SIZE}.
+		 * Number of results per page. Enables pagination; {@link #page(Integer)} then
+		 * defaults to {@code 0}. Unset by default (no pagination) — the
+		 * {@link EventFilter#keywordSearch(String)}-style factories use
+		 * {@link EventFilter#DEFAULT_PAGE_SIZE}.
 		 */
 		public Builder pageSize(@Nullable Integer pageSize) {
 			this.pageSize = pageSize;

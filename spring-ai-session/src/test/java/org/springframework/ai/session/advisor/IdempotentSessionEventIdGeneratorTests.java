@@ -137,6 +137,51 @@ class IdempotentSessionEventIdGeneratorTests {
 		assertThat(this.sessionService.getEvents(this.sessionId, EventFilter.all())).hasSize(1);
 	}
 
+	@Test
+	void distinctToolCallsWithBlankIdsAreNotCollapsed() {
+		// Some providers (e.g. Ollama) return empty tool-call ids — those must not be used
+		// as the idempotency key, or every tool call in the session would collide.
+		SessionMemoryAdvisor advisor = advisorWith(new IdempotentSessionEventIdGenerator());
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		advisor.after(toolCallResponse(new AssistantMessage.ToolCall("", "function", "get_weather", "{\"city\":\"Paris\"}")),
+				chain);
+		advisor.after(toolCallResponse(new AssistantMessage.ToolCall("", "function", "get_time", "{}")), chain);
+		// An exact replay of the first call still dedupes via the content hash.
+		advisor.after(toolCallResponse(new AssistantMessage.ToolCall("", "function", "get_weather", "{\"city\":\"Paris\"}")),
+				chain);
+
+		assertThat(this.sessionService.getEvents(this.sessionId, EventFilter.all())).hasSize(2);
+	}
+
+	@Test
+	void derivedIdsAreBoundedRegardlessOfInputLength() {
+		IdempotentSessionEventIdGenerator generator = new IdempotentSessionEventIdGenerator();
+		String longSessionId = "s".repeat(250);
+		List<AssistantMessage.ToolCall> manyCalls = java.util.stream.IntStream.range(0, 20)
+			.mapToObj(i -> new AssistantMessage.ToolCall("call_abcdefghijklmnopqrstuvwx" + i, "function", "tool" + i,
+					"{}"))
+			.toList();
+		ChatClientResponse response = ChatClientResponse.builder()
+			.chatResponse(ChatResponse.builder()
+				.generations(List.of(new Generation(AssistantMessage.builder().toolCalls(manyCalls).build())))
+				.build())
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, longSessionId))
+			.build();
+
+		String id = generator.generate(response, response.chatResponse().getResult().getOutput());
+
+		assertThat(id).hasSizeLessThanOrEqualTo(74).startsWith("assistant-");
+	}
+
+	private ChatClientResponse toolCallResponse(AssistantMessage.ToolCall toolCall) {
+		AssistantMessage message = AssistantMessage.builder().toolCalls(List.of(toolCall)).build();
+		return ChatClientResponse.builder()
+			.chatResponse(ChatResponse.builder().generations(List.of(new Generation(message))).build())
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build();
+	}
+
 	private SessionMemoryAdvisor advisorWith(IdempotentSessionEventIdGenerator generator) {
 		return SessionMemoryAdvisor.builder(this.sessionService)
 			.requestEventIdGenerator(generator)

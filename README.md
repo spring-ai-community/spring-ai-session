@@ -20,10 +20,10 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 
 ```
 spring-ai-session/
-├── spring-ai-session-bom/                               # Bill of Materials for version 
+├── spring-ai-session-bom/                               # Bill of Materials for aligning module versions
 ├── spring-ai-session/                                   # Core SPI, compaction framework, SessionMemoryAdvisor
-├── spring-ai-session-jdbc/                              # JDBC-backed SessionRepository (PostgreSQL, MySQL, H2) management
-└── auto-configurations/
+├── spring-ai-session-jdbc/                              # JDBC-backed SessionRepository (PostgreSQL, MySQL, MariaDB, H2)
+├── auto-configurations/
     └── session/
         ├── spring-ai-autoconfigure-session/             # Spring Boot auto-configuration for DefaultSessionService
         └── spring-ai-autoconfigure-session-jdbc/        # Spring Boot auto-configuration for the JDBC repository
@@ -39,7 +39,7 @@ spring-ai-session/
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
-| **Session JDBC Starter** | `spring-ai-starter-session-jdbc` | Spring Boot starter — pulls in JDBC repository, auto-configurations, and `spring-boot-starter` |
+| **Session JDBC Starter** | `spring-ai-starter-session-jdbc` | Spring Boot starter — pulls in the JDBC repository, auto-configurations, and `spring-boot-starter-jdbc` |
 | **Session BOM** | `spring-ai-session-bom` | Bill of Materials for managing all module versions together |
 
 ## Quick Start
@@ -114,13 +114,16 @@ Topics covered:
 - [ChatClient Integration](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/chat-client/) — `SessionMemoryAdvisor` setup and options
 - [Multi-Agent Branch Isolation](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/multi-agent/) — sharing sessions across parallel agents
 - [Recall Storage](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/recall-storage/) — keyword search over the full verbatim history
+- [Cross-Session Recall](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/cross-session-recall/) — search across all of a user's sessions
 - [Session JDBC](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-jdbc/) — JDBC repository setup, schema, and design notes
+- [JDBC Auto-configuration](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-jdbc/auto-configuration/) — Spring Boot auto-configuration and properties
+- [Migration Guide](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/migration/) — upgrade notes and breaking changes
 
 ## Requirements
 
 - Java 17+
-- Spring AI `2.0.0+`
-- Spring Boot `4.0.7+`
+- Spring AI `2.0.1+`
+- Spring Boot `4.1.1+`
 - Maven 3.6+
 
 ## Building

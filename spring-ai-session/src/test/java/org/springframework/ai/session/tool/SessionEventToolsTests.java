@@ -180,6 +180,49 @@ class SessionEventToolsTests {
 		assertThat(result).contains("memory management");
 	}
 
+	@Test
+	void missingSessionIdReturnsErrorInsteadOfSearchingDefaultSession() {
+		Session defaultSession = this.sessionService
+			.create(CreateSessionRequest.builder().id("default").userId("other-user").build());
+		this.sessionService.appendMessage(defaultSession.id(), new UserMessage("secret from another user"));
+
+		String result = this.tools.conversationSearch("thinking...", "secret", 0, new ToolContext(Map.of()));
+
+		assertThat(result).isEqualTo(SessionEventTools.MISSING_SESSION_ID_RESULT);
+	}
+
+	@Test
+	void blankSessionIdReturnsError() {
+		String result = this.tools.conversationSearch("thinking...", "anything", 0,
+				new ToolContext(Map.of(SessionEventTools.SESSION_ID_CONTEXT_KEY, " ")));
+
+		assertThat(result).isEqualTo(SessionEventTools.MISSING_SESSION_ID_RESULT);
+	}
+
+	@Test
+	void branchScopedToolDoesNotSeePeerSubAgentEvents() {
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("root note about spring"));
+		this.sessionService.appendEvent(SessionEvent.builder()
+			.sessionId(this.sessionId)
+			.branch("orch.researcher")
+			.message(new AssistantMessage("researcher found spring docs"))
+			.build());
+		this.sessionService.appendEvent(SessionEvent.builder()
+			.sessionId(this.sessionId)
+			.branch("orch.writer")
+			.message(new AssistantMessage("writer drafted spring article"))
+			.build());
+
+		SessionEventTools researcherTools = SessionEventTools.builder(this.sessionService)
+			.branch("orch.researcher")
+			.build();
+		String result = researcherTools.conversationSearch("thinking...", "spring", 0, toolContext());
+
+		assertThat(result).contains("root note about spring", "researcher found spring docs")
+			.doesNotContain("writer drafted");
+		assertThat(search("spring", 0)).contains("writer drafted");
+	}
+
 	// --- helpers ---
 
 	private String search(String query, int page) {

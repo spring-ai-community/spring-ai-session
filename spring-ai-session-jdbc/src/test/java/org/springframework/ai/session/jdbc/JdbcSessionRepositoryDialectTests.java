@@ -16,15 +16,65 @@
 
 package org.springframework.ai.session.jdbc;
 
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.SQLException;
+
+import javax.sql.DataSource;
+
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
 
 /**
  * Unit tests for {@link JdbcSessionRepositoryDialect} implementations, focusing on
  * SQL correctness for dialect-specific fragments.
  */
 class JdbcSessionRepositoryDialectTests {
+
+	// -------------------------------------------------------------------------
+	// from(DataSource) — detection
+	// -------------------------------------------------------------------------
+
+	@Test
+	void detectsSupportedDatabases() throws SQLException {
+		assertThat(JdbcSessionRepositoryDialect.from(dataSourceReporting("PostgreSQL")))
+			.isInstanceOf(PostgresJdbcSessionRepositoryDialect.class);
+		assertThat(JdbcSessionRepositoryDialect.from(dataSourceReporting("H2")))
+			.isInstanceOf(H2JdbcSessionRepositoryDialect.class);
+		assertThat(JdbcSessionRepositoryDialect.from(dataSourceReporting("MySQL")))
+			.isInstanceOf(MysqlJdbcSessionRepositoryDialect.class);
+		assertThat(JdbcSessionRepositoryDialect.from(dataSourceReporting("MariaDB")))
+			.isInstanceOf(MysqlJdbcSessionRepositoryDialect.class);
+	}
+
+	@Test
+	void unsupportedDatabaseFailsFast() throws SQLException {
+		DataSource oracle = dataSourceReporting("Oracle");
+		assertThatIllegalStateException().isThrownBy(() -> JdbcSessionRepositoryDialect.from(oracle))
+			.withMessageContaining("Oracle")
+			.withMessageContaining("dialect(");
+	}
+
+	@Test
+	void undeterminableDatabaseFailsFast() throws SQLException {
+		DataSource unreachable = mock(DataSource.class);
+		given(unreachable.getConnection()).willThrow(new SQLException("connection refused"));
+		assertThatIllegalStateException().isThrownBy(() -> JdbcSessionRepositoryDialect.from(unreachable));
+	}
+
+	private static DataSource dataSourceReporting(String productName) throws SQLException {
+		DatabaseMetaData metaData = mock(DatabaseMetaData.class);
+		given(metaData.getDatabaseProductName()).willReturn(productName);
+		Connection connection = mock(Connection.class);
+		given(connection.getMetaData()).willReturn(metaData);
+		DataSource dataSource = mock(DataSource.class);
+		given(dataSource.getConnection()).willReturn(connection);
+		return dataSource;
+	}
 
 	// -------------------------------------------------------------------------
 	// getBranchFilterFragment — PostgreSQL / H2 (default)
