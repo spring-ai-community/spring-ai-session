@@ -29,6 +29,7 @@ import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.util.StringUtils;
 
 /**
  * A deterministic, chain-shape-agnostic {@link SessionEventRequestIdGenerator}/
@@ -41,13 +42,17 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
  * <li>For a tool-call/tool-response message, reuse the model's own
  * {@code ToolCall}/{@code ToolResponse} ids -- already globally unique per model turn,
  * and the natural idempotency key for any tool-calling durability layer sitting
- * elsewhere in the same application, so both stay consistent on the same identity.
- * <li>Otherwise (plain user/system/assistant-text messages), fall back to a SHA-256
- * content hash.
+ * elsewhere in the same application, so both stay consistent on the same identity. If
+ * any of those ids is blank (some providers, e.g. Ollama, do not assign them), the tool
+ * names, arguments and response data are hashed instead.
+ * <li>Otherwise (plain user/system/assistant-text messages), fall back to a hash of the
+ * message text.
  * </ul>
- * Both are prefixed with a context key/value fingerprint -- see below -- so the same
- * fallback and prefixing logic applies uniformly to every message type; prefixing more
- * distinguishing context never causes a false collision, it can only add uniqueness.
+ * The derived key is combined with a context key/value fingerprint -- see below -- and
+ * hashed with SHA-256, so every id has the bounded form {@code <messageType>-<sha256 hex>}
+ * (at most 74 characters) regardless of how long the session id, the context values or
+ * the list of tool-call ids are. Folding in more distinguishing context never causes a
+ * false collision, it can only add uniqueness.
  *
  * <p>
  * This needs no run id, no loop-iteration counter, and no cooperation from whichever
@@ -72,11 +77,13 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
  * share identical content no longer collide just because they share a session.
  *
  * <p>
- * Known limitation of the content-hash fallback: two <em>legitimately</em> identical
- * messages appended back-to-back within the same fingerprint (e.g. the user literally
- * sends "hi" twice in the same run) collide and the second is dropped as an apparent
- * replay -- add a key that varies per logical turn (or prefer the tool-id path) if that
- * distinction matters.
+ * <strong>Known limitation of the content-hash fallback:</strong> two
+ * <em>legitimately</em> identical messages within the same fingerprint collide and the
+ * second is dropped as an apparent replay. With the default, session-scoped fingerprint
+ * this applies across the <em>whole session</em> -- a user answering "yes" or "ok" twice
+ * in one conversation, or an assistant repeating the same short reply, silently loses
+ * the second occurrence. Add a context key that varies per logical turn (e.g. a durable
+ * run id) if that distinction matters.
  *
  * @author Christian Tzolov
  * @since 0.7.0
@@ -115,23 +122,38 @@ public final class IdempotentSessionEventIdGenerator implements SessionEventRequ
 	}
 
 	private static String deriveEventId(String contextFingerprint, Message message) {
-		if (message instanceof AssistantMessage assistantMessage && !assistantMessage.getToolCalls().isEmpty()) {
-			String callIds = assistantMessage.getToolCalls()
-				.stream()
-				.map(AssistantMessage.ToolCall::id)
-				.collect(Collectors.joining(","));
-			return contextFingerprint + ":toolcall:" + callIds;
+		String type = message.getMessageType().getValue();
+		if (message instanceof AssistantMessage assistantMessage && assistantMessage.hasToolCalls()) {
+			List<String> callIds = assistantMessage.getToolCalls().stream().map(AssistantMessage.ToolCall::id).toList();
+			String key = allHaveText(callIds) ? "toolcall:" + String.join(",", callIds)
+					: "content:" + assistantMessage.getText() + ":" + assistantMessage.getToolCalls()
+						.stream()
+						.map(tc -> tc.name() + "(" + tc.arguments() + ")")
+						.collect(Collectors.joining(","));
+			return type + "-" + sha256Hex(contextFingerprint + ":" + key);
 		}
 		if (message instanceof ToolResponseMessage toolResponseMessage) {
-			String responseIds = toolResponseMessage.getResponses()
+			List<String> responseIds = toolResponseMessage.getResponses()
 				.stream()
 				.map(ToolResponseMessage.ToolResponse::id)
-				.collect(Collectors.joining(","));
-			return contextFingerprint + ":toolresp:" + responseIds;
+				.toList();
+			String key = allHaveText(responseIds) ? "toolresp:" + String.join(",", responseIds)
+					: "content:" + toolResponseMessage.getResponses()
+						.stream()
+						.map(r -> r.name() + "->" + r.responseData())
+						.collect(Collectors.joining(","));
+			return type + "-" + sha256Hex(contextFingerprint + ":" + key);
 		}
 		String text = message.getText() == null ? "" : message.getText();
-		String hash = sha256Hex(contextFingerprint + ":" + message.getMessageType() + ":" + text);
-		return contextFingerprint + ":" + message.getMessageType() + ":" + hash;
+		return type + "-" + sha256Hex(contextFingerprint + ":content:" + text);
+	}
+
+	/**
+	 * Some providers (e.g. Ollama) return empty tool-call ids; those are not unique and
+	 * must not be used as an idempotency key.
+	 */
+	private static boolean allHaveText(List<String> ids) {
+		return !ids.isEmpty() && ids.stream().allMatch(StringUtils::hasText);
 	}
 
 	private static String sha256Hex(String input) {

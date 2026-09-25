@@ -218,6 +218,9 @@ class SessionMemoryIT {
 
 		// Archived turns are retained (not deleted) — full history still available
 		assertThat(this.sessionService.getMessages(session.id())).hasSize(10);
+		// ...while getActiveMessages() returns only the active window
+		assertThat(this.sessionService.getActiveMessages(session.id())).extracting(m -> m.getText())
+			.containsExactly("user turn 4", "assistant reply 4", "user turn 5", "assistant reply 5");
 	}
 
 	@Test

@@ -16,8 +16,11 @@
 
 package org.springaicommunity.session.jdbc.autoconfigure;
 
+import java.util.Map;
+
 import javax.sql.DataSource;
 
+import org.springframework.boot.jdbc.DatabaseDriver;
 import org.springframework.boot.jdbc.init.PropertiesBasedDataSourceScriptDatabaseInitializer;
 
 /**
@@ -30,7 +33,9 @@ class JdbcSessionRepositorySchemaInitializer
 		extends PropertiesBasedDataSourceScriptDatabaseInitializer<JdbcSessionRepositoryProperties> {
 
 	JdbcSessionRepositorySchemaInitializer(DataSource dataSource, JdbcSessionRepositoryProperties properties) {
-		super(dataSource, properties);
+		// MariaDB uses the MySQL schema script; without this mapping the @@platform@@
+		// placeholder resolves to "mariadb" and schema-mariadb.sql does not exist.
+		super(dataSource, properties, Map.of(DatabaseDriver.MARIADB, "mysql"));
 	}
 
 }

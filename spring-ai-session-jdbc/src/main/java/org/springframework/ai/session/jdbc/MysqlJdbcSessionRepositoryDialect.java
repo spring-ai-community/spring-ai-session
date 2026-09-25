@@ -31,7 +31,6 @@ public class MysqlJdbcSessionRepositoryDialect implements JdbcSessionRepositoryD
 				VALUES (?, ?, ?, ?, ?)
 				ON DUPLICATE KEY UPDATE
 					user_id    = VALUES(user_id),
-					created_at = VALUES(created_at),
 					expires_at = VALUES(expires_at),
 					metadata   = VALUES(metadata)
 				""";
@@ -41,13 +40,14 @@ public class MysqlJdbcSessionRepositoryDialect implements JdbcSessionRepositoryD
 	public String getKeywordFilterFragment() {
 		// MySQL LIKE is case-insensitive for most collations; LOWER() is still applied
 		// for safety with binary collations.
-		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ?";
+		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
 	}
 
 	@Override
 	public String getBranchFilterFragment() {
 		// || is logical OR in MySQL/MariaDB; use CONCAT() for string concatenation.
-		return "AND (e.branch IS NULL OR e.branch = ? OR ? LIKE CONCAT(e.branch, '.%')) ";
+		return "AND (e.branch IS NULL OR e.branch = ? OR ? LIKE CONCAT("
+				+ "REPLACE(REPLACE(REPLACE(e.branch, '!', '!!'), '%', '!%'), '_', '!_'), '.%') ESCAPE '!') ";
 	}
 
 }

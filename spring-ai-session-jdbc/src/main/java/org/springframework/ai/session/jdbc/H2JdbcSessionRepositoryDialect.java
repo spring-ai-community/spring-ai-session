@@ -20,8 +20,9 @@ package org.springframework.ai.session.jdbc;
  * {@link JdbcSessionRepositoryDialect} for H2 (development and testing).
  *
  * <p>
- * H2 version 2.x supports PostgreSQL-style {@code ON CONFLICT} syntax, so the upsert
- * statement is identical to {@link PostgresJdbcSessionRepositoryDialect}.
+ * The upsert uses a standard {@code MERGE ... USING} statement so that, like the other
+ * dialects, an update leaves {@code created_at} unchanged (H2's shorter
+ * {@code MERGE ... KEY} form would overwrite every column).
  *
  * @author Christian Tzolov
  * @since 2.0.0
@@ -31,15 +32,21 @@ public class H2JdbcSessionRepositoryDialect implements JdbcSessionRepositoryDial
 	@Override
 	public String getUpsertSessionSql() {
 		return """
-				MERGE INTO AI_SESSION (id, user_id, created_at, expires_at, metadata)
-				KEY (id)
-				VALUES (?, ?, ?, ?, ?)
+				MERGE INTO AI_SESSION t
+				USING (VALUES (CAST(? AS VARCHAR(255)), CAST(? AS VARCHAR(255)), CAST(? AS TIMESTAMP),
+						CAST(? AS TIMESTAMP), CAST(? AS LONGVARCHAR)))
+					AS s (id, user_id, created_at, expires_at, metadata)
+				ON t.id = s.id
+				WHEN MATCHED THEN UPDATE
+					SET user_id = s.user_id, expires_at = s.expires_at, metadata = s.metadata
+				WHEN NOT MATCHED THEN INSERT (id, user_id, created_at, expires_at, metadata)
+					VALUES (s.id, s.user_id, s.created_at, s.expires_at, s.metadata)
 				""";
 	}
 
 	@Override
 	public String getKeywordFilterFragment() {
-		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ?";
+		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
 	}
 
 }

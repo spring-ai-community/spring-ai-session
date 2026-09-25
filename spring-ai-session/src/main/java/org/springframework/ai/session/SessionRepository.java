@@ -37,10 +37,32 @@ public interface SessionRepository {
 
 	/**
 	 * Persists session metadata (create or update). If the session already exists its
-	 * event log is preserved.
+	 * event log and its original {@link Session#createdAt()} are preserved; the other
+	 * metadata fields are replaced.
 	 * @return the saved session
 	 */
 	Session save(Session session);
+
+	/**
+	 * Inserts the session only if no session with the same id exists — never updates an
+	 * existing one. Used by {@link SessionService#create(CreateSessionRequest)} so that
+	 * two concurrent creates of the same id cannot both succeed (the second would
+	 * otherwise silently take over the first caller's session).
+	 * <p>
+	 * Implementations should perform the check and the insert atomically (e.g. a
+	 * primary-key-guarded {@code INSERT}). The default implementation is a non-atomic
+	 * {@link #findById} followed by {@link #save}, kept only for compatibility with
+	 * existing custom repositories; override it.
+	 * @return {@code true} if the session was inserted, {@code false} if a session with
+	 * the same id already exists (the existing session is left untouched)
+	 */
+	default boolean saveIfAbsent(Session session) {
+		if (findById(session.id()) != null) {
+			return false;
+		}
+		save(session);
+		return true;
+	}
 
 	@Nullable Session findById(String sessionId);
 
@@ -60,8 +82,7 @@ public interface SessionRepository {
 
 	/**
 	 * Appends a single event to the session's event log. The target session is identified
-	 * by {@link SessionEvent#getSessionId()}. Also updates {@code lastActiveAt} on the
-	 * session.
+	 * by {@link SessionEvent#getSessionId()}.
 	 * <p>
 	 * <strong>Idempotent by id:</strong> if an event with the same
 	 * {@link SessionEvent#getId()} already exists for this session, this call is a no-op
@@ -70,7 +91,13 @@ public interface SessionRepository {
 	 * write and the caller receiving confirmation) safe to repeat. Callers that want this
 	 * safety should supply a deterministic id (e.g. derived from a durable run/turn id)
 	 * rather than relying on {@link SessionEvent.Builder}'s random default.
+	 * <p>
+	 * Event ids should be unique across <em>all</em> sessions: persistent implementations
+	 * (e.g. JDBC) key events by id alone and reject an id already used by a different
+	 * session rather than silently dropping the event.
 	 * @throws IllegalArgumentException if the session does not exist
+	 * @throws IllegalStateException if the id is already used by an event of another
+	 * session (implementations with a global event-id namespace only)
 	 */
 	void appendEvent(SessionEvent event);
 
@@ -100,7 +127,9 @@ public interface SessionRepository {
 	 * {@code false} the caller should treat the compaction as a no-op — the concurrent
 	 * writer already handled the session.
 	 * @param sessionId the session whose log is being compacted
-	 * @param archivedEvents events to mark archived (must already exist in the log)
+	 * @param archivedEvents events to mark archived (must already exist in the log;
+	 * implementations may reject the whole call with {@link IllegalArgumentException}
+	 * otherwise)
 	 * @param retainedEvents the new active event set, in chronological order
 	 * @param expectedVersion the event-log version the caller observed
 	 * @return {@code true} when the swap succeeded, {@code false} on a version mismatch

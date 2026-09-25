@@ -144,6 +144,14 @@ class TokenCountTriggerTests {
 	}
 
 	@Test
+	void builderDefaultsToJTokkitEstimator() {
+		TokenCountTrigger trigger = TokenCountTrigger.builder().threshold(1).build();
+
+		assertThat(trigger.shouldCompact(requestWith(turn("hello", "world")))).isTrue();
+		assertThat(trigger.shouldCompact(requestWith(List.of()))).isFalse();
+	}
+
+	@Test
 	void getThresholdReturnsConfiguredValue() {
 		TokenCountTrigger trigger = TokenCountTrigger.builder()
 			.threshold(500)

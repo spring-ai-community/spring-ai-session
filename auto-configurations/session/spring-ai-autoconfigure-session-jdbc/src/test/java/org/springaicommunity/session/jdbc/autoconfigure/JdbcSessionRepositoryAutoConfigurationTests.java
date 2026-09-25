@@ -16,15 +16,22 @@
 
 package org.springaicommunity.session.jdbc.autoconfigure;
 
+import javax.sql.DataSource;
+
 import org.junit.jupiter.api.Test;
 
+import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.jdbc.JdbcSessionRepository;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration;
+import org.springframework.boot.jdbc.init.DatabaseInitializationProperties;
 import org.springframework.boot.sql.init.DatabaseInitializationMode;
+import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springaicommunity.session.autoconfigure.SessionServiceAutoConfiguration;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -73,6 +80,46 @@ class JdbcSessionRepositoryAutoConfigurationTests {
 								"jdbc:h2:mem:custom;DB_CLOSE_DELAY=-1"))
 						.build())
 			.run(context -> assertThat(context).hasSingleBean(JdbcSessionRepository.class));
+	}
+
+	@Test
+	void backsOffWhenUserDeclaresSessionRepositoryOfAnyType() {
+		// The documented override declares the bean as SessionRepository, not
+		// JdbcSessionRepository — the auto-configuration must still back off so the
+		// context does not end up with two repositories.
+		this.contextRunner.withBean(SessionRepository.class, () -> InMemorySessionRepository.builder().build())
+			.run(context -> {
+				assertThat(context).doesNotHaveBean(JdbcSessionRepository.class);
+				assertThat(context).hasSingleBean(SessionRepository.class);
+				assertThat(context).hasSingleBean(SessionService.class);
+			});
+	}
+
+	@Test
+	void backsOffWithoutDataSource() {
+		new ApplicationContextRunner()
+			.withConfiguration(AutoConfigurations.of(JdbcSessionRepositoryAutoConfiguration.class,
+					SessionServiceAutoConfiguration.class))
+			.run(context -> {
+				assertThat(context).hasNotFailed();
+				assertThat(context).doesNotHaveBean(JdbcSessionRepository.class);
+				assertThat(context).doesNotHaveBean(SessionService.class);
+			});
+	}
+
+	@Test
+	void backsOffWithoutSpringBootJdbc() {
+		// spring-boot-jdbc is optional: an application that uses this module without the
+		// starter (and supplies its own DataSource) must not fail at startup.
+		new ApplicationContextRunner()
+			.withConfiguration(AutoConfigurations.of(JdbcSessionRepositoryAutoConfiguration.class))
+			.withClassLoader(new FilteredClassLoader(DatabaseInitializationProperties.class))
+			.withBean(DataSource.class,
+					() -> new DriverManagerDataSource("jdbc:h2:mem:nobootjdbc;DB_CLOSE_DELAY=-1"))
+			.run(context -> {
+				assertThat(context).hasNotFailed();
+				assertThat(context).doesNotHaveBean(JdbcSessionRepository.class);
+			});
 	}
 
 	@Test

@@ -18,10 +18,13 @@ package org.springframework.ai.session;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +36,7 @@ import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 /**
  * Tests for {@link DefaultSessionService}.
@@ -89,6 +93,51 @@ class DefaultSessionServiceTests {
 			.create(CreateSessionRequest.builder().userId("user-1").timeToLive(Duration.ofMinutes(30)).build());
 
 		assertThat(session.expiresAt()).isBefore(before.plus(Duration.ofHours(1)));
+	}
+
+	@Test
+	void createWithExistingIdIsRejectedAndDoesNotReassignOwner() {
+		Session original = this.service.create(CreateSessionRequest.builder().id("fixed-id").userId("alice").build());
+
+		assertThatIllegalStateException().isThrownBy(() -> this.service.create(CreateSessionRequest.builder().id("fixed-id").userId("mallory").build()))
+			.withMessageContaining("already exists");
+
+		assertThat(this.service.findById(original.id()).userId()).isEqualTo("alice");
+	}
+
+	@Test
+	void concurrentCreatesOfSameIdHaveExactlyOneWinner() throws Exception {
+		int callers = 8;
+		ExecutorService executor = Executors.newFixedThreadPool(callers);
+		try {
+			CountDownLatch start = new CountDownLatch(1);
+			List<Future<Session>> results = new ArrayList<>();
+			for (int i = 0; i < callers; i++) {
+				String userId = "user-" + i;
+				results.add(executor.submit(() -> {
+					start.await();
+					return this.service.create(CreateSessionRequest.builder().id("contended").userId(userId).build());
+				}));
+			}
+			start.countDown();
+			List<Session> winners = new ArrayList<>();
+			int rejected = 0;
+			for (Future<Session> result : results) {
+				try {
+					winners.add(result.get(30, TimeUnit.SECONDS));
+				}
+				catch (ExecutionException ex) {
+					assertThat(ex.getCause()).isInstanceOf(IllegalStateException.class);
+					rejected++;
+				}
+			}
+			assertThat(winners).hasSize(1);
+			assertThat(rejected).isEqualTo(callers - 1);
+			assertThat(this.service.findById("contended").userId()).isEqualTo(winners.get(0).userId());
+		}
+		finally {
+			executor.shutdownNow();
+		}
 	}
 
 	@Test

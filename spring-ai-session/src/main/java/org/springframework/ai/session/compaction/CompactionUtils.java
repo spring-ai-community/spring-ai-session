@@ -105,4 +105,28 @@ final class CompactionUtils {
 		return idx;
 	}
 
+	/**
+	 * Guards against a cut that would archive the entire real-event window. When
+	 * {@code cutIndex == real.size()} — e.g. because the most recent turn alone exceeds
+	 * the strategy's budget, so {@link #snapToTurnStart} found no later turn start — the
+	 * cut is moved back to the last root-level {@link MessageType#USER} event so that the
+	 * current turn is always kept in the active window, even if it exceeds the budget.
+	 * Returns {@code cutIndex} unchanged when it already keeps at least one event or when
+	 * there is no root-level {@code USER} event to fall back to.
+	 * @param real the list of non-synthetic session events
+	 * @param cutIndex the snapped cut point; must be in {@code [0, real.size()]}
+	 * @return an index that keeps at least the last complete root turn, if one exists
+	 */
+	static int retainLastTurn(List<SessionEvent> real, int cutIndex) {
+		if (cutIndex < real.size()) {
+			return cutIndex;
+		}
+		for (int i = real.size() - 1; i >= 0; i--) {
+			if (real.get(i).isRootEvent() && real.get(i).getMessageType() == MessageType.USER) {
+				return i;
+			}
+		}
+		return cutIndex;
+	}
+
 }

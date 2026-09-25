@@ -27,9 +27,8 @@ import org.springframework.ai.session.SessionEvent;
  * persists the current user (or tool-response) message.
  *
  * <p>
- * The default, {@link #random()}, reproduces the id-less behaviour
- * {@code SessionService.appendMessage} always had before this SPI existed -- a fresh
- * random id every call, so every append is a new event. Supplying a generator that
+ * The default, {@link #random()}, assigns a fresh random id every call, so every append
+ * is a new event. Supplying a generator that
  * derives a <em>deterministic</em> id for the same logical turn (e.g. content-addressable,
  * or reusing an upstream durability layer's own idempotency key) makes a retried append
  * an idempotent no-op instead of a duplicate, via

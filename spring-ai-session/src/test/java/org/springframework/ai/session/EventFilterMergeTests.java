@@ -114,6 +114,35 @@ class EventFilterMergeTests {
 	// --- base fields are kept when other has no value ---
 
 	@Test
+	void otherPaginationReplacesBaseLastN() {
+		EventFilter base = EventFilter.lastN(20);
+		EventFilter other = EventFilter.keywordSearch("spring", 1, 5);
+		EventFilter merged = base.merge(other);
+		assertThat(merged.lastN()).isNull();
+		assertThat(merged.page()).isEqualTo(1);
+		assertThat(merged.pageSize()).isEqualTo(5);
+		assertThat(merged.keyword()).isEqualTo("spring");
+	}
+
+	@Test
+	void otherLastNReplacesBasePagination() {
+		EventFilter base = EventFilter.builder().page(3).pageSize(10).build();
+		EventFilter merged = base.merge(EventFilter.lastN(4));
+		assertThat(merged.lastN()).isEqualTo(4);
+		assertThat(merged.page()).isNull();
+		assertThat(merged.pageSize()).isNull();
+	}
+
+	@Test
+	void basePaginationKeptWhenOtherHasNoRetrievalModifier() {
+		EventFilter base = EventFilter.builder().page(3).pageSize(10).build();
+		EventFilter merged = base.merge(EventFilter.forBranch("orch"));
+		assertThat(merged.page()).isEqualTo(3);
+		assertThat(merged.pageSize()).isEqualTo(10);
+		assertThat(merged.branch()).isEqualTo("orch");
+	}
+
+	@Test
 	void baseLastNKeptWhenOtherIsAll() {
 		EventFilter base = EventFilter.lastN(5);
 		EventFilter other = EventFilter.all();

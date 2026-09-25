@@ -524,6 +524,74 @@ class JdbcSessionRepositoryTests {
 	}
 
 	@Test
+	void keywordWildcardCharactersMatchLiterally() {
+		DialectScenarios.keywordWildcardCharactersMatchLiterally(this.repository);
+	}
+
+	@Test
+	void timestampsAreStoredAsUtcRegardlessOfJvmTimeZone() {
+		DialectScenarios.timestampsAreStoredAsUtcRegardlessOfJvmTimeZone(this.repository, this.jdbcTemplate);
+	}
+
+	@Test
+	void concurrentCreatesOfSameIdHaveExactlyOneWinner() throws Exception {
+		DialectScenarios.concurrentCreatesOfSameIdHaveExactlyOneWinner(this.repository);
+	}
+
+	@Test
+	void upsertKeepsCreatedAtAndEvents() {
+		DialectScenarios.upsertKeepsCreatedAtAndEvents(this.repository);
+	}
+
+	@Test
+	void branchWildcardCharactersMatchLiterally() {
+		DialectScenarios.branchWildcardCharactersMatchLiterally(this.repository);
+	}
+
+	@Test
+	void appendEventWithIdOfAnotherSessionIsRejected() {
+		Session first = buildSession("user-a");
+		Session second = buildSession("user-b");
+		this.repository.save(first);
+		this.repository.save(second);
+		this.repository.appendEvent(
+				SessionEvent.builder().id("shared-id").sessionId(first.id()).message(new UserMessage("a")).build());
+
+		SessionEvent clash = SessionEvent.builder()
+			.id("shared-id")
+			.sessionId(second.id())
+			.message(new UserMessage("b"))
+			.build();
+
+		assertThatThrownBy(() -> this.repository.appendEvent(clash)).isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("another session");
+		assertThat(this.repository.findEvents(second.id(), EventFilter.all())).isEmpty();
+		assertThat(this.repository.getEventVersion(second.id())).isZero();
+	}
+
+	@Test
+	void compactEventsRejectsArchivedEventFromAnotherSession() {
+		Session session = buildSession("user-x");
+		Session other = buildSession("user-y");
+		this.repository.save(session);
+		this.repository.save(other);
+		SessionEvent own = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("own")).build();
+		SessionEvent foreign = SessionEvent.builder().sessionId(other.id()).message(new UserMessage("foreign")).build();
+		this.repository.appendEvent(own);
+		this.repository.appendEvent(foreign);
+		long version = this.repository.getEventVersion(session.id());
+
+		assertThatThrownBy(
+				() -> this.repository.compactEvents(session.id(), List.of(own, foreign), List.of(), version))
+			.isInstanceOf(IllegalArgumentException.class);
+
+		// Rolled back: nothing archived, deleted or version-bumped in either session.
+		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(version);
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active())).hasSize(1);
+		assertThat(this.repository.findEvents(other.id(), EventFilter.active())).hasSize(1);
+	}
+
+	@Test
 	void compactEventsIncrementsVersion() {
 		Session session = buildSession("user-rv");
 		this.repository.save(session);

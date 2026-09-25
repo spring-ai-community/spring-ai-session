@@ -63,7 +63,7 @@ into your migration directory.
 @Bean
 SessionRepository sessionRepository(DataSource dataSource) {
     return JdbcSessionRepository.builder()
-        .dataSource(dataSource)   // SQL dialect is auto-detected from the DataSource URL
+        .dataSource(dataSource)   // SQL dialect is auto-detected from the database metadata
         .build();
 }
 

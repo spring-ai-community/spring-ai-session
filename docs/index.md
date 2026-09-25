@@ -103,8 +103,8 @@ databases and a no-Boot programmatic option.
 ## Requirements
 
 - Java 17+
-- Spring AI `2.0.0+`
-- Spring Boot `4.0.7+`
+- Spring AI `2.0.1+`
+- Spring Boot `4.1.1+`
 
 ---
 

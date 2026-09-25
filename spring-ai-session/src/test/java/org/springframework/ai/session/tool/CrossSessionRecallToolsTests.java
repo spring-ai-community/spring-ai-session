@@ -149,6 +149,35 @@ class CrossSessionRecallToolsTests {
 	}
 
 	@Test
+	void blankQueryThrowsInsteadOfSilentlySearchingEverything() {
+		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		this.sessionService.appendMessage(session.id(), new UserMessage("this should never be returned"));
+
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> toolsFor("alice").crossSessionSearch("thinking...", "  ", null, null, 0));
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> toolsFor("alice").crossSessionSearch("thinking...", null, null, null, 0));
+	}
+
+	@Test
+	void unknownMatchModeIsRejected() {
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> toolsFor("alice").crossSessionSearch("thinking...", "a, b", "every", null, 0))
+			.withMessageContaining("matchMode");
+	}
+
+	@Test
+	void matchModeIsCaseInsensitive() {
+		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		this.sessionService.appendMessage(session.id(), new UserMessage("alpha and beta"));
+		this.sessionService.appendMessage(session.id(), new UserMessage("only alpha"));
+
+		String result = toolsFor("alice").crossSessionSearch("thinking...", "alpha, beta", " ALL ", null, 0);
+
+		assertThat(result).contains("alpha and beta").doesNotContain("only alpha");
+	}
+
+	@Test
 	void commaOnlyQueryThrowsInsteadOfSilentlySearchingEverything() {
 		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
 		this.sessionService.appendMessage(session.id(), new UserMessage("this should never be returned"));

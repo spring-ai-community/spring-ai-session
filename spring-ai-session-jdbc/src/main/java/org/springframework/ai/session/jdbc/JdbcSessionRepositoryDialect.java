@@ -20,9 +20,6 @@ import java.sql.DatabaseMetaData;
 
 import javax.sql.DataSource;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import org.springframework.jdbc.support.JdbcUtils;
 
 /**
@@ -43,20 +40,29 @@ import org.springframework.jdbc.support.JdbcUtils;
  */
 public interface JdbcSessionRepositoryDialect {
 
-	Logger logger = LoggerFactory.getLogger(JdbcSessionRepositoryDialect.class);
-
 	/**
 	 * Upsert a row in {@code AI_SESSION}. The statement must insert a new row or update
-	 * an existing one. The {@code event_version} column must <em>not</em> be modified on
-	 * update — only the session-metadata columns ({@code user_id}, {@code created_at},
-	 * {@code expires_at}, {@code metadata}) are refreshed.
+	 * an existing one. On update only {@code user_id}, {@code expires_at} and
+	 * {@code metadata} are refreshed — {@code created_at} keeps its original value and
+	 * {@code event_version} must <em>not</em> be modified.
 	 *
 	 * <p>
 	 * Parameters (in order): {@code id}, {@code user_id}, {@code created_at},
-	 * {@code expires_at}, {@code metadata}, then the same four update-only columns
-	 * ({@code user_id}, {@code created_at}, {@code expires_at}, {@code metadata}).
+	 * {@code expires_at}, {@code metadata}.
 	 */
 	String getUpsertSessionSql();
+
+	/**
+	 * Inserts a row into {@code AI_SESSION} only if its {@code id} does not exist yet.
+	 * Same five parameters as {@link #getUpsertSessionSql()}. Must update one row on
+	 * insert and either update zero rows or fail with a duplicate-key error when the id
+	 * exists. The default is a plain {@code INSERT} (duplicate key error); dialects whose
+	 * failed statements abort the enclosing transaction (PostgreSQL) should use a
+	 * conflict-ignoring form instead.
+	 */
+	default String getInsertSessionIfAbsentSql() {
+		return "INSERT INTO AI_SESSION (id, user_id, created_at, expires_at, metadata) VALUES (?, ?, ?, ?, ?)";
+	}
 
 	/**
 	 * Case-insensitive substring filter fragment appended to the dynamic
@@ -65,9 +71,11 @@ public interface JdbcSessionRepositoryDialect {
 	 *
 	 * <p>
 	 * The fragment must be a complete {@code AND ...} clause with a single {@code ?}
-	 * placeholder that will be bound to {@code '%' + keyword.toLowerCase() + '%'}.
+	 * placeholder that will be bound to {@code '%' + escaped(keyword.toLowerCase()) + '%'},
+	 * where {@code !}, {@code %} and {@code _} in the keyword are escaped with {@code !}
+	 * so they match literally. The fragment must therefore declare {@code ESCAPE '!'}.
 	 * Example (PostgreSQL / H2):
-	 * {@code AND LOWER(COALESCE(e.message_content, '')) LIKE ?}
+	 * {@code AND LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'}
 	 */
 	String getKeywordFilterFragment();
 
@@ -88,7 +96,7 @@ public interface JdbcSessionRepositoryDialect {
 	 * needs different substring-match SQL.
 	 */
 	default String getKeywordPredicateFragment() {
-		return "LOWER(COALESCE(e.message_content, '')) LIKE ?";
+		return "LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
 	}
 
 	/**
@@ -98,39 +106,46 @@ public interface JdbcSessionRepositoryDialect {
 	 *
 	 * <p>
 	 * The fragment must be a complete {@code AND (...)} clause with two {@code ?}
-	 * placeholders, both bound to the filter branch value. The default implementation
-	 * uses {@code ||} for string concatenation (PostgreSQL / H2). MySQL/MariaDB must
-	 * override this with {@code CONCAT()} because {@code ||} is logical OR in those
-	 * databases.
+	 * placeholders, both bound to the filter branch value. The stored branch is used as a
+	 * {@code LIKE} prefix pattern, so {@code !}, {@code %} and {@code _} in it are escaped
+	 * with {@code !} to match literally. The default implementation uses {@code ||} for
+	 * string concatenation (PostgreSQL / H2). MySQL/MariaDB must override this with
+	 * {@code CONCAT()} because {@code ||} is logical OR in those databases.
 	 */
 	default String getBranchFilterFragment() {
-		return "AND (e.branch IS NULL OR e.branch = ? OR ? LIKE e.branch || '.%') ";
+		return "AND (e.branch IS NULL OR e.branch = ? OR ? LIKE "
+				+ "REPLACE(REPLACE(REPLACE(e.branch, '!', '!!'), '%', '!%'), '_', '!_') || '.%' ESCAPE '!') ";
 	}
 
 	/**
-	 * Detects the best-matching dialect for the given {@link DataSource}.
+	 * Detects the dialect from the database product name reported by the
+	 * {@link DataSource}'s metadata. Supports PostgreSQL, H2, MySQL and MariaDB.
+	 * @throws IllegalStateException if the product name cannot be determined or the
+	 * database is not supported; configure the dialect explicitly with
+	 * {@link JdbcSessionRepository.Builder#dialect(JdbcSessionRepositoryDialect)} instead
+	 * of relying on detection
 	 */
 	static JdbcSessionRepositoryDialect from(DataSource dataSource) {
-		String productName = null;
+		String productName;
 		try {
 			productName = JdbcUtils.extractDatabaseMetaData(dataSource, DatabaseMetaData::getDatabaseProductName);
 		}
 		catch (Exception ex) {
-			logger.warn("Could not determine database product name from DataSource; defaulting to PostgreSQL dialect",
+			throw new IllegalStateException("Could not determine the database product name to select a "
+					+ "JdbcSessionRepositoryDialect; set one explicitly via JdbcSessionRepository.builder().dialect(...)",
 					ex);
 		}
 		if (productName == null || productName.isBlank()) {
-			logger.warn("Database product name is null or blank; defaulting to PostgreSQL dialect.");
-			return new PostgresJdbcSessionRepositoryDialect();
+			throw new IllegalStateException("Database product name is null or blank; set a JdbcSessionRepositoryDialect "
+					+ "explicitly via JdbcSessionRepository.builder().dialect(...)");
 		}
 		return switch (productName) {
 			case "PostgreSQL" -> new PostgresJdbcSessionRepositoryDialect();
 			case "H2" -> new H2JdbcSessionRepositoryDialect();
 			case "MySQL", "MariaDB" -> new MysqlJdbcSessionRepositoryDialect();
-			default -> {
-				logger.warn("No specific dialect for '{}'; defaulting to PostgreSQL dialect.", productName);
-				yield new PostgresJdbcSessionRepositoryDialect();
-			}
+			default -> throw new IllegalStateException("No JdbcSessionRepositoryDialect for database '" + productName
+					+ "'; supported: PostgreSQL, H2, MySQL, MariaDB. Implement JdbcSessionRepositoryDialect and set it "
+					+ "via JdbcSessionRepository.builder().dialect(...)");
 		};
 	}
 

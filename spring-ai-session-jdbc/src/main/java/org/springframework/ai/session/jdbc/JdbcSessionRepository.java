@@ -18,13 +18,15 @@ package org.springframework.ai.session.jdbc;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import javax.sql.DataSource;
@@ -121,7 +123,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 	private static final String SELECT_SESSIONS_BY_USER =
 		"SELECT id, user_id, created_at, expires_at, metadata, event_version"
-		+ " FROM AI_SESSION WHERE user_id = ?";
+		+ " FROM AI_SESSION WHERE user_id = ? ORDER BY created_at, id";
 
 	private static final String SELECT_EXPIRED_SESSION_IDS =
 		"SELECT id FROM AI_SESSION WHERE expires_at IS NOT NULL AND expires_at < ?";
@@ -150,7 +152,10 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 	// Marks events as archived without rewriting existing rows.
 	private static final String ARCHIVE_EVENT_BY_ID =
-		"UPDATE AI_SESSION_EVENT SET archived = true WHERE id = ?";
+		"UPDATE AI_SESSION_EVENT SET archived = true WHERE id = ? AND session_id = ?";
+
+	private static final String SELECT_EVENT_SESSION_ID =
+		"SELECT session_id FROM AI_SESSION_EVENT WHERE id = ?";
 
 	// Removes the active window before inserting the retained events produced by compaction.
 	private static final String DELETE_ACTIVE_EVENTS =
@@ -188,8 +193,23 @@ public final class JdbcSessionRepository implements SessionRepository {
 	public Session save(Session session) {
 		Assert.notNull(session, "session must not be null");
 		this.jdbcTemplate.update(this.dialect.getUpsertSessionSql(), session.id(), session.userId(),
-				toTimestamp(session.createdAt()), toTimestamp(session.expiresAt()), toJson(session.metadata()));
-		return session;
+				toUtc(session.createdAt()), toUtc(session.expiresAt()), toJson(session.metadata()));
+		// Re-read: an update keeps the stored created_at, so the input is not what was
+		// saved.
+		return Objects.requireNonNull(findById(session.id()), () -> "Session vanished after save: " + session.id());
+	}
+
+	@Override
+	public boolean saveIfAbsent(Session session) {
+		Assert.notNull(session, "session must not be null");
+		try {
+			return this.jdbcTemplate.update(this.dialect.getInsertSessionIfAbsentSql(), session.id(),
+					session.userId(), toUtc(session.createdAt()), toUtc(session.expiresAt()),
+					toJson(session.metadata())) == 1;
+		}
+		catch (DuplicateKeyException ex) {
+			return false;
+		}
 	}
 
 	@Override
@@ -208,7 +228,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 	@Override
 	public List<String> findExpiredSessionIds(Instant before) {
 		Assert.notNull(before, "before must not be null");
-		return this.jdbcTemplate.queryForList(SELECT_EXPIRED_SESSION_IDS, String.class, toTimestamp(before));
+		return this.jdbcTemplate.queryForList(SELECT_EXPIRED_SESSION_IDS, String.class, toUtc(before));
 	}
 
 	@Override
@@ -225,15 +245,32 @@ public final class JdbcSessionRepository implements SessionRepository {
 	public void appendEvent(SessionEvent event) {
 		Assert.notNull(event, "event must not be null");
 		String sessionId = event.getSessionId();
-		requireSessionExists(sessionId);
 		try {
 			this.transactionTemplate.execute(status -> {
+				// Bump the version BEFORE inserting: the UPDATE locks the session row, so the
+				// event's seq is only assigned once any in-flight compactEvents on this
+				// session has committed. Inserting first would let a concurrent compaction
+				// miss the uncommitted row and re-insert its retained window with higher
+				// seq values, ordering this (newer) event before them without the CAS
+				// noticing. Zero updated rows also means the session does not exist.
+				int updated = this.jdbcTemplate.update(INCREMENT_EVENT_VERSION, sessionId);
+				if (updated == 0) {
+					throw new IllegalArgumentException("Session not found: " + sessionId);
+				}
 				insertEvent(event);
-				this.jdbcTemplate.update(INCREMENT_EVENT_VERSION, sessionId);
 				return null;
 			});
 		}
 		catch (DuplicateKeyException ex) {
+			// Event ids are a table-wide primary key. A collision with an event of a
+			// different session is not a replay -- swallowing it would silently drop
+			// this event -- so reject it.
+			List<String> owner = this.jdbcTemplate.queryForList(SELECT_EVENT_SESSION_ID, String.class,
+					event.getId());
+			if (!owner.isEmpty() && !sessionId.equals(owner.get(0))) {
+				throw new IllegalStateException("Event id '" + event.getId() + "' is already used by another session; "
+						+ "event ids must be unique across sessions", ex);
+			}
 			// Idempotent replay: an event with this id (SessionEvent#getId()) was
 			// already committed, e.g. a retried append after a crash between the insert
 			// and the caller receiving confirmation. Treat as a no-op rather than
@@ -262,8 +299,22 @@ public final class JdbcSessionRepository implements SessionRepository {
 			// reinserting the complete session history while preserving the
 			// logical event ordering defined by the seq column.
 			if (!archivedEvents.isEmpty()) {
-				this.jdbcTemplate.batchUpdate(ARCHIVE_EVENT_BY_ID, archivedEvents, archivedEvents.size(),
-						(ps, event) -> ps.setString(1, event.getId()));
+				int[][] counts = this.jdbcTemplate.batchUpdate(ARCHIVE_EVENT_BY_ID, archivedEvents,
+						archivedEvents.size(), (ps, event) -> {
+							ps.setString(1, event.getId());
+							ps.setString(2, sessionId);
+						});
+				// Every archived event must already exist in this session's log; otherwise
+				// DELETE_ACTIVE_EVENTS below would silently lose it. Negative counts
+				// (Statement.SUCCESS_NO_INFO) are driver-specific and treated as success.
+				for (int[] batch : counts) {
+					for (int count : batch) {
+						if (count == 0) {
+							throw new IllegalArgumentException(
+									"archivedEvents contains an event that is not in the log of session " + sessionId);
+						}
+					}
+				}
 			}
 
 			// Replace the active window with the retained events. Archived events
@@ -307,11 +358,11 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 		if (filter.from() != null) {
 			sql.append("AND e.timestamp >= ? ");
-			params.add(toTimestamp(filter.from()));
+			params.add(toUtc(filter.from()));
 		}
 		if (filter.to() != null) {
 			sql.append("AND e.timestamp <= ? ");
-			params.add(toTimestamp(filter.to()));
+			params.add(toUtc(filter.to()));
 		}
 		if (filter.messageTypes() != null && !filter.messageTypes().isEmpty()) {
 			sql.append("AND e.message_type IN (");
@@ -337,7 +388,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 		}
 		if (filter.keyword() != null) {
 			sql.append(this.dialect.getKeywordFilterFragment()).append(" ");
-			params.add("%" + filter.keyword() + "%");
+			params.add(containsPattern(filter.keyword()));
 		}
 		if (filter.keywords() != null) {
 			sql.append("AND (");
@@ -347,7 +398,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 					sql.append(joiner);
 				}
 				sql.append(this.dialect.getKeywordPredicateFragment());
-				params.add("%" + filter.keywords().get(i) + "%");
+				params.add(containsPattern(filter.keywords().get(i)));
 			}
 			sql.append(") ");
 		}
@@ -415,9 +466,19 @@ public final class JdbcSessionRepository implements SessionRepository {
 	// Internal helpers
 	// -------------------------------------------------------------------------
 
+	/**
+	 * Builds a {@code LIKE} pattern matching {@code term} as a literal substring: the
+	 * dialect fragments declare {@code ESCAPE '!'}, so {@code !}, {@code %} and {@code _}
+	 * are escaped to keep them from acting as wildcards.
+	 */
+	static String containsPattern(String term) {
+		String escaped = term.replace("!", "!!").replace("%", "!%").replace("_", "!_");
+		return "%" + escaped + "%";
+	}
+
 	private void insertEvent(SessionEvent event) {
 		Message msg = event.getMessage();
-		this.jdbcTemplate.update(INSERT_EVENT, event.getId(), event.getSessionId(), toTimestamp(event.getTimestamp()),
+		this.jdbcTemplate.update(INSERT_EVENT, event.getId(), event.getSessionId(), toUtc(event.getTimestamp()),
 				msg.getMessageType().name(), msg.getText(), messageDataToJson(msg), event.isSynthetic(),
 				event.isArchived(), event.getBranch(), toJson(event.getMetadata()));
 	}
@@ -430,8 +491,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 			Message msg = event.getMessage();
 			ps.setString(1, event.getId());
 			ps.setString(2, event.getSessionId());
-			Timestamp ts = toTimestamp(event.getTimestamp());
-			ps.setTimestamp(3, ts);
+			ps.setObject(3, toUtc(event.getTimestamp()));
 			ps.setString(4, msg.getMessageType().name());
 			ps.setString(5, msg.getText());
 			ps.setString(6, messageDataToJson(msg));
@@ -449,8 +509,19 @@ public final class JdbcSessionRepository implements SessionRepository {
 		}
 	}
 
-	@Nullable private Timestamp toTimestamp(@Nullable Instant instant) {
-		return instant != null ? Timestamp.from(instant) : null;
+	/**
+	 * Timestamp columns carry no time zone ({@code TIMESTAMP} / {@code DATETIME}), so
+	 * instants are always stored and read as UTC wall-clock time. Binding through
+	 * {@link java.sql.Timestamp} would instead use the JVM default time zone, shifting
+	 * values between application instances in different zones and across DST changes.
+	 */
+	@Nullable private static LocalDateTime toUtc(@Nullable Instant instant) {
+		return instant != null ? LocalDateTime.ofInstant(instant, ZoneOffset.UTC) : null;
+	}
+
+	@Nullable private static Instant fromUtc(ResultSet rs, String column) throws SQLException {
+		LocalDateTime value = rs.getObject(column, LocalDateTime.class);
+		return value != null ? value.toInstant(ZoneOffset.UTC) : null;
 	}
 
 	@Nullable private String toJson(@Nullable Object value) {
@@ -553,14 +624,14 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 		@Override
 		public Session mapRow(ResultSet rs, int rowNum) throws SQLException {
-			Timestamp expiresAt = rs.getTimestamp("expires_at");
+			Instant expiresAt = fromUtc(rs, "expires_at");
 			Session.Builder builder = Session.builder()
 				.id(rs.getString("id"))
 				.userId(rs.getString("user_id"))
-				.createdAt(rs.getTimestamp("created_at").toInstant())
+				.createdAt(Objects.requireNonNull(fromUtc(rs, "created_at")))
 				.metadata(fromJsonMap(rs.getString("metadata")));
 			if (expiresAt != null) {
-				builder.expiresAt(expiresAt.toInstant());
+				builder.expiresAt(expiresAt);
 			}
 			return builder.build();
 		}
@@ -584,7 +655,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 			return SessionEvent.builder()
 				.id(rs.getString("id"))
 				.sessionId(rs.getString("session_id"))
-				.timestamp(rs.getTimestamp("timestamp").toInstant())
+				.timestamp(Objects.requireNonNull(fromUtc(rs, "timestamp")))
 				.message(message)
 				.branch(rs.getString("branch"))
 				.archived(rs.getBoolean("archived"))

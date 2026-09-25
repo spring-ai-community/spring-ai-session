@@ -56,6 +56,26 @@ class SessionServiceAutoConfigurationTests {
 	}
 
 	@Test
+	void sessionServiceBeanIsNotCreatedWithAmbiguousRepositories() {
+		this.contextRunner
+			.withBean("first", SessionRepository.class, () -> InMemorySessionRepository.builder().build())
+			.withBean("second", SessionRepository.class, () -> InMemorySessionRepository.builder().build())
+			.run(context -> {
+				assertThat(context).hasNotFailed();
+				assertThat(context).doesNotHaveBean(SessionService.class);
+			});
+	}
+
+	@Test
+	void sessionServiceUsesPrimaryRepositoryWhenSeveralExist() {
+		SessionRepository primary = InMemorySessionRepository.builder().build();
+		this.contextRunner
+			.withBean("first", SessionRepository.class, () -> primary, bd -> bd.setPrimary(true))
+			.withBean("second", SessionRepository.class, () -> InMemorySessionRepository.builder().build())
+			.run(context -> assertThat(context).hasSingleBean(SessionService.class));
+	}
+
+	@Test
 	void timeToLiveDefaultsTo60Days() {
 		this.contextRunner.withBean(SessionRepository.class, () -> InMemorySessionRepository.builder().build())
 			.run(context -> assertThat(context.getBean(SessionServiceProperties.class).getTimeToLive())
