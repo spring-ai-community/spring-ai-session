@@ -303,6 +303,25 @@
   
 
       
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../migration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migration Guide
+
+      </a>
+    </li>
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -901,6 +920,33 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1177,8 +1223,8 @@ one of them, not just one. In practice, callers set exactly one of the three.</p
 </tr>
 <tr>
 <td><code>matchMode</code></td>
-<td><code>MatchMode</code></td>
-<td><code>ANY</code> (at least one term present) or <code>ALL</code> (every term present) — only meaningful when <code>keywords</code> is set</td>
+<td><code>EventFilter.MatchMode</code></td>
+<td><code>ANY</code> (at least one term present) or <code>ALL</code> (every term present) — only meaningful when <code>keywords</code> is set. Import <code>org.springframework.ai.session.EventFilter.MatchMode</code></td>
 </tr>
 <tr>
 <td><code>pattern</code></td>
@@ -1241,6 +1287,14 @@ regardless of the configured or per-request filter (see
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">EventFilter</span><span class="w"> </span><span class="n">merged</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">advisorDefault</span><span class="p">.</span><span class="na">merge</span><span class="p">(</span><span class="n">requestOverride</span><span class="p">);</span>
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1">// merged.lastN() == 5  (request-level wins)</span>
+</span></code></pre></div>
+<p>The retrieval modifier — <code>lastN</code> or <code>page</code>/<code>pageSize</code> — is merged as a single unit. If
+<code>other</code> sets either form, it replaces the base filter's modifier completely, so a
+per-request paginated search can override an advisor-level <code>lastN</code> window (and the other
+way round) without tripping the "<code>lastN</code> and <code>page</code>/<code>pageSize</code> are mutually exclusive"
+check:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">EventFilter</span><span class="w"> </span><span class="n">merged</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">20</span><span class="p">).</span><span class="na">merge</span><span class="p">(</span><span class="n">EventFilter</span><span class="p">.</span><span class="na">keywordSearch</span><span class="p">(</span><span class="s">"spring"</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">));</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1">// merged.lastN() == null, merged.page() == 1, merged.pageSize() == 5</span>
 </span></code></pre></div>
 <p>See <a href="../chat-client/#per-request-filter-override">ChatClient Integration → Per-request filter override</a>
 for how this is used in practice.</p>

@@ -16,6 +16,8 @@
         <link rel="prev" href="../">
       
       
+        <link rel="next" href="../../migration/">
+      
       
         
       
@@ -298,6 +300,25 @@
         </a>
       </li>
     
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../migration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migration Guide
+
+      </a>
+    </li>
   
 
       
@@ -848,6 +869,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Configuration properties">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#repository-springaisessionrepositoryjdbc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Repository: spring.ai.session.repository.jdbc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#service-springaisession" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service: spring.ai.session
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -884,6 +933,33 @@
           </ul>
         </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -944,6 +1020,34 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Configuration properties">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#repository-springaisessionrepositoryjdbc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Repository: spring.ai.session.repository.jdbc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#service-springaisession" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service: spring.ai.session
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1039,9 +1143,12 @@
 
 <h1 id="auto-configuration">Auto-configuration<a class="headerlink" href="#auto-configuration" title="Permanent link">&para;</a></h1>
 <p><code>spring-ai-autoconfigure-session-jdbc</code> is a Spring Boot auto-configuration that creates a
-<code>JdbcSessionRepository</code> bean automatically when a <code>DataSource</code> bean is present. It
-depends on <code>spring-ai-autoconfigure-session</code>, which creates a <code>DefaultSessionService</code>
-bean on top of any available <code>SessionRepository</code>.</p>
+<code>JdbcSessionRepository</code> bean automatically when a single <code>DataSource</code> bean (or a
+<code>@Primary</code> one) is present. It depends on <code>spring-ai-autoconfigure-session</code>, which creates
+a <code>DefaultSessionService</code> bean on top of the single (or <code>@Primary</code>) <code>SessionRepository</code>.</p>
+<p>The auto-configuration classes live in the <code>org.springaicommunity.session.autoconfigure</code>
+and <code>org.springaicommunity.session.jdbc.autoconfigure</code> packages. The repository and core
+API use <code>org.springframework.ai.session</code>.</p>
 <hr />
 <h2 id="dependency">Dependency<a class="headerlink" href="#dependency" title="Permanent link">&para;</a></h2>
 <p>The recommended way to pull in the full auto-configured stack is via the starter:</p>
@@ -1096,7 +1203,7 @@ with:</p>
 </tr>
 <tr>
 <td><code>always</code></td>
-<td>Always run the DDL script on startup. Useful for PostgreSQL/MySQL in dev.</td>
+<td>Always run the DDL script on startup. Useful for PostgreSQL/MySQL/MariaDB in dev. The bundled scripts can be re-run safely.</td>
 </tr>
 <tr>
 <td><code>never</code></td>
@@ -1106,9 +1213,9 @@ with:</p>
 </table>
 <hr />
 <h2 id="configuration-properties">Configuration properties<a class="headerlink" href="#configuration-properties" title="Permanent link">&para;</a></h2>
-<p>All properties are under the prefix <code>spring.ai.session.repository.jdbc</code>:</p>
-<p><code>JdbcSessionRepositoryProperties</code> extends Spring Boot's <code>DatabaseInitializationProperties</code>,
-so it also inherits these general-purpose properties:</p>
+<h3 id="repository-springaisessionrepositoryjdbc">Repository: <code>spring.ai.session.repository.jdbc</code><a class="headerlink" href="#repository-springaisessionrepositoryjdbc" title="Permanent link">&para;</a></h3>
+<p><code>JdbcSessionRepositoryProperties</code> defines no properties of its own. It extends Spring
+Boot's <code>DatabaseInitializationProperties</code> and inherits these:</p>
 <table>
 <thead>
 <tr>
@@ -1140,10 +1247,28 @@ so it also inherits these general-purpose properties:</p>
 </tr>
 </tbody>
 </table>
+<h3 id="service-springaisession">Service: <code>spring.ai.session</code><a class="headerlink" href="#service-springaisession" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>time-to-live</code></td>
+<td><code>60d</code></td>
+<td>Default time-to-live of sessions created by the auto-configured <code>DefaultSessionService</code> (any <code>Duration</code>, e.g. <code>2h</code>, <code>30d</code>)</td>
+</tr>
+</tbody>
+</table>
 <hr />
 <h2 id="overriding-the-auto-configured-beans">Overriding the auto-configured beans<a class="headerlink" href="#overriding-the-auto-configured-beans" title="Permanent link">&para;</a></h2>
 <p>Declare your own bean of the relevant type and the auto-configuration backs off
-automatically.</p>
+automatically. The repository auto-configuration backs off for a user-defined
+<code>SessionRepository</code> of <strong>any</strong> implementation type.</p>
 <p><strong>Override the repository</strong> (e.g. to supply a custom dialect or transaction manager):</p>
 <div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nd">@Bean</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">SessionRepository</span><span class="w"> </span><span class="nf">sessionRepository</span><span class="p">(</span><span class="n">DataSource</span><span class="w"> </span><span class="n">dataSource</span><span class="p">,</span>
@@ -1161,8 +1286,8 @@ automatically.</p>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">MyCustomSessionService</span><span class="p">(</span><span class="n">repository</span><span class="p">);</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>Both auto-configurations use <code>@ConditionalOnMissingBean</code>, so either or both can be
-overridden independently.</p>
+<p>Both auto-configurations use <code>@ConditionalOnMissingBean</code> (for <code>SessionRepository</code> and
+<code>SessionService</code> respectively), so either or both can be overridden independently.</p>
 <hr />
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>

@@ -303,6 +303,25 @@
   
 
       
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../migration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migration Guide
+
+      </a>
+    </li>
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -627,6 +646,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Architecture Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#idempotent-appendevent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Idempotent appendEvent
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -957,6 +993,33 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1063,6 +1126,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Architecture Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#idempotent-appendevent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Idempotent appendEvent
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1203,7 +1283,7 @@ The event log is stored separately in the repository and fetched on demand.</p>
 </tr>
 <tr>
 <td><code>expiresAt</code></td>
-<td>Expiry instant; defaults to the configured default time-to-live (60 days) from creation; <code>null</code> means no expiry.</td>
+<td>Expiry instant. Sessions created through <code>SessionService.create</code> always get one: the request's <code>timeToLive</code>, or the service's default (60 days, configurable). <code>null</code> (no expiry) is only possible for a <code>Session</code> built directly with <code>Session.builder().expiresAt(null)</code>.</td>
 </tr>
 <tr>
 <td><code>metadata</code></td>
@@ -1369,8 +1449,11 @@ events with two synthetic events that form a coherent conversation turn:</p>
 </span></code></pre></div>
 <p>This mirrors the OpenAI Agents SDK shadow-prompt pattern and ensures that downstream
 models always see a valid user↔assistant alternation.</p>
-<p>All compaction strategies treat synthetic events as opaque — they separate them from real
-events before processing, preserve them, and place them first in the compacted output.</p>
+<p>All compaction strategies separate synthetic events from real events before processing.
+The sliding-window, turn-window and token-count strategies keep them unchanged and place
+them first in the compacted output. <code>RecursiveSummarizationCompactionStrategy</code> instead
+folds the previous summary into the new one and <strong>replaces</strong> it: the superseded synthetic
+events are removed from the log (they are not archived).</p>
 <p>Build a synthetic summary turn explicitly:</p>
 <div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">Instant</span><span class="w"> </span><span class="n">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Instant</span><span class="p">.</span><span class="na">now</span><span class="p">();</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">summaryTurn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span>
@@ -1402,13 +1485,16 @@ immutable value object. By keeping <code>Session</code> as pure metadata, all ev
 through dedicated repository methods (<code>appendEvent</code>, <code>compactEvents</code>) and <code>SessionService</code>
 operates on the event list as an explicit parameter.</p>
 <p><strong>Archiving instead of deleting</strong></p>
-<p>Compaction never deletes the events it removes from the active context window. Instead it
+<p>Compaction never deletes the real events it removes from the active context window. Instead it
 marks them archived (<code>SessionEvent.isArchived()</code>) via <code>compactEvents</code>, leaving the full
 verbatim history in the log. The active context window — what <code>SessionMemoryAdvisor</code>
 injects into the prompt — is the <code>EventFilter.active()</code> view (<code>excludeArchived = true</code>),
 while Recall Storage searches (<code>EventFilter.keywordSearch(...)</code>) deliberately span the
 whole log, archived events included. This is what makes the MemGPT recall pattern work:
 the agent can surface any prior exchange even after it has been summarized out of context.
+The one exception is a superseded synthetic summary: when <code>RecursiveSummarizationCompactionStrategy</code>
+writes a new summary, the previous summary events are dropped rather than archived, because
+their content is carried into the new summary.
 In the JDBC repository, events newly marked archived are updated in place (their row is
 never rewritten); only the active window is replaced with the new retained events on each
 compaction pass, so the growing archived history is never re-read or re-written.</p>
@@ -1420,12 +1506,17 @@ retainedEvents, expectedVersion)</code>. If another writer mutated the log in th
 CAS returns <code>false</code> — the caller treats this as a no-op rather than retrying. Durable
 implementations (JDBC, Redis) should map this to a database-level optimistic-lock column
 or a Redis <code>WATCH</code>.</p>
-<p><strong>Idempotent <code>appendEvent</code></strong></p>
+<h3 id="idempotent-appendevent">Idempotent appendEvent<a class="headerlink" href="#idempotent-appendevent" title="Permanent link">&para;</a></h3>
 <p>A retried <code>appendEvent</code> call for an id that was already committed is a no-op, not an
-error or a duplicate — both <code>InMemorySessionRepository</code> and <code>JdbcSessionRepository</code>
-check by <code>SessionEvent.getId()</code> (the table's primary key in the JDBC case) before
-writing. The default id is still a random UUID, so this only applies when a caller
-supplies its own deterministic id — see <a href="../chat-client/#idempotent-session-event-ids"><code>SessionMemoryAdvisor</code>'s pluggable id
+error or a duplicate, and does not increment the event-log version.
+<code>InMemorySessionRepository</code> checks the session's events for the id before appending.
+<code>JdbcSessionRepository</code> inserts and treats a primary-key violation on the event <code>id</code> as a
+replay.</p>
+<p>In JDBC the event <code>id</code> is the primary key of the whole <code>AI_SESSION_EVENT</code> table, not just
+of one session. Reusing an id that already belongs to a <em>different</em> session throws
+<code>IllegalStateException</code> instead of being treated as a replay, so event ids should be
+unique across sessions. The default id is a random UUID, so this only matters when a
+caller supplies its own deterministic ids. See <a href="../chat-client/#idempotent-session-event-ids"><code>SessionMemoryAdvisor</code>'s pluggable id
 generators</a>.</p>
 <p><strong>Event ordering</strong></p>
 <p>Events are returned in insertion (logical conversation) order, not by wall-clock
@@ -1449,17 +1540,20 @@ positioned ahead of the older active-window events it precedes.</p>
 </span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="n">service</span><span class="p">.</span><span class="na">appendMessage</span><span class="p">(</span><span class="n">session</span><span class="p">.</span><span class="na">id</span><span class="p">(),</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">UserMessage</span><span class="p">(</span><span class="s">"What is Spring AI?"</span><span class="p">));</span>
 </span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="n">service</span><span class="p">.</span><span class="na">appendMessage</span><span class="p">(</span><span class="n">session</span><span class="p">.</span><span class="na">id</span><span class="p">(),</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">AssistantMessage</span><span class="p">(</span><span class="s">"Spring AI is..."</span><span class="p">));</span>
 </span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>
-</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="c1">// 3. Retrieve as Message list (for passing directly to an LLM)</span>
-</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="n">List</span><span class="o">&lt;</span><span class="n">Message</span><span class="o">&gt;</span><span class="w"> </span><span class="n">history</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">service</span><span class="p">.</span><span class="na">getMessages</span><span class="p">(</span><span class="n">session</span><span class="p">.</span><span class="na">id</span><span class="p">());</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="c1">// 3. Retrieve the active context window as a Message list (for passing to an LLM)</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="n">List</span><span class="o">&lt;</span><span class="n">Message</span><span class="o">&gt;</span><span class="w"> </span><span class="n">history</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">service</span><span class="p">.</span><span class="na">getActiveMessages</span><span class="p">(</span><span class="n">session</span><span class="p">.</span><span class="na">id</span><span class="p">());</span>
 </span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>
-</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="c1">// 4. Retrieve as SessionEvent list (for filtering, inspection, compaction)</span>
-</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">events</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">session</span><span class="p">.</span><span class="na">id</span><span class="p">());</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="c1">//    ...or the full recorded history, including events archived by compaction</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="n">List</span><span class="o">&lt;</span><span class="n">Message</span><span class="o">&gt;</span><span class="w"> </span><span class="n">fullHistory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">service</span><span class="p">.</span><span class="na">getMessages</span><span class="p">(</span><span class="n">session</span><span class="p">.</span><span class="na">id</span><span class="p">());</span>
 </span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>
-</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="c1">// 5. Delete a single session</span>
-</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="n">service</span><span class="p">.</span><span class="na">delete</span><span class="p">(</span><span class="n">session</span><span class="p">.</span><span class="na">id</span><span class="p">());</span>
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="c1">// 4. Retrieve as SessionEvent list (for filtering, inspection, compaction)</span>
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">events</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">session</span><span class="p">.</span><span class="na">id</span><span class="p">());</span>
 </span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>
-</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="c1">// 6. Delete all expired sessions (call from a scheduler)</span>
-</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="kt">int</span><span class="w"> </span><span class="n">removed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">service</span><span class="p">.</span><span class="na">deleteExpiredSessions</span><span class="p">(</span><span class="n">Instant</span><span class="p">.</span><span class="na">now</span><span class="p">());</span>
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="c1">// 5. Delete a single session</span>
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="n">service</span><span class="p">.</span><span class="na">delete</span><span class="p">(</span><span class="n">session</span><span class="p">.</span><span class="na">id</span><span class="p">());</span>
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>
+</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a><span class="c1">// 6. Delete all expired sessions (call from a scheduler)</span>
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a><span class="kt">int</span><span class="w"> </span><span class="n">removed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">service</span><span class="p">.</span><span class="na">deleteExpiredSessions</span><span class="p">(</span><span class="n">Instant</span><span class="p">.</span><span class="na">now</span><span class="p">());</span>
 </span></code></pre></div>
 <p>Deleted sessions are removed from the repository entirely — there is no tombstone state.</p>
 <h3 id="expiry-cleanup">Expiry cleanup<a class="headerlink" href="#expiry-cleanup" title="Permanent link">&para;</a></h3>
@@ -1475,7 +1569,7 @@ explicitly. Wire it to a scheduler in your application:</p>
 instant and deletes them one by one. It returns the count of sessions removed.</p>
 <hr />
 <h2 id="package-structure">Package Structure<a class="headerlink" href="#package-structure" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>org.springframework.ai.session          (Java package — unchanged from upstream)
+<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>org.springframework.ai.session          (core and JDBC modules)
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>├── Session.java                        – immutable metadata-only value object
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>├── SessionEvent.java                   – immutable wrapper around a Spring AI Message
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>├── SessionService.java                 – primary lifecycle + compaction API
@@ -1487,25 +1581,33 @@ instant and deletes them one by one. It returns the count of sessions removed.</
 </span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>├── InMemorySessionRepository.java      – ConcurrentHashMap-backed repository
 </span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>│
 </span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>├── advisor/
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>│   └── SessionMemoryAdvisor.java       – ChatClient advisor with auto-compaction
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>│
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>├── compaction/
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>│   ├── CompactionRequest.java          – (session, events, eventCount, turnCount)
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>│   ├── CompactionResult.java           – compacted events + archived events + metrics
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>│   ├── CompactionStrategy.java         – strategy SPI
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>│   ├── CompactionTrigger.java          – trigger SPI
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>│   ├── CompactionUtils.java            – shared event formatter + turn-boundary snapping
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>│   ├── CompositeCompactionTrigger.java – OR-composite of triggers
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>│   ├── TurnCountTrigger.java
-</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>│   ├── TokenCountTrigger.java
-</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>│   ├── SlidingWindowCompactionStrategy.java
-</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a>│   ├── TurnWindowCompactionStrategy.java
-</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a>│   ├── TokenCountCompactionStrategy.java
-</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a>│   └── RecursiveSummarizationCompactionStrategy.java
-</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a>│
-</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a>└── tool/
-</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a>    └── SessionEventTools.java          – @Tool conversation_search (Recall Storage)
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>│   ├── SessionMemoryAdvisor.java       – ChatClient advisor with auto-compaction
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>│   ├── SessionEventRequestIdGenerator.java  – SPI: id of the persisted user/tool message
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>│   ├── SessionEventResponseIdGenerator.java – SPI: id of the persisted assistant message
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>│   └── IdempotentSessionEventIdGenerator.java – deterministic ids for retry-safe appends
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>│
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>├── compaction/
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>│   ├── CompactionRequest.java          – (session, events, eventCount, turnCount)
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>│   ├── CompactionResult.java           – compacted events + archived events + metrics
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>│   ├── CompactionStrategy.java         – strategy SPI
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>│   ├── CompactionTrigger.java          – trigger SPI
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>│   ├── CompactionUtils.java            – (package-private) event formatter + turn-boundary snapping
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>│   ├── CompositeCompactionTrigger.java – OR-composite of triggers
+</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a>│   ├── TurnCountTrigger.java
+</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a>│   ├── TokenCountTrigger.java
+</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a>│   ├── SlidingWindowCompactionStrategy.java
+</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a>│   ├── TurnWindowCompactionStrategy.java
+</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a>│   ├── TokenCountCompactionStrategy.java
+</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a>│   └── RecursiveSummarizationCompactionStrategy.java
+</span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31" href="#__codelineno-7-31"></a>│
+</span><span id="__span-7-32"><a id="__codelineno-7-32" name="__codelineno-7-32" href="#__codelineno-7-32"></a>└── tool/
+</span><span id="__span-7-33"><a id="__codelineno-7-33" name="__codelineno-7-33" href="#__codelineno-7-33"></a>    ├── SessionEventTools.java          – @Tool conversation_search (Recall Storage)
+</span><span id="__span-7-34"><a id="__codelineno-7-34" name="__codelineno-7-34" href="#__codelineno-7-34"></a>    └── CrossSessionRecallTools.java    – @Tool cross_session_search (all of a user's sessions)
 </span></code></pre></div>
+<p>The JDBC repository lives in <code>org.springframework.ai.session.jdbc</code>
+(<code>spring-ai-session-jdbc</code>). The Spring Boot auto-configurations use the
+<code>org.springaicommunity.session.autoconfigure</code> and
+<code>org.springaicommunity.session.jdbc.autoconfigure</code> packages.</p>
 
 
 

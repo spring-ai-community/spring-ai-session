@@ -13,6 +13,8 @@
         <link rel="canonical" href="https://spring-ai-community.github.io/spring-ai-session/0.9.0-SNAPSHOT/migration/">
       
       
+        <link rel="prev" href="../session-jdbc/auto-configuration/">
+      
       
       
         
@@ -294,6 +296,27 @@
         </a>
       </li>
     
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migration Guide
+
+      </a>
+    </li>
   
 
       
@@ -777,18 +800,58 @@
   
 
     
-  </ul>
-</nav>
-                  </div>
-                </div>
-              </div>
-            
-            
-              
-              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
-                <div class="md-sidebar__scrollwrap">
-                  <div class="md-sidebar__inner">
-                    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
 
 <nav class="md-nav md-nav--secondary" aria-label="Table of contents">
   
@@ -802,6 +865,89 @@
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#upgrading-to-090" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrading to 0.9.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Upgrading to 0.9.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#breaking-conversation_search-needs-the-session-id-in-the-tool-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: conversation_search needs the session ID in the tool context
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-sessionservicecreate-rejects-an-existing-session-id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: SessionService.create(...) rejects an existing session ID
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-jdbc-timestamps-are-stored-as-utc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: JDBC timestamps are stored as UTC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-unsupported-databases-fail-fast" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: unsupported databases fail fast
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-custom-dialects-only-like-patterns-are-escaped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking (custom dialects only): LIKE patterns are escaped
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
       
         <li class="md-nav__item">
   <a href="#upgrading-to-080" class="md-nav__link">
@@ -839,6 +985,273 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#upgrading-to-070" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrading to 0.7.0
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#upgrading-to-060" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrading to 0.6.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Upgrading to 0.6.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#breaking-core-module-artifact-renamed-from-spring-ai-session-management-to-spring-ai-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: core module artifact renamed from spring-ai-session-management to spring-ai-session
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-sessionrepositoryreplaceevents-replaced-by-compactevents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: SessionRepository.replaceEvents(...) replaced by compactEvents(...)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-geteventssessionid-getmessagessessionid-now-include-archived-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: getEvents(sessionId) / getMessages(sessionId) now include archived events
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-jdbc-schema-adds-seq-and-archived-columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: JDBC schema adds seq and archived columns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#upgrading-to-030" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrading to 0.3.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Upgrading to 0.3.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#breaking-sessionmemoryadvisorbuilderdefaultsessionid-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: SessionMemoryAdvisor.Builder.defaultSessionId() removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#upgrading-to-090" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrading to 0.9.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Upgrading to 0.9.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#breaking-conversation_search-needs-the-session-id-in-the-tool-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: conversation_search needs the session ID in the tool context
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-sessionservicecreate-rejects-an-existing-session-id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: SessionService.create(...) rejects an existing session ID
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-jdbc-timestamps-are-stored-as-utc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: JDBC timestamps are stored as UTC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-unsupported-databases-fail-fast" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking: unsupported databases fail fast
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#breaking-custom-dialects-only-like-patterns-are-escaped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking (custom dialects only): LIKE patterns are escaped
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#upgrading-to-080" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrading to 0.8.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Upgrading to 0.8.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#behavior-change-sessionmemoryadvisor-no-longer-duplicates-history-inside-a-tool-calling-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior change: SessionMemoryAdvisor no longer duplicates history inside a tool-calling loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dependency-baseline-spring-ai-201-spring-boot-411" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency baseline: Spring AI 2.0.1, Spring Boot 4.1.1
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#upgrading-to-070" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrading to 0.7.0
+      
+    </span>
+  </a>
   
 </li>
       
@@ -960,6 +1373,73 @@
 
 
 <h1 id="migration-guide">Migration Guide<a class="headerlink" href="#migration-guide" title="Permanent link">&para;</a></h1>
+<h2 id="upgrading-to-090">Upgrading to 0.9.0<a class="headerlink" href="#upgrading-to-090" title="Permanent link">&para;</a></h2>
+<h3 id="breaking-conversation_search-needs-the-session-id-in-the-tool-context">Breaking: <code>conversation_search</code> needs the session ID in the tool context<a class="headerlink" href="#breaking-conversation_search-needs-the-session-id-in-the-tool-context" title="Permanent link">&para;</a></h3>
+<p><code>SessionEventTools</code> reads the session ID from the <code>ToolContext</code>, and Spring AI does not copy
+advisor parameters into it. Before 0.9.0 the tool then silently searched a shared
+<code>"default"</code> session. It now returns an error message to the model instead. Pass the ID to
+both the advisor and the tool context:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">chatClient</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="n">question</span><span class="p">)</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">ChatMemory</span><span class="p">.</span><span class="na">CONVERSATION_ID</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="p">.</span><span class="na">toolContext</span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">ChatMemory</span><span class="p">.</span><span class="na">CONVERSATION_ID</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
+</span></code></pre></div>
+<h3 id="breaking-sessionservicecreate-rejects-an-existing-session-id">Breaking: <code>SessionService.create(...)</code> rejects an existing session ID<a class="headerlink" href="#breaking-sessionservicecreate-rejects-an-existing-session-id" title="Permanent link">&para;</a></h3>
+<p><code>create</code> used to upsert: an existing session with the same ID got a new <code>userId</code> and TTL
+but kept its event log. It now throws <code>IllegalStateException("Session already exists: …")</code>.
+Use <code>findById</code> first if the session may already exist. <code>SessionMemoryAdvisor</code> handles this
+itself, including two concurrent first requests for the same new session.</p>
+<p><code>create</code> now goes through the new <code>SessionRepository.saveIfAbsent(Session)</code>, which inserts
+only if the id is free. The built-in repositories implement it atomically. <strong>Custom
+<code>SessionRepository</code> implementations should override it</strong> with an atomic insert, such as a
+primary-key-guarded <code>INSERT</code>. The default implementation is a non-atomic <code>findById</code> +
+<code>save</code>, so two concurrent creates of the same id could still both succeed.</p>
+<p>Relatedly, <code>SessionRepository.save(...)</code> on an existing session now keeps its original
+<code>createdAt</code> in every implementation.</p>
+<h3 id="breaking-jdbc-timestamps-are-stored-as-utc">Breaking: JDBC timestamps are stored as UTC<a class="headerlink" href="#breaking-jdbc-timestamps-are-stored-as-utc" title="Permanent link">&para;</a></h3>
+<p>The <code>TIMESTAMP</code> / <code>DATETIME</code> columns carry no time zone. They used to be written in the
+JVM's default time zone and are now always written and read as UTC wall-clock time. If
+your application ran in a non-UTC zone, existing rows are off by that zone's offset. To
+fix them, shift <code>AI_SESSION.created_at</code>, <code>AI_SESSION.expires_at</code> and
+<code>AI_SESSION_EVENT.timestamp</code> by the offset, or accept the shift for historical data.</p>
+<h3 id="breaking-unsupported-databases-fail-fast">Breaking: unsupported databases fail fast<a class="headerlink" href="#breaking-unsupported-databases-fail-fast" title="Permanent link">&para;</a></h3>
+<p><code>JdbcSessionRepositoryDialect.from(DataSource)</code> used to fall back to the PostgreSQL
+dialect for an unknown or undetectable database, which then failed at query time. It now
+throws <code>IllegalStateException</code>. For other databases, implement <code>JdbcSessionRepositoryDialect</code>
+and pass it via <code>JdbcSessionRepository.builder().dialect(...)</code>.</p>
+<h3 id="breaking-custom-dialects-only-like-patterns-are-escaped">Breaking (custom dialects only): <code>LIKE</code> patterns are escaped<a class="headerlink" href="#breaking-custom-dialects-only-like-patterns-are-escaped" title="Permanent link">&para;</a></h3>
+<p>Keyword and branch filters now treat <code>%</code>, <code>_</code> and <code>!</code> literally. The keyword parameter is
+escaped with <code>!</code>, so a custom <code>JdbcSessionRepositoryDialect</code> must add <code>ESCAPE '!'</code> to its
+<code>getKeywordFilterFragment()</code> / <code>getKeywordPredicateFragment()</code> SQL. The built-in dialects
+already do.</p>
+<h3 id="behavior-changes">Behavior changes<a class="headerlink" href="#behavior-changes" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>IdempotentSessionEventIdGenerator</code> id format.</strong> Ids are now
+  <code>&lt;messageType&gt;-&lt;sha256&gt;</code> (at most 74 characters, which fits the <code>VARCHAR(255)</code> column).
+  Blank tool-call ids (e.g. from Ollama) fall back to a content hash instead of all
+  colliding. A retry that spans the upgrade is not recognized as a replay.</li>
+<li><strong>Compaction keeps the newest turn.</strong> When the most recent turn alone exceeds the budget,
+  the sliding-window, token-count and recursive-summarization strategies keep that turn
+  instead of archiving the whole active window.</li>
+<li><strong>Compaction failures no longer fail the chat call.</strong> An exception from compaction in
+  <code>SessionMemoryAdvisor.after()</code> is logged, and the reply is returned as normal.</li>
+<li><strong><code>EventFilter.merge</code></strong> treats <code>lastN</code> / <code>page</code>+<code>pageSize</code> as one unit, so a per-request
+  paginated filter replaces an advisor-level <code>lastN</code> instead of throwing.</li>
+<li><strong><code>CrossSessionRecallTools</code></strong> rejects a blank <code>query</code> and an unknown <code>matchMode</code>. These
+  used to return everything or silently use <code>any</code>.</li>
+<li><strong>JDBC event ids</strong> are a table-wide key. An id already used by another session now throws
+  <code>IllegalStateException</code> instead of silently dropping the event.</li>
+<li><strong>New <code>SessionService.getActiveMessages(sessionId)</code></strong> returns the active context window
+  (archived events excluded), which is the list to send to a model. <code>getMessages(sessionId)</code>
+  is unchanged and still returns the full log, archived events included.</li>
+<li><strong>Auto-configuration</strong> backs off when there is no single <code>DataSource</code>, and when you define
+  your own <code>SessionRepository</code> bean of any type. <code>DefaultSessionService</code> needs a single (or
+  <code>@Primary</code>) <code>SessionRepository</code>.</li>
+<li><strong>MySQL schema script</strong> can be re-run safely (<code>initialize-schema: always</code>), and MariaDB
+  now uses the MySQL script.</li>
+</ul>
 <h2 id="upgrading-to-080">Upgrading to 0.8.0<a class="headerlink" href="#upgrading-to-080" title="Permanent link">&para;</a></h2>
 <p>No breaking API or schema changes. Two things to be aware of:</p>
 <h3 id="behavior-change-sessionmemoryadvisor-no-longer-duplicates-history-inside-a-tool-calling-loop">Behavior change: <code>SessionMemoryAdvisor</code> no longer duplicates history inside a tool-calling loop<a class="headerlink" href="#behavior-change-sessionmemoryadvisor-no-longer-duplicates-history-inside-a-tool-calling-loop" title="Permanent link">&para;</a></h3>
@@ -976,10 +1456,26 @@ only the prompt sent to the model was affected.</p>
 <code>ToolCallingAdvisor</code>'s <code>.disableInternalConversationHistory()</code> or giving
 <code>SessionMemoryAdvisor</code> a custom order so it wraps the loop — those setups still work, but
 the workaround is no longer required at default orders. See the "Default advisor order"
-note in the ChatClient reference doc for details.</p>
+note in <a href="../session-management/chat-client/">ChatClient Integration</a> for details.</p>
 <h3 id="dependency-baseline-spring-ai-201-spring-boot-411">Dependency baseline: Spring AI 2.0.1, Spring Boot 4.1.1<a class="headerlink" href="#dependency-baseline-spring-ai-201-spring-boot-411" title="Permanent link">&para;</a></h3>
 <p>0.8.0 builds against Spring AI 2.0.1 and Spring Boot 4.1.1 (previously 2.0.0 / 4.0.7).
 Align your application's Spring AI BOM and Spring Boot versions accordingly.</p>
+<h2 id="upgrading-to-070">Upgrading to 0.7.0<a class="headerlink" href="#upgrading-to-070" title="Permanent link">&para;</a></h2>
+<p>No breaking API or schema changes. New features:</p>
+<ul>
+<li><strong>Cross-session recall.</strong> <code>CrossSessionRecallTools</code> provides a <code>cross_session_search</code> tool
+  that searches every session of one user. See
+  <a href="../session-management/cross-session-recall/">Cross-Session Recall</a>.</li>
+<li><strong>Multi-term and pattern search.</strong> <code>EventFilter</code> gained <code>keywords</code> + <code>matchMode</code>
+  (<code>ANY</code>/<code>ALL</code>) and a <code>pattern</code> (regex) criterion. See
+  <a href="../session-management/event-filtering/">Event Filtering</a>.</li>
+<li><strong>Idempotent appends.</strong> <code>SessionRepository.appendEvent</code> is a no-op for an event id that
+  is already stored, and <code>SessionMemoryAdvisor</code> accepts pluggable event-id generators
+  (<code>requestEventIdGenerator</code> / <code>responseEventIdGenerator</code>, e.g.
+  <code>IdempotentSessionEventIdGenerator</code>). Custom <code>SessionRepository</code> implementations should
+  follow the same replay contract. See
+  <a href="../session-management/chat-client/#idempotent-session-event-ids">Idempotent session-event ids</a>.</li>
+</ul>
 <h2 id="upgrading-to-060">Upgrading to 0.6.0<a class="headerlink" href="#upgrading-to-060" title="Permanent link">&para;</a></h2>
 <p>Compaction now <strong>archives</strong> events instead of deleting them, so the full history stays
 searchable through Recall Storage (issue #21). This introduces four breaking changes.</p>
@@ -987,17 +1483,17 @@ searchable through Recall Storage (issue #21). This introduces four breaking cha
 <p>The <code>groupId</code> (<code>org.springaicommunity</code>) and Java package
 (<code>org.springframework.ai.session</code>) are unchanged — only the Maven artifact/module name
 moved:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="cm">&lt;!-- Before (0.5.x) --&gt;</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">&lt;dependency&gt;</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&lt;groupId&gt;</span>org.springaicommunity<span class="nt">&lt;/groupId&gt;</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&lt;artifactId&gt;</span>spring-ai-session-management<span class="nt">&lt;/artifactId&gt;</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">&lt;/dependency&gt;</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="cm">&lt;!-- After (0.6.0) --&gt;</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="nt">&lt;dependency&gt;</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">&lt;groupId&gt;</span>org.springaicommunity<span class="nt">&lt;/groupId&gt;</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">&lt;artifactId&gt;</span>spring-ai-session<span class="nt">&lt;/artifactId&gt;</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="nt">&lt;/dependency&gt;</span>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="cm">&lt;!-- Before (0.5.x) --&gt;</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">&lt;dependency&gt;</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">&lt;groupId&gt;</span>org.springaicommunity<span class="nt">&lt;/groupId&gt;</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">&lt;artifactId&gt;</span>spring-ai-session-management<span class="nt">&lt;/artifactId&gt;</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nt">&lt;/dependency&gt;</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="cm">&lt;!-- After (0.6.0) --&gt;</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="nt">&lt;dependency&gt;</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">&lt;groupId&gt;</span>org.springaicommunity<span class="nt">&lt;/groupId&gt;</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">&lt;artifactId&gt;</span>spring-ai-session<span class="nt">&lt;/artifactId&gt;</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="nt">&lt;/dependency&gt;</span>
 </span></code></pre></div>
 <p>No other module (<code>spring-ai-session-jdbc</code>, <code>spring-ai-autoconfigure-session</code>,
 <code>spring-ai-autoconfigure-session-jdbc</code>, <code>spring-ai-starter-session-jdbc</code>,
@@ -1006,12 +1502,12 @@ than the core artifact directly, no change is needed.</p>
 <h3 id="breaking-sessionrepositoryreplaceevents-replaced-by-compactevents">Breaking: <code>SessionRepository.replaceEvents(...)</code> replaced by <code>compactEvents(...)</code><a class="headerlink" href="#breaking-sessionrepositoryreplaceevents-replaced-by-compactevents" title="Permanent link">&para;</a></h3>
 <p>Both <code>replaceEvents</code> overloads are removed. Custom <code>SessionRepository</code> implementations must
 implement the new method instead:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">// Before (0.5.x)</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kt">boolean</span><span class="w"> </span><span class="nf">replaceEvents</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">events</span><span class="p">,</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">expectedVersion</span><span class="p">);</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1">// After (0.6.0): archive the removed events, swap in the new active window</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="kt">boolean</span><span class="w"> </span><span class="nf">compactEvents</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">archivedEvents</span><span class="p">,</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">        </span><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">retainedEvents</span><span class="p">,</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">expectedVersion</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// Before (0.5.x)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kt">boolean</span><span class="w"> </span><span class="nf">replaceEvents</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">events</span><span class="p">,</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">expectedVersion</span><span class="p">);</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1">// After (0.6.0): archive the removed events, swap in the new active window</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="kt">boolean</span><span class="w"> </span><span class="nf">compactEvents</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">archivedEvents</span><span class="p">,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">retainedEvents</span><span class="p">,</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">expectedVersion</span><span class="p">);</span>
 </span></code></pre></div>
 <p>The implementation must mark <code>archivedEvents</code> as archived (retained, not deleted), set the
 active event set to <code>retainedEvents</code>, and preserve any previously-archived events.</p>
@@ -1019,19 +1515,19 @@ active event set to <code>retainedEvents</code>, and preserve any previously-arc
 <p><code>EventFilter.all()</code> (the default for the no-arg accessors) returns the <strong>full</strong> log,
 archived events included. To get the active context window — what you pass to the model —
 use the new <code>EventFilter.active()</code>:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// Active context window only (archived events excluded)</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">active</span><span class="p">());</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1">// Recall Storage: full history, archived included (unchanged)</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">keywordSearch</span><span class="p">(</span><span class="s">"topic"</span><span class="p">));</span>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1">// Active context window only (archived events excluded)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">active</span><span class="p">());</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1">// Recall Storage: full history, archived included (unchanged)</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">keywordSearch</span><span class="p">(</span><span class="s">"topic"</span><span class="p">));</span>
 </span></code></pre></div>
 <p><code>SessionMemoryAdvisor</code> already forces <code>active()</code> when building the prompt, so no change is
 needed there.</p>
 <h3 id="breaking-jdbc-schema-adds-seq-and-archived-columns">Breaking: JDBC schema adds <code>seq</code> and <code>archived</code> columns<a class="headerlink" href="#breaking-jdbc-schema-adds-seq-and-archived-columns" title="Permanent link">&para;</a></h3>
 <p><code>AI_SESSION_EVENT</code> gains an <code>archived</code> flag and a monotonic <code>seq</code> ordering column (events
 are now ordered by <code>seq</code>, not <code>timestamp</code>). Recreate the table or apply, e.g. for H2:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">AI_SESSION_EVENT</span><span class="w"> </span><span class="k">ADD</span><span class="w"> </span><span class="k">COLUMN</span><span class="w"> </span><span class="n">archived</span><span class="w"> </span><span class="nb">BOOLEAN</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">FALSE</span><span class="p">;</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">AI_SESSION_EVENT</span><span class="w"> </span><span class="k">ADD</span><span class="w"> </span><span class="k">COLUMN</span><span class="w"> </span><span class="n">seq</span><span class="w"> </span><span class="nb">BIGINT</span><span class="w"> </span><span class="k">GENERATED</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">IDENTITY</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">AI_SESSION_EVENT</span><span class="w"> </span><span class="k">ADD</span><span class="w"> </span><span class="k">COLUMN</span><span class="w"> </span><span class="n">archived</span><span class="w"> </span><span class="nb">BOOLEAN</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">FALSE</span><span class="p">;</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">AI_SESSION_EVENT</span><span class="w"> </span><span class="k">ADD</span><span class="w"> </span><span class="k">COLUMN</span><span class="w"> </span><span class="n">seq</span><span class="w"> </span><span class="nb">BIGINT</span><span class="w"> </span><span class="k">GENERATED</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">IDENTITY</span><span class="p">;</span>
 </span></code></pre></div>
 <p>See the bundled <code>schema-{h2,postgresql,mysql}.sql</code> for the full DDL per dialect.</p>
 <h2 id="upgrading-to-030">Upgrading to 0.3.0<a class="headerlink" href="#upgrading-to-030" title="Permanent link">&para;</a></h2>
@@ -1046,35 +1542,35 @@ silently merging conversation history from different users or threads. This is a
 correctness and security issue in any multi-user deployment.</p>
 <p><strong>How to migrate</strong></p>
 <p>Before (0.2.x):</p>
-<div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultSessionId</span><span class="p">(</span><span class="s">"my-session-id"</span><span class="p">)</span><span class="w">   </span><span class="c1">// ← removed</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1">// Session ID came from the advisor default — no per-request param needed</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">().</span><span class="na">user</span><span class="p">(</span><span class="s">"Hello"</span><span class="p">).</span><span class="na">call</span><span class="p">().</span><span class="na">content</span><span class="p">();</span>
+<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultSessionId</span><span class="p">(</span><span class="s">"my-session-id"</span><span class="p">)</span><span class="w">   </span><span class="c1">// ← removed</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1">// Session ID came from the advisor default — no per-request param needed</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">().</span><span class="na">user</span><span class="p">(</span><span class="s">"Hello"</span><span class="p">).</span><span class="na">call</span><span class="p">().</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
 <p>After (0.3.0):</p>
-<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1">// Session ID must be passed on every request</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">"Hello"</span><span class="p">)</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
+<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">advisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1">// Session ID must be passed on every request</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">"Hello"</span><span class="p">)</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
 <p>In a typical web application, resolve the session ID from the authenticated principal or
 HTTP session in the controller, then pass it per call:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">"/chat"</span><span class="p">)</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">String</span><span class="w"> </span><span class="nf">chat</span><span class="p">(</span><span class="nd">@AuthenticationPrincipal</span><span class="w"> </span><span class="n">UserDetails</span><span class="w"> </span><span class="n">user</span><span class="p">,</span><span class="w"> </span><span class="nd">@RequestBody</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">message</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">sessionId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">resolveSessionId</span><span class="p">(</span><span class="n">user</span><span class="p">.</span><span class="na">getUsername</span><span class="p">());</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">chatClient</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">        </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">        </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">        </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">        </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">"/chat"</span><span class="p">)</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">String</span><span class="w"> </span><span class="nf">chat</span><span class="p">(</span><span class="nd">@AuthenticationPrincipal</span><span class="w"> </span><span class="n">UserDetails</span><span class="w"> </span><span class="n">user</span><span class="p">,</span><span class="w"> </span><span class="nd">@RequestBody</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">message</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">sessionId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">resolveSessionId</span><span class="p">(</span><span class="n">user</span><span class="p">.</span><span class="na">getUsername</span><span class="p">());</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">chatClient</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">        </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">        </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">        </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">        </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="p">}</span>
 </span></code></pre></div>
 
 

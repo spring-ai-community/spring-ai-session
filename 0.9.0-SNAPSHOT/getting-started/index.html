@@ -303,6 +303,25 @@
   
 
       
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../migration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migration Guide
+
+      </a>
+    </li>
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -503,10 +522,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#git-repositories" class="md-nav__link">
+  <a href="#maven-repositories" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Git Repositories
+        Maven Repositories
       
     </span>
   </a>
@@ -907,6 +926,33 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -989,10 +1035,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#git-repositories" class="md-nav__link">
+  <a href="#maven-repositories" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Git Repositories
+        Maven Repositories
       
     </span>
   </a>
@@ -1042,8 +1088,8 @@
 <h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Java 17+</li>
-<li>Spring AI <code>2.0.0+</code></li>
-<li>Spring Boot <code>4.0.7+</code></li>
+<li>Spring AI <code>2.0.1+</code></li>
+<li>Spring Boot <code>4.1.1+</code></li>
 </ul>
 <hr />
 <h2 id="quickstart-spring-boot">Quickstart (Spring Boot)<a class="headerlink" href="#quickstart-spring-boot" title="Permanent link">&para;</a></h2>
@@ -1102,7 +1148,7 @@ pass a session ID per call:</p>
 <ul>
 <li>a <code>JdbcSessionRepository</code> bean backed by the auto-configured <code>DataSource</code></li>
 <li>a <code>DefaultSessionService</code> bean wrapping the repository</li>
-<li>SQL dialect detection from the DataSource URL</li>
+<li>SQL dialect detection from the database metadata (PostgreSQL, MySQL, MariaDB, H2)</li>
 <li>schema initialisation for embedded databases (H2)</li>
 </ul>
 <p>To initialise the schema for PostgreSQL or MySQL, set:</p>
@@ -1200,12 +1246,14 @@ after each response, and runs compaction when a trigger fires.</p>
 </span></code></pre></div>
 <p>If no session exists for the given ID, the advisor creates one automatically.</p>
 <hr />
-<h2 id="git-repositories">Git Repositories<a class="headerlink" href="#git-repositories" title="Permanent link">&para;</a></h2>
-<p>Spring AI Session is available from the Spring snapshot repository:</p>
+<h2 id="maven-repositories">Maven Repositories<a class="headerlink" href="#maven-repositories" title="Permanent link">&para;</a></h2>
+<p>Released versions are published to <strong>Maven Central</strong>, so no extra repository
+configuration is needed.</p>
+<p>To use a <code>-SNAPSHOT</code> version, add the Central Portal snapshot repository:</p>
 <div class="highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nt">&lt;repositories&gt;</span>
 </span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span><span class="nt">&lt;repository&gt;</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">        </span><span class="nt">&lt;id&gt;</span>spring-snapshots<span class="nt">&lt;/id&gt;</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">        </span><span class="nt">&lt;url&gt;</span>https://repo.spring.io/snapshot<span class="nt">&lt;/url&gt;</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">        </span><span class="nt">&lt;id&gt;</span>central-portal-snapshots<span class="nt">&lt;/id&gt;</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">        </span><span class="nt">&lt;url&gt;</span>https://central.sonatype.com/repository/maven-snapshots/<span class="nt">&lt;/url&gt;</span>
 </span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">        </span><span class="nt">&lt;snapshots&gt;&lt;enabled&gt;</span>true<span class="nt">&lt;/enabled&gt;&lt;/snapshots&gt;</span>
 </span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">        </span><span class="nt">&lt;releases&gt;&lt;enabled&gt;</span>false<span class="nt">&lt;/enabled&gt;&lt;/releases&gt;</span>
 </span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">    </span><span class="nt">&lt;/repository&gt;</span>
@@ -1218,6 +1266,7 @@ after each response, and runs compaction when a trigger fires.</p>
 <li><a href="../session-management/compaction/">Context Compaction</a> — configure triggers and strategies</li>
 <li><a href="../session-management/multi-agent/">Multi-Agent Branch Isolation</a> — share sessions across agents safely</li>
 <li><a href="../session-jdbc/">Session JDBC</a> — persistent JDBC-backed repository</li>
+<li><a href="../migration/">Migration Guide</a> — upgrade notes between versions</li>
 </ul>
 
 

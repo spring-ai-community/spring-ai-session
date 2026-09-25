@@ -303,6 +303,25 @@
   
 
       
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../migration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migration Guide
+
+      </a>
+    </li>
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -912,6 +931,33 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1107,12 +1153,12 @@ decisions) — not for the live conversational agent answering the user directly
 </tr>
 <tr>
 <td>Session/user resolved from</td>
-<td><code>ToolContext</code>, automatically, per request</td>
+<td><code>ToolContext</code>, per request (the caller passes <code>ChatMemory.CONVERSATION_ID</code>)</td>
 <td>Bound once at <strong>construction time</strong></td>
 </tr>
 <tr>
 <td>Who can change the scope</td>
-<td>The calling application, via <code>SessionMemoryAdvisor</code></td>
+<td>The calling application, via <code>.toolContext(...)</code></td>
 <td>Nobody at runtime — fixed for the tool instance's lifetime</td>
 </tr>
 <tr>
@@ -1176,12 +1222,12 @@ for the tool instance's entire lifetime.</p>
 <tr>
 <td><code>query</code></td>
 <td>yes</td>
-<td>Case-insensitive keyword, or comma-separated keywords (up to 20 terms per call)</td>
+<td>Case-insensitive keyword, or comma-separated keywords (up to 20 terms per call). A blank query, or one with no usable terms (e.g. <code>","</code>), is rejected</td>
 </tr>
 <tr>
 <td><code>matchMode</code></td>
 <td>no</td>
-<td><code>"any"</code> (default) or <code>"all"</code> — how multiple comma-separated keywords in <code>query</code> combine</td>
+<td><code>"any"</code> (default) or <code>"all"</code> — how multiple comma-separated keywords in <code>query</code> combine. Any other value is rejected</td>
 </tr>
 <tr>
 <td><code>since</code></td>
@@ -1213,7 +1259,7 @@ chronologically by the actual event <code>Instant</code> (not a string compariso
 <strong>every</strong> term to be present in the same event's text. A <code>query</code> that yields zero usable
 terms after splitting and trimming (e.g. <code>","</code> or <code>", "</code>) is rejected with an error rather
 than silently falling back to "no filter" — see <a href="#design-notes">Design notes</a>.</p>
-<p>The term count is capped at 20 per call (<code>CrossSessionRecallTools.MAX_QUERY_TERMS</code>). Each
+<p>The term count is capped at 20 per call. Each
 term becomes its own predicate — and, on a JDBC-backed <code>SessionService</code>, its own bound SQL
 parameter — so an unbounded term count would let a single call grow the generated query
 without limit. This is a sanity limit, not a security boundary in itself: every term is

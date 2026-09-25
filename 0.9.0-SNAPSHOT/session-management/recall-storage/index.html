@@ -303,6 +303,25 @@
   
 
       
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../migration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migration Guide
+
+      </a>
+    </li>
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -890,6 +909,33 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1050,9 +1096,8 @@ context window the advisor injects is the <code>EventFilter.active()</code> view
 excluded), while <code>conversation_search</code> searches the whole log (archived events included).</p>
 <div class="admonition tip">
 <p class="admonition-title">Need to search across a user's other sessions, not just this one?</p>
-<p><code>conversation_search</code> is deliberately scoped to a single session, resolved
-automatically from the live request — the model never chooses which session it
-searches. For a background/maintenance agent that needs to mine signal across <strong>every</strong>
+<p><code>conversation_search</code> is deliberately scoped to a single session, resolved from the
+request's tool context — the model never chooses which session it searches. For a background/maintenance agent that needs to mine signal across <strong>every</strong>
 session a user has, see <a href="../cross-session-recall/">Cross-Session Recall</a> instead.</p>
 </div>
 <hr />
@@ -1065,16 +1110,30 @@ session a user has, see <a href="../cross-session-recall/">Cross-Session Recall<
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="p">.</span><span class="na">pageSize</span><span class="p">(</span><span class="mi">20</span><span class="p">)</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">ChatClient</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ChatClient</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatModel</span><span class="p">)</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultTools</span><span class="p">(</span><span class="n">tools</span><span class="p">)</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultAdvisors</span><span class="p">(</span><span class="n">advisor</span><span class="p">)</span><span class="w">   </span><span class="c1">// SessionMemoryAdvisor sets chat_memory_conversation_id</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1">// Sub-agent in a multi-agent session: only search events visible to this branch</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">SessionEventTools</span><span class="w"> </span><span class="n">researcherTools</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionEventTools</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="p">.</span><span class="na">branch</span><span class="p">(</span><span class="s">"orch.researcher"</span><span class="p">)</span>
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="n">ChatClient</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ChatClient</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatModel</span><span class="p">)</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultTools</span><span class="p">(</span><span class="n">tools</span><span class="p">)</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span><span class="p">.</span><span class="na">defaultAdvisors</span><span class="p">(</span><span class="n">advisor</span><span class="p">)</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="n">question</span><span class="p">)</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">ChatMemory</span><span class="p">.</span><span class="na">CONVERSATION_ID</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span><span class="w">   </span><span class="c1">// read by SessionMemoryAdvisor</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">    </span><span class="p">.</span><span class="na">toolContext</span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">ChatMemory</span><span class="p">.</span><span class="na">CONVERSATION_ID</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">))</span><span class="w">      </span><span class="c1">// read by conversation_search</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
-<div class="admonition tip">
-<p class="admonition-title">Tip</p>
-<p>Register <code>SessionMemoryAdvisor</code> alongside <code>SessionEventTools</code>. The advisor writes the
-<code>chat_memory_conversation_id</code> context key (<code>ChatMemory.CONVERSATION_ID</code>) that the tool uses to resolve the active session.
-Without the advisor, the tool falls back to the literal session ID <code>"default"</code>.</p>
+<div class="admonition warning">
+<p class="admonition-title">Pass the session ID to the tool context too</p>
+<p>Spring AI does not copy advisor parameters into the <code>ToolContext</code>. <code>SessionMemoryAdvisor</code>
+reads the session ID from the advisor context, while <code>conversation_search</code> reads it from
+the <code>ToolContext</code>, so pass it to both on every request, as shown above. Both use the
+<code>chat_memory_conversation_id</code> key (<code>ChatMemory.CONVERSATION_ID</code>). If the tool context has
+no session ID, the tool returns an error message to the model and does not search.</p>
 </div>
 <hr />
 <h2 id="tool-signature">Tool signature<a class="headerlink" href="#tool-signature" title="Permanent link">&para;</a></h2>
@@ -1116,14 +1175,22 @@ Without the advisor, the tool falls back to the literal session ID <code>"defaul
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Resolves the session ID from <code>ToolContext</code> using the <code>chat_memory_conversation_id</code> key
-   (<code>ChatMemory.CONVERSATION_ID</code>, the same key written by <code>SessionMemoryAdvisor</code>). If the key is absent or blank, a
-   <code>WARN</code>-level log is emitted and the tool falls back to the literal session ID
-   <code>"default"</code>.</li>
+   (<code>ChatMemory.CONVERSATION_ID</code>, the same key <code>SessionMemoryAdvisor</code> reads from the advisor
+   context). If the key is absent or blank, a <code>WARN</code>-level log is emitted and the tool
+   returns an error message without searching.</li>
 <li>Calls <code>SessionService.getEvents(sessionId, EventFilter.keywordSearch(query, page, pageSize))</code>.</li>
 <li><code>EventFilter.matches()</code> applies a case-insensitive substring check on each event's
    <code>message.getText()</code> before pagination is applied.</li>
 <li>Returns structured JSON, or <code>"No results found."</code> when nothing matches.</li>
 </ol>
+<div class="admonition note">
+<p class="admonition-title">Branch isolation</p>
+<p>By default <code>conversation_search</code> searches every event in the session, including events
+from every sub-agent branch. In a multi-agent session, give each sub-agent a tool
+instance built with <code>.branch("orch.researcher")</code>. It then applies the same visibility
+rule as <code>EventFilter.forBranch(...)</code>: root events, the agent's own events and its
+ancestors' events are searchable, but peer sub-agents' events are not.</p>
+</div>
 <div class="admonition note">
 <p class="admonition-title">Synthetic events are searchable</p>
 <p>Synthetic summary events produced by <code>RecursiveSummarizationCompactionStrategy</code> are

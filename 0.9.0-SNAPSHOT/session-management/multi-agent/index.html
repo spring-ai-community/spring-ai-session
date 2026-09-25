@@ -303,6 +303,25 @@
   
 
       
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../migration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migration Guide
+
+      </a>
+    </li>
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -725,6 +744,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#recall-search-and-branches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recall search and branches
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -901,6 +931,33 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -987,6 +1044,17 @@
     <span class="md-ellipsis">
       
         Compaction and branches
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recall-search-and-branches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recall search and branches
       
     </span>
   </a>
@@ -1187,6 +1255,15 @@ turn-internal — snapping to one would split the root turn that contains the su
 exchange.</p>
 <p>See <a href="../compaction/#turn-boundary-safety">Turn-boundary Safety</a> in the compaction reference
 for the full explanation and event-log diagram.</p>
+<hr />
+<h2 id="recall-search-and-branches">Recall search and branches<a class="headerlink" href="#recall-search-and-branches" title="Permanent link">&para;</a></h2>
+<p><code>conversation_search</code> (see <a href="../recall-storage/">Recall Storage</a>) searches the whole session
+by default, including peer sub-agents' events. To keep a sub-agent's recall inside its
+own view of the session, build its tool instance with the agent's branch:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">SessionEventTools</span><span class="w"> </span><span class="n">researcherTools</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionEventTools</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span><span class="p">.</span><span class="na">branch</span><span class="p">(</span><span class="s">"orch.researcher"</span><span class="p">)</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span></code></pre></div>
 
 
 

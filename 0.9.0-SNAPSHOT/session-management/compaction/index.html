@@ -303,6 +303,25 @@
   
 
       
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../migration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migration Guide
+
+      </a>
+    </li>
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -749,6 +768,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#the-most-recent-turn-is-always-kept" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The most recent turn is always kept
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#branch-awareness-in-multi-agent-sessions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1007,6 +1037,33 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1179,6 +1236,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#the-most-recent-turn-is-always-kept" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The most recent turn is always kept
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#branch-awareness-in-multi-agent-sessions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1303,7 +1371,9 @@ only runs the strategy — and writes back to the repository — when the trigge
 in the event log with <code>SessionEvent.isArchived() == true</code>. They are excluded from the
 prompt (<code>EventFilter.active()</code>) yet remain searchable through
 <a href="../recall-storage/">Recall Storage</a> (<code>EventFilter.keywordSearch(...)</code>). Compaction never
-destroys conversation history.</p>
+deletes real conversation events. The only events it removes are superseded synthetic
+summaries: <code>RecursiveSummarizationCompactionStrategy</code> replaces the previous summary turn
+with a new one that builds on it.</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">CAS write safety</p>
@@ -1323,7 +1393,8 @@ compaction should run based on the current <code>CompactionRequest</code>.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">new</span><span class="w"> </span><span class="n">TurnCountTrigger</span><span class="p">(</span><span class="mi">20</span><span class="p">);</span><span class="w">  </span><span class="c1">// compact when &gt; 20 turns</span>
 </span></code></pre></div>
 <h3 id="tokencounttrigger">TokenCountTrigger<a class="headerlink" href="#tokencounttrigger" title="Permanent link">&para;</a></h3>
-<p>Fires when the estimated total token count is at or above a threshold. Like the four
+<p>Fires when the estimated total token count is at or above a threshold (<code>threshold</code> is
+required). Like the four
 compaction strategies below, it estimates every event through the shared event formatter
 (see <a href="#token-accounting">Token accounting</a>) rather than raw <code>getText()</code>, so tool calls and
 tool responses count toward the threshold and the trigger stays calibrated against
@@ -1364,7 +1435,7 @@ representation — not just the raw <code>getText()</code> content, which is <co
 </tr>
 <tr>
 <td><code>AssistantMessage</code> with tool calls</td>
-<td><code>Assistant [tool calls: name(args), ...]</code></td>
+<td><code>Assistant [tool calls: name(args), ...]</code>, or <code>Assistant: &lt;text&gt; [tool calls: ...]</code> when it also has text</td>
 </tr>
 <tr>
 <td><code>ToolResponseMessage</code></td>
@@ -1379,9 +1450,11 @@ summarization prompt sent to the LLM, and exposes an <code>eventFormatter</code>
 override it (see below).</p>
 <hr />
 <h3 id="slidingwindowcompactionstrategy">SlidingWindowCompactionStrategy<a class="headerlink" href="#slidingwindowcompactionstrategy" title="Permanent link">&para;</a></h3>
-<p>Keeps the last <code>N</code> <strong>real</strong> events. Simple, predictable, no LLM call required. Synthetic
-summary events are always preserved and placed first; they do not count against the
-<code>maxEvents</code> budget.</p>
+<p>Keeps the last <code>N</code> <strong>root-level real</strong> events (default <code>N</code> =
+<code>DEFAULT_MAX_EVENTS</code> = 20). Simple, predictable, no LLM call required. Synthetic summary
+events are always preserved and placed first; they do not count against the <code>maxEvents</code>
+budget. Neither do sub-agent events (<code>branch != null</code>): they stay with the root turn that
+contains them.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1">// keep the last 20 real events</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">SlidingWindowCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">().</span><span class="na">maxEvents</span><span class="p">(</span><span class="mi">20</span><span class="p">).</span><span class="na">build</span><span class="p">();</span>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
@@ -1391,13 +1464,16 @@ summary events are always preserved and placed first; they do not count against 
 <p><strong>Algorithm</strong></p>
 <ol>
 <li>Separate synthetic events (always preserved, placed first in output).</li>
-<li>Keep the last <code>maxEvents</code> real events.</li>
-<li>Snap the cut point forward to the nearest root-level <code>USER</code> message (turn-boundary safety).</li>
+<li>Keep the last <code>maxEvents</code> root-level real events.</li>
+<li>Snap the cut point forward to the nearest root-level <code>USER</code> message (turn-boundary safety).
+   If there is none, keep the most recent turn (see
+   <a href="#the-most-recent-turn-is-always-kept">The most recent turn is always kept</a>).</li>
 <li>Return: <code>[synthetics] + [kept real events]</code>.</li>
 </ol>
 <h3 id="turnwindowcompactionstrategy">TurnWindowCompactionStrategy<a class="headerlink" href="#turnwindowcompactionstrategy" title="Permanent link">&para;</a></h3>
-<p>Keeps the last <code>N</code> complete turns. Unlike the sliding window, this never cuts inside a
-turn — it always archives whole user↔agent exchanges.</p>
+<p>Keeps the last <code>N</code> complete turns (default <code>N</code> = <code>DEFAULT_MAX_TURNS</code> = 10). Unlike the
+sliding window, this never cuts inside a turn — it always archives whole user↔agent
+exchanges.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1">// keep the last 10 turns</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">TurnWindowCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">().</span><span class="na">maxTurns</span><span class="p">(</span><span class="mi">10</span><span class="p">).</span><span class="na">build</span><span class="p">();</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
@@ -1413,8 +1489,8 @@ turn — it always archives whole user↔agent exchanges.</p>
 <li>Return: <code>[synthetics] + [preamble] + [kept turns]</code>.</li>
 </ol>
 <h3 id="tokencountcompactionstrategy">TokenCountCompactionStrategy<a class="headerlink" href="#tokencountcompactionstrategy" title="Permanent link">&para;</a></h3>
-<p>Keeps a <strong>contiguous</strong> suffix of events that fits within a token budget, walking from
-newest to oldest.</p>
+<p>Keeps a <strong>contiguous</strong> suffix of events that fits within a token budget (default
+<code>DEFAULT_MAX_TOKENS</code> = 4000), walking from newest to oldest.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1">// stay within 4000 tokens</span>
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">TokenCountCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">().</span><span class="na">maxTokens</span><span class="p">(</span><span class="mi">4000</span><span class="p">).</span><span class="na">build</span><span class="p">();</span>
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
@@ -1429,7 +1505,9 @@ newest to oldest.</p>
    first event that would exceed the remaining budget. This produces a <strong>contiguous
    suffix</strong> — skipping individual oversize events would create non-contiguous gaps that
    break conversation coherence.</li>
-<li>Drop any leading kept events that are not root-level <code>USER</code> messages (turn-boundary safety).</li>
+<li>Drop any leading kept events that are not root-level <code>USER</code> messages (turn-boundary
+   safety). If that would leave nothing, keep the most recent turn even though it exceeds
+   the budget.</li>
 <li>Return: <code>[synthetics] + [kept events]</code>.</li>
 </ol>
 <h3 id="recursivesummarizationcompactionstrategy">RecursiveSummarizationCompactionStrategy<a class="headerlink" href="#recursivesummarizationcompactionstrategy" title="Permanent link">&para;</a></h3>
@@ -1438,24 +1516,34 @@ The summary is stored as a synthetic user+assistant turn so subsequent compactio
 can build on it — creating a rolling, recursive compressed history.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="w"> </span><span class="n">strategy</span><span class="w"> </span><span class="o">=</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatClient</span><span class="p">)</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">        </span><span class="p">.</span><span class="na">maxEventsToKeep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span><span class="w">           </span><span class="c1">// active window size (real events kept intact)</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">        </span><span class="p">.</span><span class="na">overlapSize</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="w">                </span><span class="c1">// events from active window fed to summary prompt</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">                                       </span><span class="c1">// must be &lt; maxEventsToKeep; defaults to 2</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">        </span><span class="p">.</span><span class="na">systemPrompt</span><span class="p">(</span><span class="s">"..."</span><span class="p">)</span><span class="w">           </span><span class="c1">// optional custom system prompt</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">        </span><span class="p">.</span><span class="na">shadowPrompt</span><span class="p">(</span><span class="s">"..."</span><span class="p">)</span><span class="w">           </span><span class="c1">// optional custom USER shadow prompt</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">        </span><span class="p">.</span><span class="na">tokenCountEstimator</span><span class="p">(</span><span class="n">myEst</span><span class="p">)</span><span class="w">   </span><span class="c1">// custom estimator (default: JTokkitTokenCountEstimator)</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">        </span><span class="p">.</span><span class="na">eventFormatter</span><span class="p">(</span><span class="n">myFormatter</span><span class="p">)</span><span class="w">  </span><span class="c1">// optional custom event-to-text renderer (see below)</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">        </span><span class="p">.</span><span class="na">maxEventsToKeep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span><span class="w">           </span><span class="c1">// active window size: root-level real events kept</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">                                       </span><span class="c1">// intact; defaults to 10</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">        </span><span class="p">.</span><span class="na">overlapSize</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="w">                </span><span class="c1">// events from active window fed to summary prompt</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">                                       </span><span class="c1">// must be &lt; maxEventsToKeep; defaults to 2</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">        </span><span class="p">.</span><span class="na">systemPrompt</span><span class="p">(</span><span class="s">"..."</span><span class="p">)</span><span class="w">           </span><span class="c1">// optional custom system prompt</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">        </span><span class="p">.</span><span class="na">shadowPrompt</span><span class="p">(</span><span class="s">"..."</span><span class="p">)</span><span class="w">           </span><span class="c1">// optional custom USER shadow prompt; defaults to</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">                                       </span><span class="c1">// DEFAULT_SUMMARY_SHADOW_PROMPT</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">        </span><span class="p">.</span><span class="na">tokenCountEstimator</span><span class="p">(</span><span class="n">myEst</span><span class="p">)</span><span class="w">   </span><span class="c1">// custom estimator (default: JTokkitTokenCountEstimator)</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">        </span><span class="p">.</span><span class="na">eventFormatter</span><span class="p">(</span><span class="n">myFormatter</span><span class="p">)</span><span class="w">  </span><span class="c1">// optional custom event-to-text renderer (see below)</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </span></code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Builder validation</p>
 <p><code>overlapSize</code> must be <code>&gt;= 0</code> and strictly less than <code>maxEventsToKeep</code>. Violating this
 throws <code>IllegalArgumentException</code>.</p>
 </div>
+<div class="admonition warning">
+<p class="admonition-title">Use a separate ChatClient for summarization</p>
+<p>Don't pass a <code>ChatClient</code> that has <code>SessionMemoryAdvisor</code> among its default advisors.
+The summarization call has no session ID in its advisor context, so the advisor would
+reject it with <code>IllegalStateException</code>. Build a plain <code>ChatClient</code> for the summarizer.</p>
+</div>
 <p><strong>LLM failure handling</strong></p>
 <p>If the LLM returns a null or blank summary, the strategy logs a <code>WARN</code>-level message and
-skips compaction — the event history is left unchanged. Register an optional failure
-callback to react programmatically:</p>
+skips compaction — the event history is left unchanged. If the LLM call throws, the
+exception propagates out of <code>SessionService.compact(...)</code>. <code>SessionMemoryAdvisor</code> catches
+and logs it, so the user's chat call still succeeds. Register an optional failure callback
+to react programmatically to a blank summary:</p>
 <div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="w"> </span><span class="n">strategy</span><span class="w"> </span><span class="o">=</span>
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatClient</span><span class="p">)</span>
 </span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">        </span><span class="p">.</span><span class="na">maxEventsToKeep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
@@ -1473,17 +1561,23 @@ or multilingual summaries:</p>
 <div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="w"> </span><span class="n">strategy</span><span class="w"> </span><span class="o">=</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">    </span><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">chatClient</span><span class="p">)</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">        </span><span class="p">.</span><span class="na">maxEventsToKeep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">        </span><span class="p">.</span><span class="na">eventFormatter</span><span class="p">(</span><span class="n">event</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">getMessageType</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="n">TOOL</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="s">"Tool result: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">event</span><span class="p">.</span><span class="na">getMessage</span><span class="p">().</span><span class="na">getText</span><span class="p">();</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">            </span><span class="k">default</span><span class="w">   </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="p">.</span><span class="na">formatEvent</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">        </span><span class="p">})</span>
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">        </span><span class="p">.</span><span class="na">eventFormatter</span><span class="p">(</span><span class="n">event</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">getMessage</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">            </span><span class="c1">// ToolResponseMessage.getText() is null — render the response data instead</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="n">ToolResponseMessage</span><span class="w"> </span><span class="n">trm</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="s">"Tool result: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">trm</span><span class="p">.</span><span class="na">getResponses</span><span class="p">()</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">                </span><span class="p">.</span><span class="na">stream</span><span class="p">()</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">                </span><span class="p">.</span><span class="na">map</span><span class="p">(</span><span class="n">ToolResponseMessage</span><span class="p">.</span><span class="na">ToolResponse</span><span class="p">::</span><span class="n">responseData</span><span class="p">)</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">                </span><span class="p">.</span><span class="na">collect</span><span class="p">(</span><span class="n">Collectors</span><span class="p">.</span><span class="na">joining</span><span class="p">(</span><span class="s">"; "</span><span class="p">));</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">            </span><span class="k">default</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">RecursiveSummarizationCompactionStrategy</span><span class="p">.</span><span class="na">formatEvent</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">        </span><span class="p">})</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </span></code></pre></div>
 <p><strong>Algorithm</strong></p>
 <ol>
 <li>Separate synthetic and real events.</li>
-<li>Compute the raw cut point: the newest <code>maxEventsToKeep</code> real events form the active window.</li>
-<li>Snap the cut point forward to the nearest turn boundary.</li>
+<li>Compute the raw cut point: the newest <code>maxEventsToKeep</code> root-level real events form the
+   active window.</li>
+<li>Snap the cut point forward to the nearest turn boundary. If there is none, keep the most
+   recent turn. If that leaves nothing to summarize, stop without calling the LLM.</li>
 <li>Feed <code>[prior synthetic summaries] + [events to archive] + [overlap events]</code> to the LLM.</li>
 <li>Replace the archived events with a new synthetic summary turn <code>[USER shadow, ASSISTANT summary]</code>.</li>
 <li>Return: <code>[summary turn] + [active window]</code>.</li>
@@ -1493,27 +1587,42 @@ back to the LLM as <code>=== PRIOR SUMMARY ===</code> context, so each summary b
 predecessors without starting from scratch.</p>
 <hr />
 <h2 id="turn-boundary-safety">Turn-boundary Safety<a class="headerlink" href="#turn-boundary-safety" title="Permanent link">&para;</a></h2>
-<p>All four strategies share a common safety rule enforced by
-<code>CompactionUtils.snapToTurnStart</code>: the kept window always starts at a <strong>root-level</strong>
-<code>USER</code> message — one whose <code>branch</code> is <code>null</code>.</p>
+<p>All four strategies share a common safety rule: the kept window always starts at a
+<strong>root-level</strong> <code>USER</code> message — one whose <code>branch</code> is <code>null</code>. The sliding-window,
+token-count and recursive-summarization strategies enforce it by snapping their cut point
+(package-private <code>CompactionUtils.snapToTurnStart</code>). <code>TurnWindowCompactionStrategy</code> gets
+the same result by grouping events into turns that each start at a root-level <code>USER</code>
+message.</p>
 <p>If a raw cut point lands in the middle of a turn, it is advanced forward to the next
 qualifying event. This prevents keeping a tool result or assistant reply without the user
 message that originated its turn.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>Before snap:  [u1, a1, u2, a2, | a3, u3, a3]   ← cut lands on a3 (middle of turn 2)
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>After snap:   [u1, a1, u2, a2, a3, | u3, a3]   ← cut moved to u3 (turn start)
 </span></code></pre></div>
+<h3 id="the-most-recent-turn-is-always-kept">The most recent turn is always kept<a class="headerlink" href="#the-most-recent-turn-is-always-kept" title="Permanent link">&para;</a></h3>
+<p>If there is no later turn start to snap to, the cut is moved back to the start of the
+most recent turn instead. This happens when the newest turn alone exceeds the budget, for
+example a long tool-calling loop or a very large tool result. That turn stays in the
+active window even though it goes over <code>maxEvents</code> / <code>maxTokens</code> / <code>maxEventsToKeep</code>, so
+compaction never archives the turn that is in progress. When the whole history is a single
+oversize turn, nothing is archived (and <code>RecursiveSummarizationCompactionStrategy</code> makes
+no LLM call).</p>
+<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>Budget: 2 events   [u1, a1, u2, a2, a3, a4]
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>Forward snap:      no USER after the cut → would archive everything
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>Kept instead:      [u1, a1, | u2, a2, a3, a4]   ← last turn kept, over budget
+</span></code></pre></div>
 <h3 id="branch-awareness-in-multi-agent-sessions">Branch-awareness in multi-agent sessions<a class="headerlink" href="#branch-awareness-in-multi-agent-sessions" title="Permanent link">&para;</a></h3>
 <p>In multi-agent sessions, <code>UserMessage</code> events appear on named branches (e.g.
 <code>branch="orch.researcher"</code>) as well as at the root level. A branched <code>UserMessage</code> is the
 prompt sent <em>to</em> a sub-agent — it is <strong>turn-internal</strong>, not a turn boundary.</p>
 <p>A single root turn can contain an entire sub-agent exchange:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>[branch=null]  USER:      "What's the weather in Paris?"      ← real turn start
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>[branch=null]  ASSISTANT: [tool call: delegate_to_agent]
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>[branch="sub"] USER:      "Fetch weather for Paris"           ← internal sub-agent prompt
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>[branch="sub"] ASSISTANT: [tool call: get_weather]
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>[branch="sub"] TOOL:      {temp: "22C"}
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>[branch="sub"] ASSISTANT: "It's 22°C in Paris"
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>[branch=null]  ASSISTANT: "The weather in Paris is 22°C"
+<div class="highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>[branch=null]  USER:      "What's the weather in Paris?"      ← real turn start
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>[branch=null]  ASSISTANT: [tool call: delegate_to_agent]
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>[branch="sub"] USER:      "Fetch weather for Paris"           ← internal sub-agent prompt
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>[branch="sub"] ASSISTANT: [tool call: get_weather]
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>[branch="sub"] TOOL:      {temp: "22C"}
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>[branch="sub"] ASSISTANT: "It's 22°C in Paris"
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>[branch=null]  ASSISTANT: "The weather in Paris is 22°C"
 </span></code></pre></div>
 <p><code>snapToTurnStart</code> skips all branched events regardless of message type, and only stops
 when it finds a <code>USER</code> event with <code>branch == null</code> (i.e. <code>SessionEvent.isRootEvent()</code>).
