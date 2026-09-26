@@ -25,7 +25,10 @@ On every request the advisor:
    is then unconditionally merged in on top, so archived (compacted-out) events never reach
    the prompt regardless of what the configured or per-request filter allows.
 3. Reorders all `SystemMessage` instances to the front of the combined message list,
-   preserving their relative order.
+   preserving their relative order. A system message whose text exactly matches an earlier
+   one (e.g. a stored system message that is also sent on the request) is sent only once.
+   Texts are never merged or rewritten, so the system prompt stays stable for prompt
+   caching. See [System Messages](system-messages.md).
 4. Appends the prompt's last user message to the session, if the configured
    `MessageFilter` accepts it. Inside a tool-calling loop this is the trailing
    tool-response message instead (`Prompt.getLastUserOrToolResponseMessage()`).
@@ -84,7 +87,10 @@ ChatClient client = ChatClient.builder(chatModel)
     This is deliberate and safe. From round 2 onward, the prompt handed to `before()`
     already contains the current turn's messages (persisted by the previous round), and
     `before()` detects that its retrieved history is already a contiguous run in that
-    prompt and skips prepending it again — so no duplicate messages reach the model.
+    prompt and skips prepending it again — so no duplicate messages reach the model. System
+    messages are left out of this check, because they are always moved to the front; a
+    system message stored in the session is added on every round and its exact-text
+    duplicate from the earlier round is dropped.
     Persisted events aren't duplicated either: only the round's trailing
     user/tool-response message and the model's own reply are ever appended. This means
     `SessionMemoryAdvisor` nests correctly under a default-configured `ToolCallingAdvisor`

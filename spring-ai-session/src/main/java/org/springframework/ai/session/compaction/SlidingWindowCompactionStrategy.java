@@ -18,6 +18,7 @@ package org.springframework.ai.session.compaction;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.ToIntFunction;
 
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.tokenizer.JTokkitTokenCountEstimator;
@@ -30,8 +31,10 @@ import org.springframework.util.Assert;
  *
  * <h3>Algorithm</h3>
  * <ol>
- * <li>Separate synthetic summary events — they are always preserved and placed first in
- * the result.</li>
+ * <li>Separate the latest stored system message of each branch (that agent's system prompt — earlier stored system
+ * messages are superseded and archived; see {@code CompactionUtils#pinnedSystemEvents}) and synthetic
+ * summary events — they are always preserved, placed first in the result, and do not
+ * consume slots from the {@code maxEvents} budget.</li>
  * <li>Compute a raw cut index based on root (non-branch) real events only. Branch events
  * produced by sub-agents do not consume slots from the {@code maxEvents} budget — they
  * are always included with their enclosing root turn.</li>
@@ -39,7 +42,7 @@ import org.springframework.util.Assert;
  * {@link org.springframework.ai.chat.messages.MessageType#USER} event so the kept window
  * always starts at a turn boundary. Sub-agent USER messages are skipped because they are
  * turn-internal, not turn starts.</li>
- * <li>Return: {@code [synthetic summaries] + [kept real events]}.</li>
+ * <li>Return: {@code [system messages] + [synthetic summaries] + [kept real events]}.</li>
  * </ol>
  *
  * <h3>No-op condition</h3>
@@ -74,12 +77,18 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 
 		List<SessionEvent> events = context.events();
 
-		// Separate synthetic summary events (always preserved, always first)
+		// Separate the latest stored system message of each branch (that agent's system prompt — kept
+		// and placed first), superseded earlier ones (archived), and synthetic summary
+		// events (always preserved) from the real conversation events the window applies
+		// to.
+		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
+		List<SessionEvent> supersededSystem = CompactionUtils.supersededSystemEvents(events, pinnedSystem);
 		List<SessionEvent> synthetic = events.stream().filter(SessionEvent::isSynthetic).toList();
-		List<SessionEvent> real = events.stream().filter(e -> !e.isSynthetic()).toList();
+		List<SessionEvent> real = CompactionUtils.compactableEvents(events);
+		ToIntFunction<SessionEvent> tokens = e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e));
 
-		// maxEvents controls the real-events window only; synthetic summary events are
-		// always preserved on top and do not consume slots from the real-event budget.
+		// maxEvents controls the real-events window only; system and synthetic summary
+		// events are always preserved on top and do not consume slots from the budget.
 		// Branch events produced inside sub-agent sessions also do not consume slots —
 		// they are always included with their enclosing root turn.
 		int slotsForReal = this.maxEvents;
@@ -91,7 +100,8 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 
 		// No-op if root events fit within the available slots
 		if (rootEventCount <= slotsForReal) {
-			return new CompactionResult(events, List.of(), 0);
+			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, synthetic, real, supersededSystem,
+					tokens);
 		}
 
 		// Find the index in 'real' just after the last root event to archive.
@@ -120,17 +130,15 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 		List<SessionEvent> keptReal = new ArrayList<>(real.subList(cutIndex, real.size()));
 		List<SessionEvent> removedReal = real.subList(0, cutIndex);
 		if (removedReal.isEmpty()) {
-			return new CompactionResult(events, List.of(), 0);
+			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, synthetic, real, supersededSystem,
+					tokens);
 		}
 
-		List<SessionEvent> compacted = new ArrayList<>(synthetic);
+		List<SessionEvent> compacted = new ArrayList<>(pinnedSystem);
+		compacted.addAll(synthetic);
 		compacted.addAll(keptReal);
 
-		int tokensRemoved = removedReal.stream()
-			.mapToInt(e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e)))
-			.sum();
-
-		return new CompactionResult(compacted, removedReal, tokensRemoved);
+		return CompactionUtils.archiving(events, compacted, removedReal, supersededSystem, tokens);
 	}
 
 	public int getMaxEvents() {

@@ -132,6 +132,32 @@ for the full explanation and event-log diagram.
 
 ---
 
+## System messages and branches
+
+System messages are configuration, and they are scoped by branch like everything else. If
+your application stores system messages (an opt-in, see
+[System Messages](system-messages.md)):
+
+- **Each agent uses its own.** An agent's system prompt is the latest system message stored
+  on its own branch: `branch == null` for the root agent, `branch == "orch.researcher"` for
+  that sub-agent. `SessionMemoryAdvisor` never sends another branch's system message, so a
+  sub-agent's instructions cannot leak into the orchestrator's prompt, and the
+  orchestrator's instructions are not added to a sub-agent's prompt.
+- **Compaction.** The latest system message of every branch is kept, placed first and never
+  summarized, so a sub-agent delegated to again in a later turn still has its system
+  prompt. Earlier system messages of the same branch are superseded and archived.
+
+```java
+// The researcher's own instructions, stored on its branch
+service.appendEvent(SessionEvent.builder()
+    .sessionId(sessionId)
+    .branch("orch.researcher")
+    .message(new SystemMessage("You are a researcher. Cite every source."))
+    .build());
+```
+
+---
+
 ## Recall search and branches
 
 `conversation_search` (see [Recall Storage](recall-storage.md)) searches the whole session

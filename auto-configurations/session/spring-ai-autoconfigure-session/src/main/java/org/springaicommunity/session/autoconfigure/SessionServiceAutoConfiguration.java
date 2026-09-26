@@ -55,6 +55,7 @@ public class SessionServiceAutoConfiguration {
 		return DefaultSessionService.builder()
 			.sessionRepository(sessionRepository)
 			.defaultTimeToLive(properties.getTimeToLive())
+			.allowSystemMessages(properties.isAllowSystemMessages())
 			.build();
 	}
 

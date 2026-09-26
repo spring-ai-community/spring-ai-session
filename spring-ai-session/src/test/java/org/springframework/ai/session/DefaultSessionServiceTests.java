@@ -30,12 +30,16 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 /**
@@ -50,6 +54,45 @@ class DefaultSessionServiceTests {
 		this.service = DefaultSessionService.builder()
 			.sessionRepository(InMemorySessionRepository.builder().build())
 			.build();
+	}
+
+	@Test
+	void storingASystemMessageIsRejectedByDefault() {
+		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> this.service.appendMessage(session.id(), new SystemMessage("Answer in French.")))
+			.withMessageContaining(session.id())
+			.withMessageContaining("allowSystemMessages(true)")
+			.withMessageContaining("spring.ai.session.allow-system-messages=true");
+		assertThat(this.service.getEvents(session.id())).isEmpty();
+	}
+
+	@Test
+	void storingASystemMessageIsAllowedWhenEnabled() {
+		SessionService permissive = DefaultSessionService.builder()
+			.sessionRepository(InMemorySessionRepository.builder().build())
+			.allowSystemMessages(true)
+			.build();
+		Session session = permissive.create(CreateSessionRequest.builder().userId("user-1").build());
+
+		permissive.appendMessage(session.id(), new SystemMessage("Answer in French."));
+
+		assertThat(permissive.getMessages(session.id())).extracting(Message::getText)
+			.containsExactly("Answer in French.");
+	}
+
+	@Test
+	void conversationMessagesAreUnaffectedByTheSystemMessageRule() {
+		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+
+		this.service.appendMessage(session.id(), new UserMessage("hi"));
+		this.service.appendMessage(session.id(), new AssistantMessage("hello"));
+		this.service.appendMessage(session.id(), ToolResponseMessage.builder()
+			.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "tool", "ok")))
+			.build());
+
+		assertThat(this.service.getEvents(session.id())).hasSize(3);
 	}
 
 	@Test

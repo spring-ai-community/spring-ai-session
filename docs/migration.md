@@ -18,6 +18,25 @@ chatClient.prompt()
     .content();
 ```
 
+### Breaking: storing system messages requires opt-in
+
+`DefaultSessionService.appendEvent` / `appendMessage` now reject a `SystemMessage` with an
+`IllegalArgumentException`. System prompts are configuration, best supplied on every
+request (for example with `ChatClient` `defaultSystem` / `.system`) and not stored in the
+session. `SessionMemoryAdvisor` never stored them, so `ChatClient` users are unaffected.
+
+If you store system messages on purpose, enable it:
+
+```java
+DefaultSessionService.builder()
+    .sessionRepository(repository)
+    .allowSystemMessages(true)
+    .build();
+```
+
+or set `spring.ai.session.allow-system-messages=true` with Spring Boot auto-configuration.
+Existing stored system messages can still be read either way.
+
 ### Breaking: `SessionService.create(...)` rejects an existing session ID
 
 `create` used to upsert: an existing session with the same ID got a new `userId` and TTL
@@ -49,15 +68,80 @@ dialect for an unknown or undetectable database, which then failed at query time
 throws `IllegalStateException`. For other databases, implement `JdbcSessionRepositoryDialect`
 and pass it via `JdbcSessionRepository.builder().dialect(...)`.
 
-### Breaking (custom dialects only): `LIKE` patterns are escaped
+### Breaking: JDBC auto-configuration no longer brings a connection pool
 
-Keyword and branch filters now treat `%`, `_` and `!` literally. The keyword parameter is
-escaped with `!`, so a custom `JdbcSessionRepositoryDialect` must add `ESCAPE '!'` to its
-`getKeywordFilterFragment()` / `getKeywordPredicateFragment()` SQL. The built-in dialects
-already do.
+`spring-ai-autoconfigure-session-jdbc` now declares `spring-boot-jdbc` as an **optional**
+dependency, and the auto-configuration backs off when it is missing. The
+`spring-ai-starter-session-jdbc` starter brings `spring-boot-starter-jdbc` (and so HikariCP)
+instead, so starter users are unaffected. If you depend on the auto-configuration module
+directly, add the JDBC starter yourself:
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-jdbc</artifactId>
+</dependency>
+```
+
+### Breaking: JDBC keyword and branch filters match `%` and `_` literally
+
+Keyword searches (`EventFilter.keyword(...)` / `keywords(...)`, `conversation_search`,
+`cross_session_search`) and branch filters used to pass `%` and `_` through to SQL `LIKE`
+as wildcards, so JDBC results differed from the in-memory repository. They now match
+`%`, `_` and `!` literally on every repository. If you relied on them as JDBC wildcards,
+use `EventFilter.pattern(...)` instead.
+
+### Breaking: checklist for custom `SessionRepository` implementations
+
+The `SessionRepository` contract was tightened. A custom implementation (for example a
+Redis repository) should:
+
+- **Implement `saveIfAbsent(Session)` atomically** (e.g. a key-guarded insert such as Redis
+  `SET … NX`). `SessionService.create` relies on it. The default implementation is a
+  non-atomic `findById` + `save`.
+- **Keep the original `createdAt` in `save(...)`** for an existing session, and **return
+  the stored session**, not the argument.
+- **In `appendEvent(...)`, reject an event id that belongs to another session** with
+  `IllegalStateException`. A duplicate id in the *same* session is still an idempotent
+  no-op.
+- **In `compactEvents(...)`, reject `archivedEvents` that are not in the session's log**
+  (the whole call should have no effect). Otherwise a mistaken caller can lose events.
+
+The built-in in-memory and JDBC repositories already do all of this.
+
+### Breaking: checklist for custom `JdbcSessionRepositoryDialect` implementations
+
+- **`getKeywordFilterFragment()` / `getKeywordPredicateFragment()` must declare
+  `ESCAPE '!'`.** The keyword parameter is now escaped with `!`.
+- **`getUpsertSessionSql()` must no longer update `created_at`** on an existing row; only
+  `user_id`, `expires_at` and `metadata` are refreshed. The five parameters are unchanged.
+- **New `getInsertSessionIfAbsentSql()`,** used by `saveIfAbsent`. The default is a plain
+  `INSERT` (a duplicate key means "already exists"). Override it if a failed statement
+  aborts the enclosing transaction on your database, as the PostgreSQL dialect does with
+  `ON CONFLICT (id) DO NOTHING`.
+- **The public `JdbcSessionRepositoryDialect.logger` constant was removed.** Use your own
+  logger.
+
+The built-in PostgreSQL, MySQL/MariaDB and H2 dialects already follow these rules.
 
 ### Behavior changes
 
+- **The latest stored system message wins.** A root-level `SystemMessage` stored in the
+  session used to be archived like any other event by the sliding-window, token-count and
+  recursive-summarization strategies. Now the latest stored system message is the
+  session's system prompt: every strategy keeps it active, places it first and never
+  summarizes it, and `SessionMemoryAdvisor` sends only that one. Earlier stored system
+  messages are superseded and archived when compaction runs. In multi-agent sessions the
+  rule is per branch: each agent uses the latest system message stored on its own branch,
+  compaction keeps the latest one of every branch, and system messages of any branch are
+  never summarized. The kept system messages count toward `TokenCountCompactionStrategy`'s
+  `maxTokens`, so size it with them in mind.
+- **Tool-calling loops with a stored system message no longer duplicate history.** When
+  the session held a system message and the request carried its own system prompt, the
+  0.8.0 loop check failed from round 2 on and the whole history was sent twice.
+- **Duplicate system messages are sent once.** `SessionMemoryAdvisor` drops a system
+  message whose text exactly matches an earlier one in the prompt, e.g. a stored system
+  message that is also sent on the request.
 - **`IdempotentSessionEventIdGenerator` id format.** Ids are now
   `<messageType>-<sha256>` (at most 74 characters, which fits the `VARCHAR(255)` column).
   Blank tool-call ids (e.g. from Ollama) fall back to a content hash instead of all
@@ -81,6 +165,12 @@ already do.
   `@Primary`) `SessionRepository`.
 - **MySQL schema script** can be re-run safely (`initialize-schema: always`), and MariaDB
   now uses the MySQL script.
+- **New `SessionEventTools.builder().branch(...)`** scopes `conversation_search` to what a
+  sub-agent's branch can see, so peer sub-agents don't search each other's events.
+- **`EVENT_FILTER_CONTEXT_KEY` is type-checked.** A value that is not an `EventFilter` now
+  throws `IllegalArgumentException` with a clear message instead of a `ClassCastException`.
+- **`TokenCountTrigger.builder()` defaults to the JTokkit estimator,** as documented. It
+  used to throw unless `tokenCountEstimator(...)` was set.
 
 ## Upgrading to 0.8.0
 

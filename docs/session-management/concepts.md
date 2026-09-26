@@ -144,9 +144,11 @@ events with two synthetic events that form a coherent conversation turn:
 This mirrors the OpenAI Agents SDK shadow-prompt pattern and ensures that downstream
 models always see a valid user↔assistant alternation.
 
-All compaction strategies separate synthetic events from real events before processing.
-The sliding-window, turn-window and token-count strategies keep them unchanged and place
-them first in the compacted output. `RecursiveSummarizationCompactionStrategy` instead
+All compaction strategies separate synthetic events, and the root-level system messages
+stored in the session, from real events before processing. The latest stored system message
+is the session's system prompt: every strategy keeps it unchanged, places it first and never
+archives or summarizes it. Earlier stored system messages are superseded and archived. See [System Messages](system-messages.md). The sliding-window, turn-window and token-count strategies also keep
+synthetic events unchanged and place them first in the compacted output. `RecursiveSummarizationCompactionStrategy` instead
 folds the previous summary into the new one and **replaces** it: the superseded synthetic
 events are removed from the log (they are not archived).
 
@@ -193,8 +195,9 @@ operates on the event list as an explicit parameter.
 
 Compaction never deletes the real events it removes from the active context window. Instead it
 marks them archived (`SessionEvent.isArchived()`) via `compactEvents`, leaving the full
-verbatim history in the log. The active context window — what `SessionMemoryAdvisor`
-injects into the prompt — is the `EventFilter.active()` view (`excludeArchived = true`),
+verbatim history in the log. The active context window — what an integration such as
+`SessionMemoryAdvisor` sends to the model — is the `EventFilter.active()` view
+(`excludeArchived = true`),
 while Recall Storage searches (`EventFilter.keywordSearch(...)`) deliberately span the
 whole log, archived events included. This is what makes the MemGPT recall pattern work:
 the agent can surface any prior exchange even after it has been summarized out of context.

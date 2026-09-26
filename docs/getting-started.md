@@ -108,6 +108,10 @@ Import the BOM so all module versions stay in sync:
           time-to-live: 30d   # ISO-8601 / Spring duration; defaults to 60d
     ```
 
+    Storing a `SystemMessage` in a session is disabled by default; supply system prompts
+    per request instead. See [System Messages](session-management/system-messages.md) for
+    `spring.ai.session.allow-system-messages`.
+
 === "JDBC (manual)"
 
     Add the JDBC module:

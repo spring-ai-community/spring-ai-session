@@ -22,6 +22,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.content.MediaContent;
@@ -373,7 +374,62 @@ class TokenCountCompactionStrategyTests {
 		assertThat(result.compactedEvents()).hasSize(2);
 	}
 
+	@Test
+	void storedSystemMessageIsKeptFirstAndItsTokensComeOffTheBudget() {
+		// "System: sys" = 11 tokens; each turn = "User: xx" (8) + "Assistant: ok" (13) = 21.
+		// Without the system message both turns (42) fit in 45. With it, 45 - 11 = 34
+		// remains, so the older turn must be archived.
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(45)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(system("sys"));
+		events.addAll(turn("hi", "ok"));
+		events.addAll(turn("yo", "ok"));
+
+		CompactionResult result = strategy.compact(requestWith(events));
+
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("hi", "ok");
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("sys", "yo", "ok");
+	}
+
+	@Test
+	void pinnedSystemMessagesOverTheBudgetStillKeepTheNewestTurn() {
+		// An orchestrator and four sub-agents each store a large system prompt. Together
+		// they exceed maxTokens, leaving no budget for the conversation: the newest turn
+		// must still be kept (retainLastTurn), never the whole conversation archived.
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(40)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(system("orchestrator prompt"));
+		for (String branch : List.of("orch.a", "orch.b", "orch.c", "orch.d")) {
+			events.add(SessionEvent.builder()
+				.sessionId(SESSION_ID)
+				.branch(branch)
+				.message(new SystemMessage("prompt for " + branch))
+				.build());
+		}
+		events.addAll(turn("q1", "r1"));
+		events.addAll(turn("q2", "r2"));
+
+		CompactionResult result = strategy.compact(requestWith(events));
+
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("q1", "r1");
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("orchestrator prompt", "prompt for orch.a", "prompt for orch.b", "prompt for orch.c",
+					"prompt for orch.d", "q2", "r2");
+	}
+
 	// --- helpers ---
+
+	private SessionEvent system(String text) {
+		return SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage(text)).build();
+	}
+
 
 	private List<SessionEvent> turn(String userText, String assistantText) {
 		return List.of(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage(userText)).build(),
