@@ -84,6 +84,11 @@
             </dependency>
             <dependency>
                 <groupId>org.springaicommunity</groupId>
+                <artifactId>spring-ai-session-mongodb</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springaicommunity</groupId>
                 <artifactId>spring-ai-autoconfigure-session</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -94,7 +99,17 @@
             </dependency>
             <dependency>
                 <groupId>org.springaicommunity</groupId>
+                <artifactId>spring-ai-autoconfigure-session-mongodb</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springaicommunity</groupId>
                 <artifactId>spring-ai-starter-session-jdbc</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springaicommunity</groupId>
+                <artifactId>spring-ai-starter-session-mongodb</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>
