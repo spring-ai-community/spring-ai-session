@@ -22,6 +22,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.Session;
@@ -311,6 +312,105 @@ class SlidingWindowCompactionStrategyTests {
 
 		assertThat(result.archivedEvents()).isEmpty();
 		assertThat(result.compactedEvents()).hasSize(4);
+	}
+
+	@Test
+	void storedSystemMessageIsNeverArchivedAndComesFirst() {
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(2).build();
+		List<SessionEvent> events = List.of(system("Answer in French"), user("u1"), assistant("a1"), user("u2"),
+				assistant("a2"));
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		// The system message uses no slot: the same two real events are kept as without it.
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("Answer in French", "u2", "a2");
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("u1", "a1");
+	}
+
+	@Test
+	void onlyTheLatestStoredSystemMessageIsKeptSoPerTurnSystemMessagesStayBounded() {
+		// Latest wins: storing a system message per turn replaces the previous one, so the
+		// active window never holds more than one stored system message.
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(3).build();
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(system("Answer in French"));
+		for (int i = 1; i <= 5; i++) {
+			events.add(user("u" + i));
+			events.add(system("time " + i));
+			events.add(assistant("a" + i));
+		}
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("time 5", "u5", "a5");
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText())
+			.contains("Answer in French", "time 1", "time 4")
+			.doesNotContain("time 5");
+	}
+
+	@Test
+	void supersededSystemMessagesAreArchivedEvenWhenTheBudgetNeedsNoCut() {
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(20).build();
+		List<SessionEvent> events = List.of(system("Answer in French"), user("u1"), assistant("a1"),
+				system("Answer in German"));
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("Answer in French");
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("Answer in German", "u1", "a1");
+	}
+
+	@Test
+	void noStoredSystemMessagesMeansAnUnchangedNoOp() {
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(20).build();
+		List<SessionEvent> events = List.of(user("u1"), assistant("a1"));
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		assertThat(result.archivedEvents()).isEmpty();
+		assertThat(result.compactedEvents()).isEqualTo(events);
+	}
+
+	@Test
+	void subAgentSystemMessageSurvivesCompactionOfTheTurnItWasStoredIn() {
+		// The orchestrator may delegate to the same sub-agent again in a later turn, so the
+		// sub-agent's latest system prompt must stay active like the root agent's.
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(2).build();
+		List<SessionEvent> events = List.of(user("u1"), system("Researcher rules", "orch.researcher"),
+				assistant("a1"), user("u2"), assistant("a2"), user("u3"), assistant("a3"));
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("Researcher rules", "u3", "a3");
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("u1", "a1", "u2", "a2");
+	}
+
+	@Test
+	void olderSubAgentSystemMessageOnTheSameBranchIsSuperseded() {
+		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(20).build();
+		List<SessionEvent> events = List.of(system("Orchestrator rules"), user("u1"),
+				system("Researcher v1", "orch.researcher"), assistant("a1"), user("u2"),
+				system("Researcher v2", "orch.researcher"), assistant("a2"));
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("Researcher v1");
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("Orchestrator rules", "Researcher v2", "u1", "a1", "u2", "a2");
+	}
+
+	private static SessionEvent system(String text) {
+		return SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage(text)).build();
+	}
+
+	private static SessionEvent system(String text, String branch) {
+		return SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage(text)).branch(branch).build();
 	}
 
 	private static SessionEvent user(String text) {

@@ -17,6 +17,7 @@
 package org.springframework.ai.session.advisor;
 
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -173,6 +174,68 @@ class SessionMemoryAdvisorIT {
 	}
 
 	@Test
+	void beforeSkipsDuplicatingHistoryInToolLoopWhenSessionStoresASystemMessage() {
+		// A stored system message plus the request's own system prompt: moving system
+		// messages to the front leaves the request's prompt between the stored system
+		// message and the rest of the history, which must not defeat the loop check.
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Answer in French."));
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("Hello"));
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("Bonjour !"));
+		AdvisorChain chain = mock(AdvisorChain.class);
+		SystemMessage requestSystem = new SystemMessage("Be brief.");
+		UserMessage userMessage = new UserMessage("What is the weather in Paris?");
+		AssistantMessage toolCallMessage = AssistantMessage.builder()
+			.toolCalls(
+					List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"city\":\"Paris\"}")))
+			.build();
+
+		// Round 1
+		List<Message> round1 = this.advisor
+			.before(ChatClientRequest.builder()
+				.prompt(new Prompt(List.of(requestSystem, userMessage)))
+				.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+				.build(), chain)
+			.prompt()
+			.getInstructions();
+		this.advisor.after(buildResponseFromMessages(this.sessionId, toolCallMessage), chain);
+
+		// Round 2: the looping advisor re-sends round 1's prompt plus the tool exchange.
+		ToolResponseMessage toolResponse = ToolResponseMessage.builder()
+			.responses(
+					List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "15 degrees and sunny")))
+			.build();
+		List<Message> round2Input = new ArrayList<>(round1);
+		round2Input.add(toolCallMessage);
+		round2Input.add(toolResponse);
+		List<Message> round2 = this.advisor
+			.before(ChatClientRequest.builder()
+				.prompt(new Prompt(round2Input))
+				.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+				.build(), chain)
+			.prompt()
+			.getInstructions();
+
+		assertThat(round1).extracting(Message::getText)
+			.containsExactly("Answer in French.", "Be brief.", "Hello", "Bonjour !", "What is the weather in Paris?");
+		assertThat(round2).hasSize(7);
+		assertThat(round2.subList(0, 5)).extracting(Message::getText)
+			.containsExactly("Answer in French.", "Be brief.", "Hello", "Bonjour !", "What is the weather in Paris?");
+		assertThat(round2.get(5)).isEqualTo(toolCallMessage);
+		assertThat(round2.get(6)).isEqualTo(toolResponse);
+	}
+
+	@Test
+	void beforeAddsAStoredSystemMessageWhenTheSessionHasNoConversationYet() {
+		// Only a system message is stored: the loop check sees no conversation to skip,
+		// but the stored system message must still reach the prompt.
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Answer in French."));
+
+		List<Message> instructions = beforeWithPrompt(new UserMessage("Hi"));
+
+		assertThat(instructions).extracting(Message::getText).containsExactly("Answer in French.", "Hi");
+	}
+
+	@Test
 	void beforeSkipsDuplicatingHistoryWhenNestedInsideToolCallingLoop() {
 		// Simulates a looping advisor such as ToolCallingAdvisor re-entering the chain
 		// once per tool-call round (see the class Javadoc "Nesting inside a
@@ -285,6 +348,125 @@ class SessionMemoryAdvisorIT {
 		assertThat(instructions.get(1)).isInstanceOf(SystemMessage.class);
 		// Non-system messages follow
 		instructions.subList(2, instructions.size()).forEach(m -> assertThat(m).isNotInstanceOf(SystemMessage.class));
+	}
+
+	@Test
+	void beforeSendsAStoredSystemMessageIdenticalToTheRequestOneOnlyOnce() {
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Answer in French."));
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("Hello"));
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("Bonjour !"));
+
+		List<Message> instructions = beforeWithPrompt(new SystemMessage("Answer in French."),
+				new SystemMessage("Be brief."), new UserMessage("How are you?"));
+
+		assertThat(instructions).filteredOn(SystemMessage.class::isInstance)
+			.extracting(Message::getText)
+			.containsExactly("Answer in French.", "Be brief.");
+		assertThat(instructions.subList(0, 2)).allMatch(SystemMessage.class::isInstance);
+		assertThat(instructions).extracting(Message::getText)
+			.containsExactly("Answer in French.", "Be brief.", "Hello", "Bonjour !", "How are you?");
+	}
+
+	@Test
+	void beforeSendsOnlyTheLatestStoredSystemMessage() {
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Answer in French."));
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("Hello"));
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("Bonjour !"));
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Answer in German."));
+
+		List<Message> instructions = beforeWithPrompt(new UserMessage("How are you?"));
+
+		assertThat(instructions).extracting(Message::getText)
+			.containsExactly("Answer in German.", "Hello", "Bonjour !", "How are you?");
+	}
+
+	@Test
+	void orchestratorDoesNotPickUpASubAgentSystemMessage() {
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Orchestrator rules."));
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("Research Paris."));
+		this.sessionService.appendEvent(SessionEvent.builder()
+			.sessionId(this.sessionId)
+			.branch("orch.researcher")
+			.message(new SystemMessage("Researcher rules."))
+			.build());
+
+		// The root advisor loads every branch, but only root system messages configure it.
+		List<Message> instructions = beforeWithPrompt(new UserMessage("Summarize the findings."));
+
+		assertThat(instructions).filteredOn(SystemMessage.class::isInstance)
+			.extracting(Message::getText)
+			.containsExactly("Orchestrator rules.");
+	}
+
+	@Test
+	void subAgentUsesItsOwnSystemMessageNotItsAncestors() {
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Orchestrator rules."));
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("Research Paris."));
+		this.sessionService.appendEvent(SessionEvent.builder()
+			.sessionId(this.sessionId)
+			.branch("orch.researcher")
+			.message(new SystemMessage("Researcher rules."))
+			.build());
+		SessionMemoryAdvisor researcher = SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.forBranch("orch.researcher"))
+			.build();
+
+		List<Message> instructions = researcher.before(ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(new UserMessage("Find sources."))))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build(), mock(AdvisorChain.class)).prompt().getInstructions();
+
+		assertThat(instructions).filteredOn(SystemMessage.class::isInstance)
+			.extracting(Message::getText)
+			.containsExactly("Researcher rules.");
+	}
+
+	@Test
+	void subAgentKeepsItsSystemPromptAfterCompaction() {
+		// The orchestrator delegates to the researcher in turn 1 and again after later turns
+		// have been compacted: the researcher's stored system prompt must still apply.
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("Research Paris."));
+		this.sessionService.appendEvent(SessionEvent.builder()
+			.sessionId(this.sessionId)
+			.branch("orch.researcher")
+			.message(new SystemMessage("Researcher rules."))
+			.build());
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("Paris findings."));
+		for (int i = 2; i <= 4; i++) {
+			this.sessionService.appendMessage(this.sessionId, new UserMessage("question " + i));
+			this.sessionService.appendMessage(this.sessionId, new AssistantMessage("answer " + i));
+		}
+		this.sessionService.compact(this.sessionId, request -> true,
+				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
+		SessionMemoryAdvisor researcher = SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.forBranch("orch.researcher"))
+			.build();
+
+		List<Message> instructions = researcher.before(ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(new UserMessage("Research Rome."))))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build(), mock(AdvisorChain.class)).prompt().getInstructions();
+
+		assertThat(instructions).filteredOn(SystemMessage.class::isInstance)
+			.extracting(Message::getText)
+			.containsExactly("Researcher rules.");
+	}
+
+	@Test
+	void beforeKeepsDistinctSystemMessagesInOrder() {
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Stored rule."));
+
+		List<Message> instructions = beforeWithPrompt(new SystemMessage("Request rule."), new UserMessage("Hi"));
+
+		assertThat(instructions).extracting(Message::getText).containsExactly("Stored rule.", "Request rule.", "Hi");
+	}
+
+	private List<Message> beforeWithPrompt(Message... messages) {
+		ChatClientRequest request = ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(messages)))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build();
+		return this.advisor.before(request, mock(AdvisorChain.class)).prompt().getInstructions();
 	}
 
 	// --- Ownership enforcement ---
@@ -747,7 +929,11 @@ class SessionMemoryAdvisorIT {
 
 		@Bean
 		SessionService sessionService(SessionRepository sessionRepository) {
-			return DefaultSessionService.builder().sessionRepository(sessionRepository).build();
+			// Some tests store system messages on purpose (session setup).
+			return DefaultSessionService.builder()
+				.sessionRepository(sessionRepository)
+				.allowSystemMessages(true)
+				.build();
 		}
 
 		@Bean

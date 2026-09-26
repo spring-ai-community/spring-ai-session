@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
@@ -194,6 +195,24 @@ class SessionMemoryIT {
 		// ...but archived events are retained for Recall Storage (nothing is deleted)
 		List<Message> all = this.sessionService.getMessages(session.id());
 		assertThat(all).hasSize(12);
+	}
+
+	@Test
+	void storedSystemMessageSurvivesCompactionAndStaysFirst() {
+		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-sys").build());
+		this.sessionService.appendMessage(session.id(), new SystemMessage("Answer in French."));
+		for (int i = 1; i <= 5; i++) {
+			this.sessionService.appendMessage(session.id(), new UserMessage("question " + i));
+			this.sessionService.appendMessage(session.id(), new AssistantMessage("answer " + i));
+		}
+
+		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
+				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
+
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText())
+			.doesNotContain("Answer in French.");
+		assertThat(this.sessionService.getActiveMessages(session.id())).extracting(Message::getText)
+			.containsExactly("Answer in French.", "question 5", "answer 5");
 	}
 
 	@Test
@@ -376,7 +395,11 @@ class SessionMemoryIT {
 
 		@Bean
 		SessionService sessionService(SessionRepository sessionRepository) {
-			return DefaultSessionService.builder().sessionRepository(sessionRepository).build();
+			// Some tests store system messages on purpose (session setup).
+			return DefaultSessionService.builder()
+				.sessionRepository(sessionRepository)
+				.allowSystemMessages(true)
+				.build();
 		}
 
 	}

@@ -16,7 +16,13 @@
 
 package org.springframework.ai.session.compaction;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -79,6 +85,95 @@ final class CompactionUtils {
 
 		String text = event.getMessage().getText();
 		return role + ": " + (text != null ? text : "[no text content]");
+	}
+
+	/**
+	 * Returns {@code true} for a system message stored by the application: a
+	 * non-synthetic {@link MessageType#SYSTEM} event, on any branch. Synthetic events
+	 * (e.g. legacy {@code SYSTEM} summaries) keep their own handling.
+	 */
+	static boolean isStoredSystemEvent(SessionEvent event) {
+		return !event.isSynthetic() && event.getMessageType() == MessageType.SYSTEM;
+	}
+
+	/**
+	 * Returns the stored system messages that compaction keeps: the <em>latest</em>
+	 * {@linkplain #isStoredSystemEvent stored system event} of each branch (the root
+	 * agent's {@code null} branch included), in log order.
+	 *
+	 * <p>
+	 * An agent's latest stored system message is its system prompt ("latest wins", per
+	 * branch): storing a new one replaces the previous one of the same branch, and it is
+	 * the integrator's responsibility to put the complete intended content in it. Every
+	 * strategy keeps these events in the active window, places them first and never
+	 * summarizes them, so a sub-agent that is delegated to again in a later turn still
+	 * has its system prompt. Earlier stored system messages are
+	 * {@linkplain #supersededSystemEvents superseded} and archived. At most one stored
+	 * system message per branch is ever kept, so storing one per turn cannot grow the
+	 * active window.
+	 * @param events the session events, oldest first
+	 * @return the latest stored system event of each branch, in log order
+	 */
+	static List<SessionEvent> pinnedSystemEvents(List<SessionEvent> events) {
+		Map<String, SessionEvent> latestByBranch = new HashMap<>();
+		for (SessionEvent event : events) {
+			if (isStoredSystemEvent(event)) {
+				latestByBranch.put(event.getBranch(), event);
+			}
+		}
+		if (latestByBranch.isEmpty()) {
+			return List.of();
+		}
+		Set<SessionEvent> latest = new HashSet<>(latestByBranch.values());
+		return events.stream().filter(latest::contains).toList();
+	}
+
+	/**
+	 * Returns the stored system events superseded by a later one: every
+	 * {@linkplain #isStoredSystemEvent stored system event} other than the
+	 * {@code pinned} one, in order. Strategies archive them (they remain searchable
+	 * through Recall Storage) and never summarize them.
+	 */
+	static List<SessionEvent> supersededSystemEvents(List<SessionEvent> events, List<SessionEvent> pinned) {
+		return events.stream().filter(e -> isStoredSystemEvent(e) && !pinned.contains(e)).toList();
+	}
+
+	/**
+	 * Returns the real conversation events subject to the strategy's budget: every event
+	 * that is neither synthetic nor a {@linkplain #isStoredSystemEvent stored system
+	 * event}, in order.
+	 */
+	static List<SessionEvent> compactableEvents(List<SessionEvent> events) {
+		return events.stream().filter(e -> !e.isSynthetic() && !isStoredSystemEvent(e)).toList();
+	}
+
+	/**
+	 * Result for a pass where the strategy's budget needs no cut. The events are returned
+	 * unchanged when there are no superseded system events; otherwise only the superseded
+	 * ones are archived, so "latest wins" is applied whenever compaction runs.
+	 */
+	static CompactionResult unchangedExceptSuperseded(List<SessionEvent> events, List<SessionEvent> pinned,
+			List<SessionEvent> synthetic, List<SessionEvent> real, List<SessionEvent> superseded,
+			ToIntFunction<SessionEvent> tokens) {
+		if (superseded.isEmpty()) {
+			return new CompactionResult(events, List.of(), 0);
+		}
+		List<SessionEvent> compacted = new ArrayList<>(pinned);
+		compacted.addAll(synthetic);
+		compacted.addAll(real);
+		return new CompactionResult(compacted, superseded, superseded.stream().mapToInt(tokens).sum());
+	}
+
+	/**
+	 * Result for a pass that cut real events: archives the removed real events together
+	 * with the superseded system events, in their original log order.
+	 */
+	static CompactionResult archiving(List<SessionEvent> events, List<SessionEvent> compacted,
+			List<SessionEvent> removedReal, List<SessionEvent> superseded, ToIntFunction<SessionEvent> tokens) {
+		Set<SessionEvent> toArchive = new HashSet<>(removedReal);
+		toArchive.addAll(superseded);
+		List<SessionEvent> archived = events.stream().filter(toArchive::contains).toList();
+		return new CompactionResult(compacted, archived, archived.stream().mapToInt(tokens).sum());
 	}
 
 	/**

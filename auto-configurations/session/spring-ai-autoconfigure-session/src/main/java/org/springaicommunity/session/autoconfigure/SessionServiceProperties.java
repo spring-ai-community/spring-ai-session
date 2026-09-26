@@ -29,7 +29,16 @@ public class SessionServiceProperties {
 
 	public static final String CONFIG_PREFIX = "spring.ai.session";
 
+	/**
+	 * Default time-to-live of sessions created by the service.
+	 */
 	private Duration timeToLive = Duration.ofDays(60);
+
+	/**
+	 * Whether system messages may be stored in a session. Disabled by default: system
+	 * prompts are configuration and are best supplied on every request.
+	 */
+	private boolean allowSystemMessages = false;
 
 	public Duration getTimeToLive() {
 		return timeToLive;
@@ -37,6 +46,14 @@ public class SessionServiceProperties {
 
 	public void setTimeToLive(Duration timeToLive) {
 		this.timeToLive = timeToLive;
+	}
+
+	public boolean isAllowSystemMessages() {
+		return this.allowSystemMessages;
+	}
+
+	public void setAllowSystemMessages(boolean allowSystemMessages) {
+		this.allowSystemMessages = allowSystemMessages;
 	}
 
 }

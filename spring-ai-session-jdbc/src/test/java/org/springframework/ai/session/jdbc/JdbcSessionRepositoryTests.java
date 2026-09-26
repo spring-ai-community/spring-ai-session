@@ -29,12 +29,17 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.session.CreateSessionRequest;
+import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventFilter.MatchMode;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration;
@@ -589,6 +594,27 @@ class JdbcSessionRepositoryTests {
 		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(version);
 		assertThat(this.repository.findEvents(session.id(), EventFilter.active())).hasSize(1);
 		assertThat(this.repository.findEvents(other.id(), EventFilter.active())).hasSize(1);
+	}
+
+	@Test
+	void storedSystemMessageSurvivesCompactionAndIsReadBackFirst() {
+		SessionService service = DefaultSessionService.builder()
+			.sessionRepository(this.repository)
+			.allowSystemMessages(true)
+			.build();
+		Session session = service.create(CreateSessionRequest.builder().userId("user-sys").build());
+		service.appendMessage(session.id(), new SystemMessage("Answer in French."));
+		for (int i = 1; i <= 3; i++) {
+			service.appendMessage(session.id(), new UserMessage("question " + i));
+			service.appendMessage(session.id(), new AssistantMessage("answer " + i));
+		}
+
+		service.compact(session.id(), req -> true, SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
+
+		List<SessionEvent> active = this.repository.findEvents(session.id(), EventFilter.active());
+		assertThat(active).extracting(e -> e.getMessage().getText())
+			.containsExactly("Answer in French.", "question 3", "answer 3");
+		assertThat(active.get(0).getMessageType()).isEqualTo(MessageType.SYSTEM);
 	}
 
 	@Test

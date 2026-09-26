@@ -70,11 +70,16 @@ public interface SessionService {
 	/**
 	 * Appends a {@link SessionEvent} to the session identified by
 	 * {@link SessionEvent#getSessionId()}.
+	 * @throws IllegalArgumentException if the event wraps a
+	 * {@link org.springframework.ai.chat.messages.SystemMessage} and the service does not
+	 * allow storing system messages (the default for {@link DefaultSessionService}; see
+	 * {@link DefaultSessionService.Builder#allowSystemMessages(boolean)})
 	 */
 	void appendEvent(SessionEvent event);
 
 	/**
 	 * Convenience shorthand: wraps the message in a {@link SessionEvent} and appends it.
+	 * Subject to the same system-message rule as {@link #appendEvent(SessionEvent)}.
 	 */
 	default void appendMessage(String sessionId, Message message) {
 		appendEvent(SessionEvent.builder().sessionId(sessionId).message(message).build());

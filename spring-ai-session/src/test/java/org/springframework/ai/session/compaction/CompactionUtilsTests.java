@@ -21,6 +21,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.SessionEvent;
@@ -156,6 +157,67 @@ class CompactionUtilsTests {
 	}
 
 	// --- helpers ---
+
+	// --- pinnedSystemEvents / supersededSystemEvents / compactableEvents ---
+
+	@Test
+	void latestStoredSystemEventIsPinnedAndEarlierOnesAreSuperseded() {
+		SessionEvent setup = system("Answer in French.", null);
+		SessionEvent update = system("Answer in German.", null);
+		List<SessionEvent> events = List.of(setup, user("u1"), assistant("a1"), update, user("u2"));
+
+		List<SessionEvent> pinned = CompactionUtils.pinnedSystemEvents(events);
+
+		assertThat(pinned).containsExactly(update);
+		assertThat(CompactionUtils.supersededSystemEvents(events, pinned)).containsExactly(setup);
+		assertThat(CompactionUtils.compactableEvents(events)).extracting(e -> e.getMessage().getText())
+			.containsExactly("u1", "a1", "u2");
+	}
+
+	@Test
+	void noStoredSystemEventMeansNothingPinned() {
+		List<SessionEvent> events = List.of(user("u1"), assistant("a1"));
+
+		assertThat(CompactionUtils.pinnedSystemEvents(events)).isEmpty();
+		assertThat(CompactionUtils.supersededSystemEvents(events, List.of())).isEmpty();
+	}
+
+	@Test
+	void latestStoredSystemEventIsPinnedPerBranch() {
+		SessionEvent rootOld = system("Orchestrator v1", null);
+		SessionEvent subOld = system("Researcher v1", "orch.researcher");
+		SessionEvent subNew = system("Researcher v2", "orch.researcher");
+		SessionEvent rootNew = system("Orchestrator v2", null);
+		List<SessionEvent> events = List.of(rootOld, user("u1"), subOld, assistant("a1"), subNew, user("u2"),
+				rootNew);
+
+		List<SessionEvent> pinned = CompactionUtils.pinnedSystemEvents(events);
+
+		// One per branch, in log order.
+		assertThat(pinned).containsExactly(subNew, rootNew);
+		assertThat(CompactionUtils.supersededSystemEvents(events, pinned)).containsExactly(rootOld, subOld);
+		assertThat(CompactionUtils.compactableEvents(events)).extracting(e -> e.getMessage().getText())
+			.containsExactly("u1", "a1", "u2");
+	}
+
+	@Test
+	void syntheticSystemEventsAreNotStoredSystemEvents() {
+		SessionEvent syntheticSystem = SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.message(new SystemMessage("legacy summary"))
+			.metadata(SessionEvent.METADATA_SYNTHETIC, true)
+			.build();
+		SessionEvent subAgentRules = system("sub-agent rules", "sub");
+
+		assertThat(CompactionUtils.isStoredSystemEvent(syntheticSystem)).isFalse();
+		assertThat(CompactionUtils.isStoredSystemEvent(subAgentRules)).isTrue();
+		assertThat(CompactionUtils.pinnedSystemEvents(List.of(subAgentRules, user("u1"), syntheticSystem)))
+			.containsExactly(subAgentRules);
+	}
+
+	private static SessionEvent system(String text, String branch) {
+		return SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage(text)).branch(branch).build();
+	}
 
 	// --- retainLastTurn ---
 

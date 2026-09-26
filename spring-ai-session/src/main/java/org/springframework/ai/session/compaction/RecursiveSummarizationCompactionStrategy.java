@@ -19,6 +19,7 @@ package org.springframework.ai.session.compaction;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.ToIntFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -41,19 +42,22 @@ import org.springframework.util.Assert;
  *
  * <h3>Algorithm</h3>
  * <ol>
- * <li>Separate synthetic summary events from real conversation events.</li>
+ * <li>Separate the latest stored system message of each branch (that agent's system
+ * prompt — always kept verbatim and first, never summarized; earlier ones are superseded
+ * and archived; see {@code CompactionUtils#pinnedSystemEvents}) and synthetic summary
+ * events from real conversation events.</li>
  * <li>Keep the last {@code maxEventsToKeep} real events intact (the <em>active
  * window</em>), snapping the cut point forward to the next turn boundary so a partial
- * turn is never kept. If no later turn boundary exists, the most recent turn is kept
- * even when it exceeds {@code maxEventsToKeep}.</li>
+ * turn is never kept. If no later turn boundary exists, the most recent turn is kept even
+ * when it exceeds {@code maxEventsToKeep}.</li>
  * <li>Everything before the active window — plus any prior synthetic summaries — forms
  * the <em>events to summarize</em>.</li>
  * <li>An LLM call condenses them into a rolling summary, optionally including the last
  * {@code overlapSize} events from the active window for continuity.</li>
  * <li>The result is placed as a <em>synthetic summary turn</em>: a pair of synthetic
- * events [{@code USER} shadow prompt, {@code ASSISTANT} summary] followed by the active
- * window. This mirrors the OpenAI Agents SDK approach and ensures the conversation always
- * has a coherent user↔assistant alternation.</li>
+ * events [{@code USER} shadow prompt, {@code ASSISTANT} summary] after the system
+ * messages and followed by the active window. This mirrors the OpenAI Agents SDK approach
+ * and ensures the conversation always has a coherent user↔assistant alternation.</li>
  * </ol>
  *
  * <h3>Recursive / rolling behaviour</h3> Any prior synthetic summary produced by a
@@ -148,8 +152,14 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 		List<SessionEvent> events = context.events();
 
+		// The latest stored system message of each branch is that agent's system prompt:
+		// kept verbatim and first, never counted against maxEventsToKeep and never
+		// summarized. Earlier ones are superseded: archived, never summarized.
+		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
+		List<SessionEvent> supersededSystem = CompactionUtils.supersededSystemEvents(events, pinnedSystem);
 		List<SessionEvent> syntheticEvents = events.stream().filter(SessionEvent::isSynthetic).toList();
-		List<SessionEvent> realEvents = events.stream().filter(e -> !e.isSynthetic()).toList();
+		List<SessionEvent> realEvents = CompactionUtils.compactableEvents(events);
+		ToIntFunction<SessionEvent> tokens = e -> this.tokenCountEstimator.estimate(this.eventFormatter.apply(e));
 
 		// Count only root (non-branch) real events. Branch events from sub-agent sessions
 		// are bundled with their enclosing root turns and do not consume slots from the
@@ -157,8 +167,10 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		long rootEventCount = realEvents.stream().filter(SessionEvent::isRootEvent).count();
 
 		if (rootEventCount <= this.maxEventsToKeep) {
-			// Nothing to compact — return as-is
-			return new CompactionResult(events, List.of(), 0);
+			// Nothing to summarize — only superseded system messages (if any) are
+			// archived
+			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, syntheticEvents, realEvents,
+					supersededSystem, tokens);
 		}
 
 		// Find the index in realEvents just after the last root event to archive.
@@ -189,15 +201,23 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 		if (toArchive.isEmpty()) {
 			// The whole history is a single (oversize) turn — nothing to summarize.
-			return new CompactionResult(events, List.of(), 0);
+			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, syntheticEvents, realEvents,
+					supersededSystem, tokens);
 		}
 
 		// Overlap: the first `overlapSize` events from the active window are also fed
 		// into the summary prompt so the LLM has continuity context
 		List<SessionEvent> overlapEvents = activeWindow.subList(0, Math.min(this.overlapSize, activeWindow.size()));
 
+		// System messages are configuration, not conversation, so none is ever
+		// summarized.
+		// Stored ones (every branch) were separated above; this also guards the overlap
+		// and any other system-typed event from reaching the summarizer.
+		List<SessionEvent> toSummarize = withoutSystemMessages(toArchive);
+
 		// Build the user prompt for the LLM
-		String userPrompt = buildSummarizationPrompt(syntheticEvents, toArchive, overlapEvents);
+		String userPrompt = buildSummarizationPrompt(syntheticEvents, toSummarize,
+				withoutSystemMessages(overlapEvents));
 
 		// Call the LLM
 		String summary = this.chatClient.prompt().system(this.systemPrompt).user(userPrompt).call().content();
@@ -235,7 +255,7 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 					.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, STRATEGY_NAME)
 					.build());
 
-		List<SessionEvent> compacted = new ArrayList<>();
+		List<SessionEvent> compacted = new ArrayList<>(pinnedSystem);
 		compacted.addAll(summaryTurn);
 		compacted.addAll(activeWindow);
 
@@ -244,13 +264,8 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		// and are therefore NOT included in archivedEvents. This keeps the semantics of
 		// archivedEvents consistent with the other strategies, which only report the real
 		// events they removed from the session.
-		List<SessionEvent> archived = new ArrayList<>(toArchive);
-
-		int tokensArchived = toArchive.stream()
-			.mapToInt(e -> this.tokenCountEstimator.estimate(this.eventFormatter.apply(e)))
-			.sum();
-
-		return new CompactionResult(compacted, archived, tokensArchived);
+		// Superseded stored system messages are archived too, but never summarized.
+		return CompactionUtils.archiving(events, compacted, toArchive, supersededSystem, tokens);
 	}
 
 	/**
@@ -287,6 +302,10 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 		prompt.append("\nPlease write the summary now:");
 		return prompt.toString();
+	}
+
+	private static List<SessionEvent> withoutSystemMessages(List<SessionEvent> events) {
+		return events.stream().filter(e -> e.getMessageType() != MessageType.SYSTEM).toList();
 	}
 
 	public static String formatEvent(SessionEvent event) {
@@ -388,8 +407,8 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		}
 
 		/**
-		 * Overrides the function used to render a {@link SessionEvent} as a line of text in
-		 * the summarization prompt and for token counting. Defaults to the built-in
+		 * Overrides the function used to render a {@link SessionEvent} as a line of text
+		 * in the summarization prompt and for token counting. Defaults to the built-in
 		 * formatter which handles plain text, tool calls, and tool responses.
 		 */
 		public Builder eventFormatter(Function<SessionEvent, String> eventFormatter) {

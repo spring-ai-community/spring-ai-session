@@ -75,6 +75,7 @@ Boot's `DatabaseInitializationProperties` and inherits these:
 | Property | Default | Description |
 |---|---|---|
 | `time-to-live` | `60d` | Default time-to-live of sessions created by the auto-configured `DefaultSessionService` (any `Duration`, e.g. `2h`, `30d`) |
+| `allow-system-messages` | `false` | Whether a `SystemMessage` may be stored in a session. Disabled by default; see [System Messages](../session-management/system-messages.md) |
 
 ---
 

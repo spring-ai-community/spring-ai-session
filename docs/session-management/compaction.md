@@ -5,6 +5,10 @@ reduces the session's event history to fit within that window while preserving
 conversational coherence. It is driven by two composable abstractions: **triggers** (when
 to compact) and **strategies** (how to compact).
 
+!!! tip "How it works internally"
+    For class, sequence and activity diagrams of the compaction algorithms, and worked
+    examples of the tricky cases, see [Compaction Internals](compaction-internals.md).
+
 ---
 
 ## Entry point
@@ -38,12 +42,37 @@ service.compact(sessionId, req -> true, SlidingWindowCompactionStrategy.builder(
     summaries: `RecursiveSummarizationCompactionStrategy` replaces the previous summary turn
     with a new one that builds on it.
 
+!!! note "The latest stored system message of each branch is never compacted"
+    If your application stores system messages in the session (for example with
+    `sessionService.appendMessage(id, new SystemMessage(...))`), the **latest** one stored
+    on each branch is that agent's system prompt: the root agent's (`branch == null`) and
+    each sub-agent's. Every strategy keeps these in the active window, places them first,
+    and never archives or summarizes them. They don't use `maxEvents` / `maxTurns` /
+    `maxEventsToKeep` slots, but `TokenCountCompactionStrategy` deducts their tokens from
+    its budget, because they are sent to the model.
+
+    Earlier stored system messages of the same branch are **superseded**: every strategy
+    archives them whenever it runs, even when the budget needs no cut, and never
+    summarizes them. At most one stored system message per branch is ever active.
+
+    Size `TokenCountCompactionStrategy`'s `maxTokens` with these kept system messages in
+    mind: they stay active for every branch that ever stored one, including sub-agents
+    that are no longer used. If together they use up the whole budget, each compaction
+    keeps only the newest turn (it is never archived), and older context is dropped.
+
+    The recommended practice is not to store system messages at all, and
+    `DefaultSessionService` rejects them unless `allowSystemMessages` is enabled. Supply
+    them from your code on every request instead; see [System Messages](system-messages.md).
+
 !!! note "CAS write safety"
     `DefaultSessionService.compact()` reads the event-log version **before** fetching
     events. If another writer mutated the log between that read and the write,
     `compactEvents()` returns `false` and compaction is silently skipped — the concurrent
     writer already handled the session. No-op results skip the write entirely, important
     for production persistence backends.
+
+    See the [compaction pass sequence](compaction-internals.md#2-sequence-a-compaction-pass-end-to-end)
+    and the [JDBC concurrency diagram](compaction-internals.md#5-sequence-jdbc-compactevents-and-a-concurrent-append).
 
 ---
 
@@ -121,9 +150,10 @@ override it (see below).
 ### SlidingWindowCompactionStrategy
 
 Keeps the last `N` **root-level real** events (default `N` =
-`DEFAULT_MAX_EVENTS` = 20). Simple, predictable, no LLM call required. Synthetic summary
-events are always preserved and placed first; they do not count against the `maxEvents`
-budget. Neither do sub-agent events (`branch != null`): they stay with the root turn that
+`DEFAULT_MAX_EVENTS` = 20). Simple, predictable, no LLM call required. The latest
+stored system message and synthetic summary events are always preserved and placed first;
+they do not count against the `maxEvents` budget. Earlier stored system messages are
+archived. Neither do sub-agent events (`branch != null`): they stay with the root turn that
 contains them.
 
 ```java
@@ -136,12 +166,13 @@ SlidingWindowCompactionStrategy.builder().maxEvents(20).tokenCountEstimator(myEs
 
 **Algorithm**
 
-1. Separate synthetic events (always preserved, placed first in output).
+1. Separate the latest stored system message and synthetic events (always preserved, placed
+   first in output); earlier stored system messages are archived.
 2. Keep the last `maxEvents` root-level real events.
 3. Snap the cut point forward to the nearest root-level `USER` message (turn-boundary safety).
    If there is none, keep the most recent turn (see
    [The most recent turn is always kept](#the-most-recent-turn-is-always-kept)).
-4. Return: `[synthetics] + [kept real events]`.
+4. Return: `[system messages] + [synthetics] + [kept real events]`.
 
 ### TurnWindowCompactionStrategy
 
@@ -159,11 +190,12 @@ TurnWindowCompactionStrategy.builder().maxTurns(10).tokenCountEstimator(myEstima
 
 **Algorithm**
 
-1. Strip synthetic events (always preserved, placed first in output).
+1. Strip the latest stored system message and synthetic events (always preserved, placed
+   first in output); earlier stored system messages are archived.
 2. Collect preamble events that appear before the first `USER` message.
 3. Group remaining events into turns (each turn starts at a `USER` message).
 4. Archive the oldest turns until only `maxTurns` remain.
-5. Return: `[synthetics] + [preamble] + [kept turns]`.
+5. Return: `[system messages] + [synthetics] + [preamble] + [kept turns]`.
 
 ### TokenCountCompactionStrategy
 
@@ -180,7 +212,9 @@ TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEst
 
 **Algorithm**
 
-1. Separate synthetic events (their token cost is deducted from the budget first).
+1. Separate the latest stored system message and synthetic events (always preserved; their
+   token cost is deducted from the budget first); earlier stored system messages are
+   archived.
 2. Walk real events from newest to oldest, accumulating token cost (estimated via the
    shared event formatter — see [Token accounting](#token-accounting) above). Stop at the
    first event that would exceed the remaining budget. This produces a **contiguous
@@ -189,7 +223,7 @@ TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEst
 3. Drop any leading kept events that are not root-level `USER` messages (turn-boundary
    safety). If that would leave nothing, keep the most recent turn even though it exceeds
    the budget.
-4. Return: `[synthetics] + [kept events]`.
+4. Return: `[system messages] + [synthetics] + [kept events]`.
 
 ### RecursiveSummarizationCompactionStrategy
 
@@ -226,7 +260,8 @@ RecursiveSummarizationCompactionStrategy strategy =
 If the LLM returns a null or blank summary, the strategy logs a `WARN`-level message and
 skips compaction — the event history is left unchanged. If the LLM call throws, the
 exception propagates out of `SessionService.compact(...)`. `SessionMemoryAdvisor` catches
-and logs it, so the user's chat call still succeeds. Register an optional failure callback
+and logs it, so the user's chat call still succeeds. If you call `compact(...)` from your
+own code, handle the exception there. Register an optional failure callback
 to react programmatically to a blank summary:
 
 ```java
@@ -264,14 +299,15 @@ RecursiveSummarizationCompactionStrategy strategy =
 
 **Algorithm**
 
-1. Separate synthetic and real events.
+1. Separate the latest stored system message (kept verbatim, never summarized), earlier
+   stored system messages (archived, never summarized), synthetic events and real events.
 2. Compute the raw cut point: the newest `maxEventsToKeep` root-level real events form the
    active window.
 3. Snap the cut point forward to the nearest turn boundary. If there is none, keep the most
    recent turn. If that leaves nothing to summarize, stop without calling the LLM.
 4. Feed `[prior synthetic summaries] + [events to archive] + [overlap events]` to the LLM.
 5. Replace the archived events with a new synthetic summary turn `[USER shadow, ASSISTANT summary]`.
-6. Return: `[summary turn] + [active window]`.
+6. Return: `[system messages] + [summary turn] + [active window]`.
 
 The **recursive** property: the `ASSISTANT` text from any prior synthetic summary is fed
 back to the LLM as `=== PRIOR SUMMARY ===` context, so each summary builds on its
@@ -280,6 +316,9 @@ predecessors without starting from scratch.
 ---
 
 ## Turn-boundary Safety
+
+The full cut-point pipeline, and eight worked examples of the tricky cases, are in
+[Compaction Internals](compaction-internals.md#3-activity-how-a-strategy-chooses-what-to-archive).
 
 All four strategies share a common safety rule: the kept window always starts at a
 **root-level** `USER` message — one whose `branch` is `null`. The sliding-window,

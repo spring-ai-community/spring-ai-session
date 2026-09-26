@@ -111,7 +111,9 @@ Topics covered:
 - [Session Concepts](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/concepts/) — `Session`, `SessionEvent`, turns, and architecture
 - [Event Filtering](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/event-filtering/) — composable `EventFilter` API
 - [Context Compaction](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/compaction/) — triggers, strategies, turn-boundary safety
+- [Compaction Internals](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/compaction-internals/) — diagrams and worked examples of the compaction algorithms
 - [ChatClient Integration](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/chat-client/) — `SessionMemoryAdvisor` setup and options
+- [System Messages](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/system-messages/) — why system prompts are configuration, and how they are stored, ordered and compacted
 - [Multi-Agent Branch Isolation](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/multi-agent/) — sharing sessions across parallel agents
 - [Recall Storage](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/recall-storage/) — keyword search over the full verbatim history
 - [Cross-Session Recall](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/cross-session-recall/) — search across all of a user's sessions
