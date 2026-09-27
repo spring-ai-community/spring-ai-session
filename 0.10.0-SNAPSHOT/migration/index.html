@@ -1172,6 +1172,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#custom-implementers-sessionrepositorycompactevents-keeps-the-log-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom implementers: SessionRepository.compactEvents keeps the log order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1578,6 +1589,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#custom-implementers-sessionrepositorycompactevents-keeps-the-log-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom implementers: SessionRepository.compactEvents keeps the log order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1960,6 +1982,13 @@ compaction settings, and pass only the task in and the result back. See
   <code>TokenCountCompactionStrategy</code> budget and the <code>TokenCountTrigger</code> threshold.</li>
 <li><strong><code>SessionMemoryAdvisor</code></strong> no longer reads or writes by branch: it records every user and
   assistant event as an ordinary event and uses the latest stored system message.</li>
+<li><strong>Compaction never reorders the log.</strong> A kept system message stays where it was stored
+  instead of moving to the front of the active window, and archived events stay where they
+  were. <code>getEvents(...)</code> therefore returns events in the order they were appended, plus
+  each summary turn right before the conversation it precedes. <code>SessionMemoryAdvisor</code>
+  still puts system messages first in the prompt. A custom loop that reads the active
+  window must put the system message first itself (see
+  <a href="../session-management/system-messages/">System Messages</a>).</li>
 </ul>
 <h3 id="jdbc-the-branch-column-is-unused">JDBC: the <code>branch</code> column is unused<a class="headerlink" href="#jdbc-the-branch-column-is-unused" title="Permanent link">&para;</a></h3>
 <p><code>JdbcSessionRepository</code> no longer reads or writes <code>AI_SESSION_EVENT.branch</code>. The column
@@ -1967,6 +1996,19 @@ stays in the bundled schema scripts so existing databases keep working, and it w
 removed from them in a later release. You can drop it yourself:</p>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">AI_SESSION_EVENT</span><span class="w"> </span><span class="k">DROP</span><span class="w"> </span><span class="k">COLUMN</span><span class="w"> </span><span class="n">branch</span><span class="p">;</span>
 </span></code></pre></div>
+<h3 id="custom-implementers-sessionrepositorycompactevents-keeps-the-log-order">Custom implementers: <code>SessionRepository.compactEvents</code> keeps the log order<a class="headerlink" href="#custom-implementers-sessionrepositorycompactevents-keeps-the-log-order" title="Permanent link">&para;</a></h3>
+<p><code>compactEvents(sessionId, archivedEvents, retainedEvents, expectedVersion)</code> must no longer
+rebuild the log as "archived events, then retained events". Instead:</p>
+<ul>
+<li>mark <code>archivedEvents</code> archived <strong>in place</strong>;</li>
+<li>keep every other existing event where it is, and remove active events that appear in
+  neither list (e.g. a superseded summary);</li>
+<li>insert each <strong>new</strong> event of <code>retainedEvents</code> immediately before the next existing event
+  that follows it in <code>retainedEvents</code>, or append it when none follows.</li>
+</ul>
+<p>The built-in in-memory and JDBC repositories do this. With JDBC-style ordering by an
+insert sequence, only the part of the log from the insertion point onward needs to be
+re-inserted.</p>
 <h3 id="custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed">Custom implementers: <code>JdbcSessionRepositoryDialect.getBranchFilterFragment()</code> removed<a class="headerlink" href="#custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed" title="Permanent link">&para;</a></h3>
 <p>The method is gone from the dialect contract. A custom dialect that overrides it no longer
 compiles because of its <code>@Override</code>; delete the method.</p>

@@ -1588,7 +1588,7 @@ only runs the strategy — and writes back to the repository — when the trigge
   write entirely. See the <a href="../compaction-internals/#2-sequence-a-compaction-pass-end-to-end">compaction pass sequence</a>
   and the <a href="../compaction-internals/#5-sequence-jdbc-compactevents-and-a-concurrent-append">JDBC concurrency diagram</a>.</li>
 <li><strong>Stored system messages are configuration.</strong> If you store them (opt-in), the latest one
-  is always kept, placed first, never summarized and not counted against <code>maxEvents</code> /
+  is always kept where it was stored, never summarized and not counted against <code>maxEvents</code> /
   <code>maxTurns</code> / <code>maxEventsToKeep</code>; earlier ones are archived on every pass. See
   <a href="../system-messages/#compaction-the-latest-stored-system-message-wins">System Messages</a>.</li>
 </ul>
@@ -1662,15 +1662,18 @@ system message, the summaries and the conversation.</p>
 </table>
 <p><strong>Common behaviour.</strong> Every strategy:</p>
 <ul>
-<li>keeps the latest stored system message and the synthetic summary events, places them
-  first, and archives earlier stored system messages;</li>
+<li>keeps the latest stored system message and the synthetic summary events, and archives
+  earlier stored system messages;</li>
+<li><strong>never reorders events</strong>: archived events are flagged in place, and every kept event,
+  including the system message, stays where it was stored. A new summary goes right
+  before the kept conversation. <code>SessionMemoryAdvisor</code> still puts system messages first
+  in the prompt;</li>
 <li>applies its limit only to the real conversation events;</li>
 <li>starts the kept window at a <code>USER</code> message and always keeps the most recent turn (see
   <a href="#turn-boundary-safety">Turn-boundary Safety</a>). The exception is
   <code>TurnWindowCompactionStrategy</code>'s preamble: events before the first <code>USER</code> message, kept
   verbatim;</li>
-<li>returns <code>[latest stored system message] + [synthetics] + [kept events]</code>
-  (<code>TurnWindowCompactionStrategy</code> puts its preamble before the kept turns).</li>
+<li>returns the new active window: every event that is not archived, in log order.</li>
 </ul>
 <h3 id="token-accounting">Token accounting<a class="headerlink" href="#token-accounting" title="Permanent link">&para;</a></h3>
 <p>All four strategies — and <code>TokenCountTrigger</code> — estimate token cost using the same event

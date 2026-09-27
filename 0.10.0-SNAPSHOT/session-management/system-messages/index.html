@@ -1636,8 +1636,8 @@ a new one replaces the previous one, so it must carry the complete intended cont
 combining several instructions into it is the integration's responsibility. Every
 <a href="../compaction/">compaction strategy</a> handles stored system messages the same way:</p>
 <ul>
-<li>the latest one stays in the active window, is placed first, and is never archived or
-  summarized;</li>
+<li>the latest one stays in the active window, where it was stored, and is never archived
+  or summarized. Integrations put it first in the prompt (<code>SessionMemoryAdvisor</code> does);</li>
 <li>it doesn't use <code>maxEvents</code> / <code>maxTurns</code> / <code>maxEventsToKeep</code> slots.
   <code>TokenCountCompactionStrategy</code> subtracts its tokens from the budget, because it is sent
   with the conversation;</li>

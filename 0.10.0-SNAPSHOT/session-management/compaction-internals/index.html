@@ -1702,7 +1702,7 @@ computed, and in two more places:</p>
     split --&gt; budget{"2. Do the real events&lt;br/&gt;fit the budget?"}
     budget -- yes --&gt; noop{"superseded&lt;br/&gt;empty?"}
     noop -- yes --&gt; r0([Result: events unchanged, nothing archived])
-    noop -- no --&gt; r1(["Result: [pinned] + [synthetic] + [real]&lt;br/&gt;archived = superseded"])
+    noop -- no --&gt; r1(["Result: events minus superseded (log order)&lt;br/&gt;archived = superseded"])
 
     budget -- no --&gt; raw["3. Compute the raw cut index into real&lt;br/&gt;SlidingWindow / Recursive: keep the newest N real events&lt;br/&gt;TokenCount: walk newest to oldest within maxTokens&lt;br/&gt;minus the system prompt and summary tokens&lt;br/&gt;TurnWindow: group into turns, cut whole turns"]
     raw --&gt; snap["4. snapToTurnStart: move the cut FORWARD&lt;br/&gt;to the next USER event"]
@@ -1712,7 +1712,7 @@ computed, and in two more places:</p>
     retain --&gt; cut["kept = real[cut..]&lt;br/&gt;removed = real[..cut)"]
     cut --&gt; empty{"removed empty?&lt;br/&gt;(whole history is one turn)"}
     empty -- yes --&gt; noop
-    empty -- no --&gt; r2(["6. Result: [pinned] + [synthetic] + [kept]&lt;br/&gt;archived = removed + superseded (log order)"])</code></pre>
+    empty -- no --&gt; r2(["6. Result: every other event, in log order&lt;br/&gt;archived = removed + superseded (log order)"])</code></pre>
 <p><strong>Invariants the pipeline guarantees:</strong></p>
 <ul>
 <li><strong>The kept window always starts at a <code>USER</code> event,</strong> apart from
@@ -1763,9 +1763,10 @@ and has to keep system messages out of the summary.</p>
             else summary text
                 LLM--&gt;&gt;R: summary
                 R-&gt;&gt;R: summaryTurn = [USER shadowPrompt, ASSISTANT summary]&lt;br/&gt;(both synthetic, same timestamp)
-                R-&gt;&gt;U: archiving(events, [pinned] + summaryTurn + activeWindow,&lt;br/&gt;toArchive, superseded, tokens)
-                U--&gt;&gt;R: result
-                R--&gt;&gt;Caller: result
+                R-&gt;&gt;U: archiving(events, toArchive, superseded, tokens)
+                U--&gt;&gt;R: remaining events (log order), archived
+                R-&gt;&gt;R: compacted = remaining minus prior summaries,&lt;br/&gt;with summaryTurn inserted before activeWindow[0]
+                R--&gt;&gt;Caller: CompactionResult(compacted, archived, tokens)
                 Note over R,Caller: prior summaries are in neither list,&lt;br/&gt;so the repository deletes them:&lt;br/&gt;the new summary already contains them
             end
         end
@@ -1776,8 +1777,9 @@ and has to keep system messages out of the summary.</p>
     end</code></pre>
 <p><strong>What makes it "recursive".</strong> Each pass feeds the previous summary's text back to the
 LLM as <code>=== PRIOR SUMMARY ===</code>. The new summary therefore builds on the old one, and the
-old synthetic events are dropped rather than archived. The resulting active window is
-always <code>[latest stored system message, if any] + [one summary turn] + [recent real events]</code>.</p>
+old synthetic events are dropped rather than archived. The resulting active window holds
+the latest stored system message (if any, where it was stored), one summary turn right
+before the kept conversation, and the recent real events, all in log order.</p>
 <p><strong>Why the summary is a user + assistant pair.</strong> Many providers require the messages after
 the system prompt to alternate user and assistant. The shadow-prompt user message plus
 the assistant summary, followed by a kept window that starts with a user message, keep
@@ -1786,7 +1788,7 @@ that alternation valid; a lone assistant summary would not.</p>
 <h2 id="5-sequence-jdbc-compactevents-and-a-concurrent-append">5. Sequence: JDBC <code>compactEvents</code> and a concurrent append<a class="headerlink" href="#5-sequence-jdbc-compactevents-and-a-concurrent-append" title="Permanent link">&para;</a></h2>
 <p>On JDBC the CAS is a row-level lock on the session row. Both writers take that lock
 <em>before</em> touching events. An append must also lock the row before it inserts; otherwise
-its event could be ordered before the compaction's re-inserted window.</p>
+its event could be ordered before the part of the log that compaction re-inserts.</p>
 <pre class="mermaid"><code>sequenceDiagram
     autonumber
     participant C as compactEvents (tx 1)
@@ -1803,27 +1805,30 @@ its event could be ordered before the compaction's re-inserted window.</p>
         C-&gt;&gt;DB: ROLLBACK, releasing the row lock
         Note over C: IllegalArgumentException, nothing changed
     else all archived
-        C-&gt;&gt;DB: DELETE FROM AI_SESSION_EVENT&lt;br/&gt;WHERE session_id = ? AND archived = false
-        C-&gt;&gt;DB: INSERT retained events (batch, new seq values)
+        C-&gt;&gt;DB: DELETE active events in neither list&lt;br/&gt;(e.g. the previous summary)
+        opt new events (a summary turn)
+            C-&gt;&gt;DB: DELETE FROM AI_SESSION_EVENT&lt;br/&gt;WHERE session_id = ? AND seq &gt;= seq(first kept event after the summary)
+            C-&gt;&gt;DB: INSERT summary turn + that tail (batch, new seq values)
+        end
         C-&gt;&gt;DB: COMMIT, releasing the row lock
         Note over C: returns true
     end
     DB--&gt;&gt;A: UPDATE proceeds on the committed row
-    A-&gt;&gt;DB: INSERT the new event (seq after the retained window)
+    A-&gt;&gt;DB: INSERT the new event (seq after every compacted event)
     A-&gt;&gt;DB: COMMIT</code></pre>
 <p><strong>The two orderings:</strong></p>
 <ul>
 <li><strong>Compaction locks first</strong> (as drawn): the append waits, then inserts with a higher
-  <code>seq</code>, so it is ordered after the compacted window. It also bumps the version again,
+  <code>seq</code>, so it is ordered after every compacted event. It also bumps the version again,
   and the next compaction sees the new event.</li>
 <li><strong>Append locks first:</strong> compaction's CAS <code>UPDATE</code> waits. When the append commits, the
   version is <code>v + 1</code>, the CAS matches 0 rows, and <code>compactEvents</code> returns <code>false</code>. The
   service skips silently, and the next turn compacts from fresh events.</li>
 </ul>
 <p><strong>In-memory equivalent:</strong> <code>InMemorySessionRepository</code> does the same inside a single
-<code>ConcurrentHashMap.compute</code>. It checks the version, keeps the already-archived events,
-appends the newly archived ones (marked archived), then the retained events, and bumps
-the version.</p>
+<code>ConcurrentHashMap.compute</code>. It checks the version, walks the log in order (flagging
+archived events in place, dropping events in neither list, inserting new events before
+the retained event that follows them), and bumps the version.</p>
 <hr />
 <h2 id="6-worked-examples-of-the-tricky-cases">6. Worked examples of the tricky cases<a class="headerlink" href="#6-worked-examples-of-the-tricky-cases" title="Permanent link">&para;</a></h2>
 <p>Each example gives the active events before compaction and the resulting
@@ -1870,7 +1875,7 @@ and assistant messages, and <code>Σ</code> is the synthetic summary turn.</p>
 <td>System message updated mid-session</td>
 <td><code>S:v1 U1 A1 S:v2 U2 A2</code></td>
 <td>SlidingWindow, <code>maxEvents = 20</code></td>
-<td><code>S:v2 U1 A1 U2 A2</code></td>
+<td><code>U1 A1 S:v2 U2 A2</code></td>
 <td><code>S:v1</code></td>
 </tr>
 <tr>
@@ -1906,10 +1911,10 @@ and assistant messages, and <code>Σ</code> is the synthetic summary turn.</p>
 <li>The raw cut lands inside the last turn, and snapping forward finds no later turn.
    <code>retainLastTurn</code> keeps turn 2 even though it exceeds <code>maxEvents</code>.</li>
 <li>Snapping and retaining leave nothing to remove, so the pass is a no-op.</li>
-<li>The budget needs no cut, but the superseded <code>S:v1</code> is still archived, and <code>S:v2</code> moves
-   to the front.</li>
+<li>The budget needs no cut, but the superseded <code>S:v1</code> is still archived. <code>S:v2</code> stays
+   where it was stored; the advisor puts it first in the prompt.</li>
 <li>The system prompt was stored in turn 1. Turn 1 is archived, but the latest stored
-   system message is kept and placed first, so later turns still have it.</li>
+   system message stays active where it was stored, so later turns still have it.</li>
 <li>The system prompt's 11 tokens come off the budget first, leaving 34. Only the newest
    turn fits, so the older turn is archived. Without the system prompt both turns (42)
    would fit in 45.</li>

@@ -1272,7 +1272,7 @@ how the main types fit together.</p>
   full verbatim history even after compaction; <code>cross_session_search</code> lets a
   background agent mine <em>every</em> session a user has</li>
 <li><strong>System messages as configuration</strong> — supplied per request by default; storing them is
-  opt-in, and then the latest one is kept first and never summarized
+  opt-in, and then the latest one is always kept and never summarized
   (see <a href="session-management/system-messages/">System Messages</a>)</li>
 <li><strong>Spring Boot auto-configuration</strong> — schema init, dialect detection, and the
   <code>JdbcSessionRepository</code> and <code>SessionService</code> beans</li>
