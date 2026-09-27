@@ -23,9 +23,11 @@ On every request the advisor:
    prompt stays stable for prompt caching. See [System Messages](../session-management/system-messages.md).
 4. Appends the prompt's last user message to the session, if the configured
    `MessageFilter` accepts it. Inside a tool-calling loop this is the trailing
-   tool-response message instead (`Prompt.getLastUserOrToolResponseMessage()`).
-5. After the model responds, appends the assistant message(s) through the configured
-   `MessageFilter` (default: `MessageFilter.skipEmptyMessages()`). By default,
+   tool-response message instead (`Prompt.getLastUserOrToolResponseMessage()`). The event
+   is recorded on the filter's branch (`null`, a root event, by default; see
+   [Multi-Agent Branch Isolation](../session-management/multi-agent.md#filtering-by-branch)).
+5. After the model responds, appends the assistant message(s), on the same branch, through
+   the configured `MessageFilter` (default: `MessageFilter.skipEmptyMessages()`). By default,
    empty assistant messages (blank text, no tool calls, and no media) are skipped — some
    models (e.g. Bedrock Converse) emit an empty `end_turn` frame after tool use that
    would otherwise be replayed and rejected on the next request.

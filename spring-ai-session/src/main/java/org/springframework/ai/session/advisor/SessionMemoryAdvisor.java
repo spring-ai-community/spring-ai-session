@@ -72,6 +72,13 @@ import org.springframework.util.Assert;
  * </ol>
  *
  * <p>
+ * <strong>Branches:</strong> the branch of the configured {@link EventFilter} (merged with
+ * any per-request filter) is the agent's branch. It scopes both sides: the history read
+ * (the agent's own branch plus its ancestors') and the user and assistant events written,
+ * which are recorded on that branch. With the default {@link EventFilter#all()} the branch
+ * is {@code null}, so events are written as root events and every branch is read.
+ *
+ * <p>
  * The session is identified by the {@link #SESSION_ID_CONTEXT_KEY} value in the advisor
  * context. The key must be present on every request; omitting it throws
  * {@link IllegalStateException} to prevent accidental cross-user session sharing.
@@ -209,23 +216,10 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		// 2. Retrieve history applying the configured filter (default: all events)
 
-		// If the request context contains an EventFilter, merge it with the advisor's
-		// configured filter so that request-level parameters override the advisor
-		// defaults
-		EventFilter eventFilter = this.eventFilter;
-		Object requestFilterValue = request.context().get(EVENT_FILTER_CONTEXT_KEY);
-		if (requestFilterValue != null) {
-			if (!(requestFilterValue instanceof EventFilter requestEventFilter)) {
-				throw new IllegalArgumentException("Advisor context value for '" + EVENT_FILTER_CONTEXT_KEY
-						+ "' must be an EventFilter but was " + requestFilterValue.getClass().getName());
-			}
-			eventFilter = this.eventFilter.merge(requestEventFilter);
-		}
-
 		// Always exclude archived events from the active context window — they were
 		// compacted out and live on only for Recall Storage search. Merging forces the
 		// flag on regardless of the configured or per-request filter.
-		eventFilter = eventFilter.merge(EventFilter.active());
+		EventFilter eventFilter = resolveEventFilter(request.context()).merge(EventFilter.active());
 
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, eventFilter);
 
@@ -299,13 +293,15 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		// 4. Append the current user message to the session, subject to the configured
 		// message filter. Skipping only affects persistence — the outgoing prompt is
-		// untouched.
+		// untouched. The event is recorded on the agent's branch, so what the agent
+		// writes is isolated exactly like what it reads.
 		Message userMessage = request.prompt().getLastUserOrToolResponseMessage();
 		if (userMessage != null && shouldPersist(userMessage, sessionId)) {
 			this.sessionService.appendEvent(SessionEvent.builder()
 				.id(this.requestEventIdGenerator.generate(request, userMessage))
 				.sessionId(sessionId)
 				.message(userMessage)
+				.branch(agentBranch)
 				.build());
 		}
 
@@ -318,8 +314,10 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		// 1. Append the assistant message(s) produced by the model, subject to the
 		// configured message filter. By default excludes messages that carry no
-		// content — blank text, no tool calls, and no media.
+		// content — blank text, no tool calls, and no media. Like the user message, the
+		// reply is recorded on the agent's branch.
 		if (response.chatResponse() != null) {
+			String agentBranch = resolveEventFilter(response.context()).branch();
 			response.chatResponse()
 				.getResults()
 				.stream()
@@ -329,6 +327,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 					.id(this.responseEventIdGenerator.generate(response, msg))
 					.sessionId(sessionId)
 					.message(msg)
+					.branch(agentBranch)
 					.build()));
 		}
 
@@ -372,6 +371,24 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		throw new IllegalStateException(
 				"No session ID found in advisor context. " + "Set SESSION_ID_CONTEXT_KEY on every request: "
 						+ ".advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))");
+	}
+
+	/**
+	 * Returns the advisor's configured filter, merged with the per-request filter from
+	 * {@link #EVENT_FILTER_CONTEXT_KEY} when present, so that request-level parameters
+	 * override the advisor defaults. Its branch is the agent's branch: it scopes both the
+	 * history read and the events written.
+	 */
+	private EventFilter resolveEventFilter(Map<String, @Nullable Object> context) {
+		Object requestFilterValue = context.get(EVENT_FILTER_CONTEXT_KEY);
+		if (requestFilterValue == null) {
+			return this.eventFilter;
+		}
+		if (!(requestFilterValue instanceof EventFilter requestEventFilter)) {
+			throw new IllegalArgumentException("Advisor context value for '" + EVENT_FILTER_CONTEXT_KEY
+					+ "' must be an EventFilter but was " + requestFilterValue.getClass().getName());
+		}
+		return this.eventFilter.merge(requestEventFilter);
 	}
 
 	/**
@@ -504,7 +521,9 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		 * prompt. Defaults to {@link EventFilter#all()} (all events).
 		 * <p>
 		 * Use {@link EventFilter#forBranch(String)} in multi-agent scenarios so each
-		 * agent only sees events on its own branch and its ancestors': <pre>{@code
+		 * agent only sees events on its own branch and its ancestors'. The filter's
+		 * branch is also the branch the advisor records the agent's user and assistant
+		 * events on: <pre>{@code
 		 * SessionMemoryAdvisor.builder(sessionService)
 		 *     .eventFilter(EventFilter.forBranch("orch.researcher"))
 		 *     .build();

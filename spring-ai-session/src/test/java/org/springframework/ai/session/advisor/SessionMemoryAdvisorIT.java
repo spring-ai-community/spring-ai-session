@@ -542,6 +542,77 @@ class SessionMemoryAdvisorIT {
 		assertThat(texts).doesNotContain("writer output");
 	}
 
+	@Test
+	void branchedAdvisorRecordsUserAndAssistantEventsOnItsBranch() {
+		SessionMemoryAdvisor researcher = SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.forBranch("orch.researcher"))
+			.build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		researcher.before(buildRequest(this.sessionId, "Find sources."), chain);
+		researcher.after(buildResponse(this.sessionId, "Three sources found."), chain);
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getBranch)
+			.containsExactly("orch.researcher", "orch.researcher");
+	}
+
+	@Test
+	void defaultAdvisorRecordsRootEvents() {
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		this.advisor.before(buildRequest(this.sessionId, "Hello"), chain);
+		this.advisor.after(buildResponse(this.sessionId, "Hi!"), chain);
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).allMatch(SessionEvent::isRootEvent).hasSize(2);
+	}
+
+	@Test
+	void perRequestFilterBranchIsUsedForRecordedEvents() {
+		AdvisorChain chain = mock(AdvisorChain.class);
+		Map<String, Object> context = Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId,
+				SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, EventFilter.forBranch("orch.writer"));
+
+		this.advisor.before(ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(new UserMessage("Write it up."))))
+			.context(context)
+			.build(), chain);
+		this.advisor.after(ChatClientResponse.builder()
+			.chatResponse(ChatResponse.builder().generations(List.of(new Generation(new AssistantMessage("Draft.")))).build())
+			.context(context)
+			.build(), chain);
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getBranch)
+			.containsExactly("orch.writer", "orch.writer");
+	}
+
+	@Test
+	void siblingAgentsDoNotSeeEachOthersRecordedConversation() {
+		SessionMemoryAdvisor researcher = SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.forBranch("orch.researcher"))
+			.build();
+		SessionMemoryAdvisor writer = SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.forBranch("orch.writer"))
+			.build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		researcher.before(buildRequest(this.sessionId, "Find sources."), chain);
+		researcher.after(buildResponse(this.sessionId, "Three sources found."), chain);
+
+		List<String> writerPrompt = writer.before(buildRequest(this.sessionId, "Write it up."), chain)
+			.prompt()
+			.getInstructions()
+			.stream()
+			.map(Message::getText)
+			.toList();
+		List<String> rootPrompt = beforeWithPrompt(new UserMessage("Summarize.")).stream()
+			.map(Message::getText)
+			.toList();
+
+		assertThat(writerPrompt).containsExactly("Write it up.");
+		// The root agent (no branch filter) sees every branch.
+		assertThat(rootPrompt).contains("Find sources.", "Three sources found.");
+	}
+
 	// --- Per-request EventFilter override ---
 
 	@Test

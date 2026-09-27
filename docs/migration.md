@@ -128,6 +128,14 @@ The built-in PostgreSQL, MySQL/MariaDB and H2 dialects already follow these rule
 
 ### Behavior changes
 
+- **`SessionMemoryAdvisor` records events on its filter's branch.** An advisor configured
+  with `EventFilter.forBranch("orch.researcher")` (or given one per request) used to read
+  only its branch's view but write every user and assistant message as a root event, which
+  the orchestrator and every sibling agent could then see. It now records them on that
+  branch. Advisors without a branch filter (the default) still write root events. Since
+  only root `USER` events count as turns, a branched advisor's messages no longer advance
+  `TurnCountTrigger` or move compaction's turn boundaries. Events already stored at the
+  root are not moved. See [Multi-Agent Branch Isolation](session-management/multi-agent.md#visibility-flows-down-not-up).
 - **The latest stored system message wins.** Stored system messages used to be archived
   like any other event. Now every strategy keeps the latest one per branch active, places
   it first and never summarizes it; earlier ones are archived when compaction runs, and

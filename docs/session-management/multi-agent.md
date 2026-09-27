@@ -72,7 +72,9 @@ List<SessionEvent> researcherHistory = service.getEvents(sessionId,
 ```
 
 To apply branch isolation automatically inside `SessionMemoryAdvisor`, configure the
-`eventFilter` on the builder:
+`eventFilter` on the builder. The filter's branch scopes both sides: the advisor reads the
+agent's view of the session and records the agent's user and assistant messages on that
+branch, so you don't tag them yourself:
 
 ```java
 SessionMemoryAdvisor researcherAdvisor = SessionMemoryAdvisor.builder(sessionService)
@@ -124,9 +126,13 @@ as no filter.
 | `EventFilter.forBranch("orch.researcher")` | yes | yes (`"orch"`) | yes | no |
 
 So if the top-level agent keeps the default filter while sub-agents write to the same
-session, its prompt history includes the sub-agents' internal messages. To keep it
-isolated, give the top-level agent a branch too (as `"orch"` above), so that it becomes
-an ordinary node of the tree. System messages are the one exception: an agent without a
+session, its prompt history includes the sub-agents' internal messages. To avoid that,
+give the top-level agent a branch too (as `"orch"` above), so that it becomes an ordinary
+node of the tree. Its advisor then records the end user's messages on `"orch"` as well,
+and compaction counts turns only at root `USER` events (see
+[Compaction and branches](#compaction-and-branches)). A turn-based trigger or strategy
+would then find no turns, so either append the end user's messages yourself without a
+branch, or keep the top-level agent on the root and let it see every branch. System messages are the one exception: an agent without a
 branch uses only root-level system messages (see
 [System messages and branches](#system-messages-and-branches)).
 
