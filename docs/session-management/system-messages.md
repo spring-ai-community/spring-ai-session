@@ -130,9 +130,10 @@ combining several instructions into it is the integration's responsibility. Ever
 
 - the latest one stays in the active window, is placed first, and is never archived or
   summarized;
-- it doesn't use `maxEvents` / `maxTurns` / `maxEventsToKeep` slots, but
+- it doesn't use `maxEvents` / `maxTurns` / `maxEventsToKeep` slots. For the root agent,
   `TokenCountCompactionStrategy` subtracts its tokens from the budget, because it is sent
-  to the model;
+  with the conversation; a sub-agent's is not subtracted, because it is only sent to that
+  sub-agent;
 - earlier ones are **superseded**: archived whenever compaction runs (even when the
   budget needs no cut), never summarized, and still searchable through
   [Recall Storage](recall-storage.md).
@@ -324,8 +325,8 @@ Keep in mind the trade-offs:
   one to update it.
 - Only the latest stored system message is used, so it must contain every instruction
   you want in effect. A new one replaces the previous one; it doesn't add to it.
-- Its tokens are sent on every request and count toward `TokenCountCompactionStrategy`'s
-  budget.
+- Its tokens are sent on every request. The root agent's counts toward
+  `TokenCountCompactionStrategy`'s budget.
 - Your integration still has to use only the latest one, put it first and drop duplicates.
   `SessionMemoryAdvisor` does this; a custom loop must do it itself (steps 3 and 4 above).
 

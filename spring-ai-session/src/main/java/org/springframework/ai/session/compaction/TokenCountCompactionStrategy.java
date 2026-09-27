@@ -35,8 +35,10 @@ import org.springframework.util.Assert;
  * <li>Separate the latest stored system message of each branch (that agent's system prompt — earlier stored system
  * messages are superseded and archived; see {@code CompactionUtils#pinnedSystemEvents}) and synthetic
  * summary events — they are always preserved and placed first in the result. Their token
- * cost is deducted from the budget before real events are considered, so a large system
- * message or prior compaction summary reduces the space available for real events.</li>
+ * cost of the root agent's system message and of the summaries is deducted from the budget
+ * before real events are considered, so a large system prompt or prior compaction summary
+ * reduces the space available for real events. Sub-agent system messages are kept but not
+ * deducted, because they are only sent to their own sub-agent.</li>
  * <li>Walk real events from newest to oldest, accumulating cost until the budget is
  * exhausted. Stops at the first event that would exceed the remaining budget, producing a
  * contiguous kept window (a suffix of the real-event list). Skipping oversize events and
@@ -88,7 +90,12 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 
 		// Preserved events are sent to the model too, so their cost comes off the budget
 		// first.
-		int preservedTokens = Stream.concat(pinnedSystem.stream(), synthetic.stream()).mapToInt(tokens).sum();
+		// Only the root agent's system prompt is sent with the root view; sub-agent prompts go
+		// to their own sub-agent only, so they don't reduce the conversation budget.
+		int preservedTokens = Stream
+			.concat(pinnedSystem.stream().filter(SessionEvent::isRootEvent), synthetic.stream())
+			.mapToInt(tokens)
+			.sum();
 
 		int remainingBudget = this.maxTokens - preservedTokens;
 

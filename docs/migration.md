@@ -134,8 +134,9 @@ The built-in PostgreSQL, MySQL/MariaDB and H2 dialects already follow these rule
   messages are superseded and archived when compaction runs. In multi-agent sessions the
   rule is per branch: each agent uses the latest system message stored on its own branch,
   compaction keeps the latest one of every branch, and system messages of any branch are
-  never summarized. The kept system messages count toward `TokenCountCompactionStrategy`'s
-  `maxTokens`, so size it with them in mind.
+  never summarized. The root agent's kept system message counts toward
+  `TokenCountCompactionStrategy`'s `maxTokens` and `TokenCountTrigger`'s threshold, so size
+  them with it in mind; sub-agent and superseded system messages are not counted.
 - **Tool-calling loops with a stored system message no longer duplicate history.** When
   the session held a system message and the request carried its own system prompt, the
   0.8.0 loop check failed from round 2 on and the whole history was sent twice.

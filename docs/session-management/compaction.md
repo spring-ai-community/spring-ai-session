@@ -48,17 +48,17 @@ service.compact(sessionId, req -> true, SlidingWindowCompactionStrategy.builder(
     on each branch is that agent's system prompt: the root agent's (`branch == null`) and
     each sub-agent's. Every strategy keeps these in the active window, places them first,
     and never archives or summarizes them. They don't use `maxEvents` / `maxTurns` /
-    `maxEventsToKeep` slots, but `TokenCountCompactionStrategy` deducts their tokens from
-    its budget, because they are sent to the model.
+    `maxEventsToKeep` slots. `TokenCountCompactionStrategy` deducts the **root** agent's
+    one from its budget, because it is sent with the conversation; sub-agent system
+    messages are only sent to their own sub-agent, so they are not deducted.
 
     Earlier stored system messages of the same branch are **superseded**: every strategy
     archives them whenever it runs, even when the budget needs no cut, and never
     summarizes them. At most one stored system message per branch is ever active.
 
-    Size `TokenCountCompactionStrategy`'s `maxTokens` with these kept system messages in
-    mind: they stay active for every branch that ever stored one, including sub-agents
-    that are no longer used. If together they use up the whole budget, each compaction
-    keeps only the newest turn (it is never archived), and older context is dropped.
+    Size `TokenCountCompactionStrategy`'s `maxTokens` with the root agent's kept system
+    message in mind. If it uses up the whole budget, each compaction keeps only the newest
+    turn (it is never archived), and older context is dropped.
 
     The recommended practice is not to store system messages at all, and
     `DefaultSessionService` rejects them unless `allowSystemMessages` is enabled. Supply
@@ -97,7 +97,9 @@ required). Like the four
 compaction strategies below, it estimates every event through the shared event formatter
 (see [Token accounting](#token-accounting)) rather than raw `getText()`, so tool calls and
 tool responses count toward the threshold and the trigger stays calibrated against
-`TokenCountCompactionStrategy`'s budget.
+`TokenCountCompactionStrategy`'s budget. Like that strategy, it counts only what is sent
+with the conversation: the root agent's latest stored system message, the summaries and
+the conversation events. Sub-agent and superseded system messages are not counted.
 
 ```java
 // Uses JTokkitTokenCountEstimator by default
@@ -213,9 +215,9 @@ TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEst
 **Algorithm**
 
 1. Separate the latest stored system message of each branch and synthetic events (always
-   preserved; their token cost is deducted from the budget first, see
-   [How the budget is spent](#how-the-budget-is-spent)); earlier stored system messages
-   are archived.
+   preserved). The root agent's system message and the synthetic events are deducted from
+   the budget first, see [How the budget is spent](#how-the-budget-is-spent). Earlier
+   stored system messages are archived.
 2. Walk real events from newest to oldest, accumulating token cost (estimated via the
    shared event formatter — see [Token accounting](#token-accounting) above). Stop at the
    first event that would exceed the remaining budget. This produces a **contiguous
@@ -228,12 +230,16 @@ TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEst
 
 #### How the budget is spent
 
-The events that are always preserved are sent to the model too, so their tokens come off
+The preserved events that are sent with the conversation take their tokens off
 `maxTokens` before any conversation is considered:
 
 ```
-remainingBudget = maxTokens − tokens(kept system messages + synthetic summary events)
+remainingBudget = maxTokens − tokens(root agent's kept system message + synthetic summary events)
 ```
+
+Sub-agent system messages are kept too, but they are not deducted: each is sent only to
+its own sub-agent, never with the root view of the conversation, so counting them would
+shrink the conversation's budget for nothing.
 
 The conversation gets only `remainingBudget`. For example, with one token per character
 and `maxTokens = 45`:
@@ -246,10 +252,10 @@ User: yo / Assistant: ok  21 tokens   turn 2 (newest)
 
 Both turns (42) would fit in 45, but only turn 2 fits in 34, so turn 1 is archived.
 
-If the preserved events use up the whole budget (`remainingBudget ≤ 0`), for example
-several large stored system prompts, one per branch, the walk keeps nothing. Step 3 then
+If the deducted events use up the whole budget (`remainingBudget ≤ 0`), for example a
+very large stored root system prompt, the walk keeps nothing. Step 3 then
 keeps the newest turn anyway, so **the newest turn is never archived**, but every
-compaction drops all older context. Size `maxTokens` so that the preserved events leave
+compaction drops all older context. Size `maxTokens` so that the deducted events leave
 room for the conversation; keeping system prompts out of the session (see
 [System Messages](system-messages.md)) avoids the deduction altogether.
 

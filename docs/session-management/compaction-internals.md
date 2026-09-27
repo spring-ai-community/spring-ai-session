@@ -15,15 +15,6 @@ system messages, and concurrent appends on JDBC.
     `CompactionStrategy`, `CompactionRequest`, `CompactionResult`,
     `SessionService.compact(...)` and `SessionRepository.compactEvents(...)`.
 
-## Contents
-
-1. [Class diagrams](#1-class-diagrams)
-2. [Sequence: a compaction pass, end to end](#2-sequence-a-compaction-pass-end-to-end)
-3. [Activity: how a strategy chooses what to archive](#3-activity-how-a-strategy-chooses-what-to-archive)
-4. [Sequence: RecursiveSummarizationCompactionStrategy](#4-sequence-recursivesummarizationcompactionstrategy)
-5. [Sequence: JDBC `compactEvents` and a concurrent append](#5-sequence-jdbc-compactevents-and-a-concurrent-append)
-6. [Worked examples of the tricky cases](#6-worked-examples-of-the-tricky-cases)
-
 ---
 
 ## 1. Class diagrams
@@ -269,7 +260,7 @@ flowchart TB
     noop -- yes --> r0([Result: events unchanged, nothing archived])
     noop -- no --> r1(["Result: [pinned] + [synthetic] + [real]<br/>archived = superseded"])
 
-    budget -- no --> raw["3. Compute the raw cut index into real<br/>SlidingWindow / Recursive: after the N-th oldest root event<br/>TokenCount: walk newest to oldest within<br/>maxTokens minus the preserved events' tokens<br/>TurnWindow: group into turns, cut whole turns"]
+    budget -- no --> raw["3. Compute the raw cut index into real<br/>SlidingWindow / Recursive: after the N-th oldest root event<br/>TokenCount: walk newest to oldest within maxTokens<br/>minus the root system prompt and summary tokens<br/>TurnWindow: group into turns, cut whole turns"]
     raw --> snap["4. snapToTurnStart: move the cut FORWARD to the next<br/>root-level USER event (sub-agent USER events are skipped)"]
     snap --> end1{"cut == real.size()?<br/>(no later turn start)"}
     end1 -- no --> cut

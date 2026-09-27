@@ -396,6 +396,32 @@ class TokenCountCompactionStrategyTests {
 	}
 
 	@Test
+	void subAgentSystemPromptsDoNotReduceTheConversationBudget() {
+		// Only the root agent's system prompt is sent with the root/full view of the
+		// conversation; a sub-agent's prompt is sent only to that sub-agent. Deducting it
+		// from the budget would over-count and archive conversation needlessly.
+		// "System: sys" = 11, a 48-token sub-agent prompt, two 21-token turns.
+		// 60 - 11 = 49 leaves room for both turns (42), so nothing is archived.
+		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
+			.maxTokens(60)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(system("sys"));
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.branch("orch.researcher")
+			.message(new SystemMessage("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))
+			.build());
+		events.addAll(turn("hi", "ok"));
+		events.addAll(turn("yo", "ok"));
+
+		CompactionResult result = strategy.compact(requestWith(events));
+
+		assertThat(result.archivedEvents()).isEmpty();
+	}
+
+	@Test
 	void pinnedSystemMessagesOverTheBudgetStillKeepTheNewestTurn() {
 		// An orchestrator and four sub-agents each store a large system prompt. Together
 		// they exceed maxTokens, leaving no budget for the conversation: the newest turn

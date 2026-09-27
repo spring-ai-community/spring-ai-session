@@ -296,45 +296,6 @@ instant and deletes them one by one. It returns the count of sessions removed.
 
 ---
 
-## Package Structure
-
-```
-org.springframework.ai.session          (core and JDBC modules)
-├── Session.java                        – immutable metadata-only value object
-├── SessionEvent.java                   – immutable wrapper around a Spring AI Message
-├── SessionService.java                 – primary lifecycle + compaction API
-├── SessionRepository.java              – persistence SPI
-├── CreateSessionRequest.java           – builder for session creation parameters
-├── EventFilter.java                    – composable criteria for event retrieval
-├── MessageFilter.java                  – composable predicate for what gets persisted
-├── DefaultSessionService.java          – default SessionService implementation
-├── InMemorySessionRepository.java      – ConcurrentHashMap-backed repository
-│
-├── advisor/
-│   ├── SessionMemoryAdvisor.java       – ChatClient advisor with auto-compaction
-│   ├── SessionEventRequestIdGenerator.java  – SPI: id of the persisted user/tool message
-│   ├── SessionEventResponseIdGenerator.java – SPI: id of the persisted assistant message
-│   └── IdempotentSessionEventIdGenerator.java – deterministic ids for retry-safe appends
-│
-├── compaction/
-│   ├── CompactionRequest.java          – (session, events, eventCount, turnCount)
-│   ├── CompactionResult.java           – compacted events + archived events + metrics
-│   ├── CompactionStrategy.java         – strategy SPI
-│   ├── CompactionTrigger.java          – trigger SPI
-│   ├── CompactionUtils.java            – (package-private) event formatter + turn-boundary snapping
-│   ├── CompositeCompactionTrigger.java – OR-composite of triggers
-│   ├── TurnCountTrigger.java
-│   ├── TokenCountTrigger.java
-│   ├── SlidingWindowCompactionStrategy.java
-│   ├── TurnWindowCompactionStrategy.java
-│   ├── TokenCountCompactionStrategy.java
-│   └── RecursiveSummarizationCompactionStrategy.java
-│
-└── tool/
-    ├── SessionEventTools.java          – @Tool conversation_search (Recall Storage)
-    └── CrossSessionRecallTools.java    – @Tool cross_session_search (all of a user's sessions)
-```
-
 The JDBC repository lives in `org.springframework.ai.session.jdbc`
 (`spring-ai-session-jdbc`). The Spring Boot auto-configurations use the
 `org.springaicommunity.session.autoconfigure` and

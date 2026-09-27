@@ -53,7 +53,9 @@ public final class TokenCountTrigger implements CompactionTrigger {
 
 	@Override
 	public boolean shouldCompact(CompactionRequest request) {
-		int totalTokens = request.events().stream()
+		// Count what is actually sent with the root view, the same events the
+		// TokenCountCompactionStrategy budgets (see CompactionUtils#budgetedEvents).
+		int totalTokens = CompactionUtils.budgetedEvents(request.events()).stream()
 				.mapToInt(e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e)))
 				.sum();
 		return totalTokens >= this.threshold;

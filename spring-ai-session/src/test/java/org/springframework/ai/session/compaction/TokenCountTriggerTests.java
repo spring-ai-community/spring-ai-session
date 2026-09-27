@@ -22,6 +22,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.content.MediaContent;
 import org.springframework.ai.session.Session;
@@ -149,6 +150,34 @@ class TokenCountTriggerTests {
 
 		assertThat(trigger.shouldCompact(requestWith(turn("hello", "world")))).isTrue();
 		assertThat(trigger.shouldCompact(requestWith(List.of()))).isFalse();
+	}
+
+	@Test
+	void subAgentAndSupersededSystemMessagesDoNotCountTowardTheThreshold() {
+		// Measures what the strategy budgets: the root agent's latest system message, the
+		// summaries and the conversation. Sub-agent prompts and superseded root prompts are
+		// not sent with the root view, so they must not make the trigger fire.
+		// "System: new" (11) + "User: hi" (8) + "Assistant: ok" (13) = 32.
+		TokenCountTrigger trigger = TokenCountTrigger.builder()
+			.threshold(33)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build();
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage("old xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")).build());
+		events.add(SessionEvent.builder()
+			.sessionId(SESSION_ID)
+			.branch("orch.researcher")
+			.message(new SystemMessage("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))
+			.build());
+		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage("new")).build());
+		events.addAll(turn("hi", "ok"));
+
+		assertThat(trigger.shouldCompact(requestWith(events))).isFalse();
+		assertThat(TokenCountTrigger.builder()
+			.threshold(32)
+			.tokenCountEstimator(CHAR_ESTIMATOR)
+			.build()
+			.shouldCompact(requestWith(events))).isTrue();
 	}
 
 	@Test

@@ -148,6 +148,22 @@ final class CompactionUtils {
 	}
 
 	/**
+	 * Returns the events whose tokens count toward a token budget: the events actually
+	 * sent to the model with the root (full) view of the conversation. That is the root
+	 * agent's latest stored system message, the synthetic summary events and the real
+	 * conversation. Sub-agent system messages are sent only to their own sub-agent, and
+	 * superseded system messages are not sent at all, so neither is counted.
+	 * {@link TokenCountCompactionStrategy} and {@link TokenCountTrigger} both use this, so
+	 * the trigger's threshold and the strategy's budget measure the same thing.
+	 */
+	static List<SessionEvent> budgetedEvents(List<SessionEvent> events) {
+		List<SessionEvent> pinned = pinnedSystemEvents(events);
+		return events.stream()
+			.filter(e -> e.isSynthetic() || !isStoredSystemEvent(e) || (e.isRootEvent() && pinned.contains(e)))
+			.toList();
+	}
+
+	/**
 	 * Result for a pass where the strategy's budget needs no cut. The events are returned
 	 * unchanged when there are no superseded system events; otherwise only the superseded
 	 * ones are archived, so "latest wins" is applied whenever compaction runs.
