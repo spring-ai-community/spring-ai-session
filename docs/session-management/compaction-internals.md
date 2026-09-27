@@ -269,7 +269,7 @@ flowchart TB
     noop -- yes --> r0([Result: events unchanged, nothing archived])
     noop -- no --> r1(["Result: [pinned] + [synthetic] + [real]<br/>archived = superseded"])
 
-    budget -- no --> raw["3. Compute the raw cut index into real<br/>SlidingWindow / Recursive: after the N-th oldest root event<br/>TokenCount: walk newest to oldest until the budget is spent<br/>TurnWindow: group into turns, cut whole turns"]
+    budget -- no --> raw["3. Compute the raw cut index into real<br/>SlidingWindow / Recursive: after the N-th oldest root event<br/>TokenCount: walk newest to oldest within<br/>maxTokens minus the preserved events' tokens<br/>TurnWindow: group into turns, cut whole turns"]
     raw --> snap["4. snapToTurnStart: move the cut FORWARD to the next<br/>root-level USER event (sub-agent USER events are skipped)"]
     snap --> end1{"cut == real.size()?<br/>(no later turn start)"}
     end1 -- no --> cut

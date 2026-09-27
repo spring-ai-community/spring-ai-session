@@ -212,9 +212,10 @@ TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEst
 
 **Algorithm**
 
-1. Separate the latest stored system message and synthetic events (always preserved; their
-   token cost is deducted from the budget first); earlier stored system messages are
-   archived.
+1. Separate the latest stored system message of each branch and synthetic events (always
+   preserved; their token cost is deducted from the budget first, see
+   [How the budget is spent](#how-the-budget-is-spent)); earlier stored system messages
+   are archived.
 2. Walk real events from newest to oldest, accumulating token cost (estimated via the
    shared event formatter — see [Token accounting](#token-accounting) above). Stop at the
    first event that would exceed the remaining budget. This produces a **contiguous
@@ -224,6 +225,33 @@ TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEst
    safety). If that would leave nothing, keep the most recent turn even though it exceeds
    the budget.
 4. Return: `[system messages] + [synthetics] + [kept events]`.
+
+#### How the budget is spent
+
+The events that are always preserved are sent to the model too, so their tokens come off
+`maxTokens` before any conversation is considered:
+
+```
+remainingBudget = maxTokens − tokens(kept system messages + synthetic summary events)
+```
+
+The conversation gets only `remainingBudget`. For example, with one token per character
+and `maxTokens = 45`:
+
+```
+System: sys               11 tokens   kept, deducted first → remainingBudget = 34
+User: hi / Assistant: ok  21 tokens   turn 1
+User: yo / Assistant: ok  21 tokens   turn 2 (newest)
+```
+
+Both turns (42) would fit in 45, but only turn 2 fits in 34, so turn 1 is archived.
+
+If the preserved events use up the whole budget (`remainingBudget ≤ 0`), for example
+several large stored system prompts, one per branch, the walk keeps nothing. Step 3 then
+keeps the newest turn anyway, so **the newest turn is never archived**, but every
+compaction drops all older context. Size `maxTokens` so that the preserved events leave
+room for the conversation; keeping system prompts out of the session (see
+[System Messages](system-messages.md)) avoids the deduction altogether.
 
 ### RecursiveSummarizationCompactionStrategy
 
