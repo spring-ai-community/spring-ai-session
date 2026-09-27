@@ -78,6 +78,23 @@ public interface SessionRepository {
 	 */
 	void delete(String sessionId);
 
+	/**
+	 * Deletes every session whose TTL has expired before the given instant, together with
+	 * its events, and returns the number of sessions deleted.
+	 * <p>
+	 * Implementations should check the expiry and delete in one atomic step, so that a
+	 * session whose TTL was extended concurrently (e.g. by {@link #save(Session)}) is not
+	 * deleted. The default implementation is not atomic: it deletes the sessions returned
+	 * by {@link #findExpiredSessionIds(Instant)} one by one.
+	 * @param before the expiry cut-off
+	 * @return the number of sessions deleted
+	 */
+	default int deleteExpiredSessions(Instant before) {
+		List<String> expired = findExpiredSessionIds(before);
+		expired.forEach(this::delete);
+		return expired.size();
+	}
+
 	// Events
 
 	/**

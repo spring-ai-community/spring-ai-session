@@ -81,6 +81,16 @@ class JdbcSessionRepositoryPostgresqlIT {
 	}
 
 	@Test
+	void appendReplayInsideACallerTransactionKeepsItUsable() {
+		DialectScenarios.appendReplayInsideACallerTransactionKeepsItUsable(this.repository, this.jdbcTemplate);
+	}
+
+	@Test
+	void deleteExpiredSessionsDeletesOnlyExpiredSessions() {
+		DialectScenarios.deleteExpiredSessionsDeletesOnlyExpiredSessions(this.repository);
+	}
+
+	@Test
 	void repeatedRecursiveSummarizationNeverReordersTheLog() {
 		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
 	}

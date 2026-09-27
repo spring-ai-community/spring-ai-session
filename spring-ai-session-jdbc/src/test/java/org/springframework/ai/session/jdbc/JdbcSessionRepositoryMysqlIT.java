@@ -79,6 +79,17 @@ class JdbcSessionRepositoryMysqlIT {
 	}
 
 	@Test
+	void appendReplayInsideACallerTransactionKeepsItUsable() {
+		DialectScenarios.appendReplayInsideACallerTransactionKeepsItUsable(this.repository,
+				new JdbcTemplate(dataSource));
+	}
+
+	@Test
+	void deleteExpiredSessionsDeletesOnlyExpiredSessions() {
+		DialectScenarios.deleteExpiredSessionsDeletesOnlyExpiredSessions(this.repository);
+	}
+
+	@Test
 	void repeatedRecursiveSummarizationNeverReordersTheLog() {
 		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
 	}

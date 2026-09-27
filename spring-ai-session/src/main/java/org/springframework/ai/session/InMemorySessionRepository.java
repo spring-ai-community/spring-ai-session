@@ -101,11 +101,33 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
+	public int deleteExpiredSessions(Instant before) {
+		Assert.notNull(before, "before must not be null");
+		int[] deleted = { 0 };
+		for (String sessionId : this.store.keySet()) {
+			// Atomic per session: a concurrent save() that extends the TTL wins
+			this.store.computeIfPresent(sessionId, (id, data) -> {
+				if (isExpired(data, before)) {
+					deleted[0]++;
+					return null;
+				}
+				return data;
+			});
+		}
+		return deleted[0];
+	}
+
+	private static boolean isExpired(SessionData data, Instant before) {
+		Instant expiresAt = data.session().expiresAt();
+		return expiresAt != null && expiresAt.isBefore(before);
+	}
+
+	@Override
 	public List<String> findExpiredSessionIds(Instant before) {
 		Assert.notNull(before, "before must not be null");
 		return this.store.values()
 			.stream()
-			.filter(d -> d.session().expiresAt() != null && d.session().expiresAt().isBefore(before))
+			.filter(d -> isExpired(d, before))
 			.map(d -> d.session().id())
 			.toList();
 	}

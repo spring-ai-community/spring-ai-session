@@ -363,7 +363,7 @@ sequenceDiagram
 
     Note over App,Repo: later, from a scheduler
     App->>Svc: deleteExpiredSessions(now)
-    Svc->>Repo: findExpiredSessionIds(now), then delete(id) for each
+    Svc->>Repo: deleteExpiredSessions(now)
     Note over Repo: the session and all its events are removed
 ```
 
@@ -410,5 +410,7 @@ void sweepExpiredSessions() {
 }
 ```
 
-`deleteExpiredSessions` finds all sessions whose `expiresAt` is before the supplied
-instant and deletes them one by one. It returns the count of sessions removed.
+`deleteExpiredSessions` deletes all sessions whose `expiresAt` is before the supplied
+instant, together with their events, and returns the count of sessions removed. The
+built-in repositories check the expiry and delete in one atomic step, so a session whose
+TTL was extended concurrently is kept.

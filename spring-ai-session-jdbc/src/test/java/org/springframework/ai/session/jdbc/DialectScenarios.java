@@ -21,6 +21,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.TimeZone;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -46,6 +47,8 @@ import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -206,6 +209,46 @@ final class DialectScenarios {
 				"a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5", "a5", "u6", "a6", "u7", "a7", "sys-2");
 		assertThat(labels(service.getEvents(id, EventFilter.active()))).containsExactly("Σ?", "Σ:summary 3", "u8",
 				"a8", "u9", "sys-3", "a9");
+	}
+
+	/**
+	 * A replayed append inside a caller-managed transaction must not break it: the replay
+	 * is detected before inserting, so no duplicate-key error marks the shared
+	 * transaction rollback-only (or, on PostgreSQL, aborts it).
+	 */
+	static void appendReplayInsideACallerTransactionKeepsItUsable(JdbcSessionRepository repository,
+			JdbcTemplate jdbcTemplate) {
+		String sessionId = newSession(repository);
+		SessionEvent event = SessionEvent.builder().sessionId(sessionId).message(new UserMessage("once")).build();
+		repository.appendEvent(event);
+		long version = repository.getEventVersion(sessionId);
+		TransactionTemplate callerTransaction = new TransactionTemplate(
+				new DataSourceTransactionManager(Objects.requireNonNull(jdbcTemplate.getDataSource())));
+
+		callerTransaction.executeWithoutResult(status -> {
+			repository.appendEvent(event);
+			append(repository, sessionId, "after");
+		});
+
+		assertThat(texts(repository, sessionId, EventFilter.all())).containsExactly("once", "after");
+		// The replay did not count as an appended event
+		assertThat(repository.getEventVersion(sessionId)).isEqualTo(version + 1);
+	}
+
+	/** Only expired sessions are deleted, together with their events. */
+	static void deleteExpiredSessionsDeletesOnlyExpiredSessions(JdbcSessionRepository repository) {
+		Instant now = Instant.now();
+		String expired = UUID.randomUUID().toString();
+		String extended = UUID.randomUUID().toString();
+		repository.save(Session.builder().id(expired).userId("user-ttl").expiresAt(now.minusSeconds(60)).build());
+		repository.save(Session.builder().id(extended).userId("user-ttl").expiresAt(now.plusSeconds(60)).build());
+		append(repository, expired, "gone");
+		append(repository, extended, "kept");
+
+		assertThat(repository.deleteExpiredSessions(now)).isEqualTo(1);
+		assertThat(repository.findById(expired)).isNull();
+		assertThat(repository.findEvents(expired, EventFilter.all())).isEmpty();
+		assertThat(texts(repository, extended, EventFilter.all())).containsExactly("kept");
 	}
 
 	/** Appends messages by label: "u…" user, "a…" assistant, "sys…" system. */

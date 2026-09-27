@@ -48,6 +48,10 @@ compaction settings, and pass only the task in and the result back. See
   still puts system messages first in the prompt. A custom loop that reads the active
   window must put the system message first itself (see
   [System Messages](session-management/system-messages.md)).
+- **JDBC idempotent replay works inside a caller's transaction.** `appendEvent` now looks
+  the event id up before inserting instead of catching the duplicate-key error. A retried
+  append inside an application-managed transaction no longer marks it rollback-only (or,
+  on PostgreSQL, aborts it).
 
 ### JDBC: the `branch` column is unused
 
@@ -83,6 +87,15 @@ position of new events. Existing events are kept as they are stored, so returnin
 modified copy of an existing event (same id, e.g. with a truncated tool result) or a
 different order for existing events no longer has any effect. To change an event's
 content, archive it and add a new event instead.
+
+### Custom implementers: `SessionRepository.deleteExpiredSessions(Instant)`
+
+`SessionService.deleteExpiredSessions` now delegates to a new `SessionRepository` method,
+`deleteExpiredSessions(Instant before)`. Its default implementation keeps the previous
+behavior (`findExpiredSessionIds`, then `delete` for each), which can delete a session
+whose TTL was extended in between. Override it to check the expiry and delete in one
+atomic step, as the built-in repositories do (JDBC: a single
+`DELETE … WHERE expires_at < ?`).
 
 ### Custom implementers: `JdbcSessionRepositoryDialect.getBranchFilterFragment()` removed
 

@@ -314,6 +314,21 @@ class InMemorySessionRepositoryTests {
 		assertThat(this.repository.findEvents(session.id(), filter)).isEmpty();
 	}
 
+	@Test
+	void deleteExpiredSessionsDeletesOnlyExpiredSessions() {
+		Instant now = Instant.now();
+		this.repository
+			.save(Session.builder().id("expired").userId("user-ttl").expiresAt(now.minusSeconds(60)).build());
+		this.repository
+			.save(Session.builder().id("extended").userId("user-ttl").expiresAt(now.plusSeconds(60)).build());
+		this.repository.save(Session.builder().id("no-ttl").userId("user-ttl").build());
+
+		assertThat(this.repository.deleteExpiredSessions(now)).isEqualTo(1);
+		assertThat(this.repository.findById("expired")).isNull();
+		assertThat(this.repository.findById("extended")).isNotNull();
+		assertThat(this.repository.findById("no-ttl")).isNotNull();
+	}
+
 	private Session buildSession(String userId) {
 		return Session.builder().id(UUID.randomUUID().toString()).userId(userId).build();
 	}

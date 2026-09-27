@@ -104,9 +104,7 @@ public class DefaultSessionService implements SessionService {
 	@Override
 	public int deleteExpiredSessions(Instant before) {
 		Assert.notNull(before, "before must not be null");
-		List<String> expired = this.sessionRepository.findExpiredSessionIds(before);
-		expired.forEach(this.sessionRepository::delete);
-		return expired.size();
+		return this.sessionRepository.deleteExpiredSessions(before);
 	}
 
 	@Override

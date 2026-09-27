@@ -92,10 +92,12 @@ import org.springframework.util.Assert;
  *
  * <h2>Idempotent append</h2>
  * <p>
- * {@code AI_SESSION_EVENT.id} is the table's primary key, so {@link #appendEvent} relies
- * on the resulting unique-constraint violation (translated by Spring JDBC to
- * {@link org.springframework.dao.DuplicateKeyException}) to detect a retried append of an
- * event whose id was already committed, and treats it as a no-op instead of propagating.
+ * {@link #appendEvent} looks the event id up under the session row lock before inserting.
+ * An id already stored for the same session is a retried append and a no-op (the version
+ * is not incremented); an id used by another session is rejected. Checking first, rather
+ * than relying on a unique-constraint violation of the {@code AI_SESSION_EVENT.id}
+ * primary key, keeps a replay from marking a caller's surrounding transaction
+ * rollback-only (or, on PostgreSQL, aborting it).
  *
  * <h2>Event ordering</h2>
  * <p>
@@ -130,6 +132,14 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 	private static final String SELECT_EXPIRED_SESSION_IDS =
 		"SELECT id FROM AI_SESSION WHERE expires_at IS NOT NULL AND expires_at < ?";
+
+	// Checks the expiry in the DELETE itself, so a concurrently extended TTL is respected.
+	// Events are removed by the ON DELETE CASCADE foreign key.
+	private static final String DELETE_EXPIRED_SESSIONS =
+		"DELETE FROM AI_SESSION WHERE expires_at IS NOT NULL AND expires_at < ?";
+
+	private static final String DECREMENT_EVENT_VERSION =
+		"UPDATE AI_SESSION SET event_version = event_version - 1 WHERE id = ?";
 
 	private static final String DELETE_SESSION =
 		"DELETE FROM AI_SESSION WHERE id = ?";
@@ -246,6 +256,12 @@ public final class JdbcSessionRepository implements SessionRepository {
 	}
 
 	@Override
+	public int deleteExpiredSessions(Instant before) {
+		Assert.notNull(before, "before must not be null");
+		return this.jdbcTemplate.update(DELETE_EXPIRED_SESSIONS, toUtc(before));
+	}
+
+	@Override
 	public void delete(String sessionId) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		this.jdbcTemplate.update(DELETE_SESSION, sessionId);
@@ -271,14 +287,34 @@ public final class JdbcSessionRepository implements SessionRepository {
 				if (updated == 0) {
 					throw new IllegalArgumentException("Session not found: " + sessionId);
 				}
+				// Detect a replay before inserting, under the session row lock, instead of
+				// relying on a failed INSERT: a duplicate-key error would mark a caller's
+				// surrounding transaction rollback-only, and on PostgreSQL abort it.
+				List<String> owner = this.jdbcTemplate.queryForList(SELECT_EVENT_SESSION_ID, String.class,
+						event.getId());
+				if (!owner.isEmpty()) {
+					if (!sessionId.equals(owner.get(0))) {
+						throw new IllegalStateException("Event id '" + event.getId()
+								+ "' is already used by another session; event ids must be unique across sessions");
+					}
+					// Idempotent replay: the event was already committed, e.g. a retried
+					// append after a crash. Undo the version bump so the version counts
+					// only appended events.
+					this.jdbcTemplate.update(DECREMENT_EVENT_VERSION, sessionId);
+					logger.debug("appendEvent: event {} already exists for session {}; idempotent replay",
+							event.getId(), sessionId);
+					return null;
+				}
 				insertEvent(event);
 				return null;
 			});
 		}
 		catch (DuplicateKeyException ex) {
-			// Event ids are a table-wide primary key. A collision with an event of a
-			// different session is not a replay -- swallowing it would silently drop
-			// this event -- so reject it.
+			// Only reached when another session inserts the same id concurrently (the
+			// check above runs under this session's lock, not the other's). Event ids are
+			// a table-wide primary key. A collision with an event of a different session
+			// is not a replay -- swallowing it would silently drop this event -- so reject
+			// it.
 			List<String> owner = this.jdbcTemplate.queryForList(SELECT_EVENT_SESSION_ID, String.class,
 					event.getId());
 			if (!owner.isEmpty() && !sessionId.equals(owner.get(0))) {

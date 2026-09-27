@@ -51,8 +51,8 @@ public interface SessionService {
 
 	/**
 	 * Deletes all sessions whose {@code expiresAt} is before {@code before}. Delegates
-	 * to {@link SessionRepository#findExpiredSessionIds(Instant)} then deletes each one.
-	 * Returns the number of sessions deleted.
+	 * to {@link SessionRepository#deleteExpiredSessions(Instant)}, which does not delete a
+	 * session whose TTL was extended concurrently. Returns the number of sessions deleted.
 	 * <p>
 	 * This method does not schedule itself — call it from a {@code @Scheduled} method,
 	 * a Quartz job, or any other scheduler:
