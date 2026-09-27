@@ -52,12 +52,6 @@ import org.springframework.ai.chat.messages.MessageType;
  * </ul>
  *
  * <p>
- * Branch filtering implements the MemGPT / Google ADK isolation rule for multi-agent
- * sessions: an event at branch {@code X} is visible to an agent at branch {@code Y} if
- * {@code X} is {@code null} (a root event), equals {@code Y}, or is a dot-prefix ancestor
- * of {@code Y} (e.g. {@code "orch"} is an ancestor of {@code "orch.researcher"}).
- *
- * <p>
  * Use the static factory methods for common cases or {@link #builder()} for custom
  * combinations:
  *
@@ -66,7 +60,6 @@ import org.springframework.ai.chat.messages.MessageType;
  *     .from(Instant.parse("2025-01-01T00:00:00Z"))
  *     .messageTypes(Set.of(MessageType.USER, MessageType.ASSISTANT))
  *     .excludeSynthetic(true)
- *     .branch("orch.researcher")
  *     .build();
  * }</pre>
  *
@@ -76,8 +69,7 @@ import org.springframework.ai.chat.messages.MessageType;
 public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullable Set<MessageType> messageTypes,
 		boolean excludeSynthetic, @Nullable Integer lastN, @Nullable String keyword,
 		@Nullable List<String> keywords, @Nullable MatchMode matchMode, @Nullable Pattern pattern,
-		@Nullable Integer page, @Nullable Integer pageSize,
-		@Deprecated(since = "0.9.0", forRemoval = true) @Nullable String branch, boolean excludeArchived) {
+		@Nullable Integer page, @Nullable Integer pageSize, boolean excludeArchived) {
 
 	/**
 	 * How multiple {@link #keywords()} combine when matching an event's text.
@@ -143,7 +135,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 				other.keywords != null ? other.keywords : this.keywords,
 				other.matchMode != null ? other.matchMode : this.matchMode,
 				other.pattern != null ? other.pattern : this.pattern, retrieval.page, retrieval.pageSize,
-				other.branch != null ? other.branch : this.branch, other.excludeArchived || this.excludeArchived);
+				other.excludeArchived || this.excludeArchived);
 	}
 
 	/** Default number of results per page used by {@link #keywordSearch(String)}. */
@@ -224,32 +216,6 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		return builder().pattern(pattern).page(0).pageSize(DEFAULT_PAGE_SIZE).build();
 	}
 
-	/**
-	 * Returns events that are visible to an agent at the given {@code agentBranch}.
-	 *
-	 * <p>
-	 * An event is included if its branch is:
-	 * <ul>
-	 * <li>{@code null} — a root event produced before any delegation, visible to all
-	 * agents</li>
-	 * <li>equal to {@code agentBranch} — the agent's own events</li>
-	 * <li>a dot-prefix ancestor of {@code agentBranch} — events from a parent agent (e.g.
-	 * event branch {@code "orch"} is visible to {@code "orch.researcher"})</li>
-	 * </ul>
-	 *
-	 * Peer sub-agents (e.g. {@code "orch.writer"} vs {@code "orch.researcher"}) never see
-	 * each other's events.
-	 * @param agentBranch the dot-separated branch path of the querying agent (e.g.
-	 * {@code "orchestrator.researcher"})
-	 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
-	 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
-	 * reference page).
-	 */
-	@Deprecated(since = "0.9.0", forRemoval = true)
-	public static EventFilter forBranch(String agentBranch) {
-		return builder().branch(agentBranch).build();
-	}
-
 	/** Returns a new {@link Builder} for constructing a custom {@link EventFilter}. */
 	public static Builder builder() {
 		return new Builder();
@@ -262,7 +228,6 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	 * filter. Note: {@link #lastN}, {@link #page}, and {@link #pageSize} are applied at
 	 * the collection level by the repository, not here.
 	 */
-	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	public boolean matches(SessionEvent event) {
 		if (this.excludeSynthetic && event.isSynthetic()) {
 			return false;
@@ -303,21 +268,6 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 				return false;
 			}
 		}
-		if (this.branch != null) {
-			String eventBranch = event.getBranch();
-			if (eventBranch != null) {
-				// eventBranch is visible to filterBranch if it is the same branch or an
-				// ancestor (i.e. filterBranch starts with eventBranch + ".")
-				// TODO: what convention to use for branching trees (. or / or something
-				// else)? Should we support wildcards (e.g. "orch.*")?
-				// TODO: Should we support rootEventId for branch?
-				boolean visible = this.branch.equals(eventBranch) || this.branch.startsWith(eventBranch + ".");
-				if (!visible) {
-					return false;
-				}
-			}
-			// eventBranch == null: root event, visible to all agents
-		}
 		return true;
 	}
 
@@ -349,8 +299,6 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		private @Nullable Integer page;
 
 		private @Nullable Integer pageSize;
-
-		private @Nullable String branch;
 
 		private boolean excludeArchived = false;
 
@@ -461,19 +409,6 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		}
 
 		/**
-		 * Restricts results to events visible to the agent at this dot-separated branch
-		 * path. See {@link EventFilter#forBranch(String)} for the full visibility rule.
-		 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
-		 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
-		 * reference page).
-		 */
-		@Deprecated(since = "0.9.0", forRemoval = true)
-		public Builder branch(@Nullable String branch) {
-			this.branch = branch;
-			return this;
-		}
-
-		/**
 		 * When {@code true}, events archived by compaction are excluded. Used to build the
 		 * active context window; leave {@code false} (the default) for Recall Storage
 		 * searches that must see the full history.
@@ -486,7 +421,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		/** Constructs the {@link EventFilter}. */
 		public EventFilter build() {
 			return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, this.lastN,
-					this.keyword, this.keywords, this.matchMode, this.pattern, this.page, this.pageSize, this.branch,
+					this.keyword, this.keywords, this.matchMode, this.pattern, this.page, this.pageSize,
 					this.excludeArchived);
 		}
 

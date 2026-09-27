@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS AI_SESSION_EVENT (
     message_data    LONGTEXT,
     synthetic       TINYINT(1)    NOT NULL DEFAULT 0,
     archived        TINYINT(1)    NOT NULL DEFAULT 0,
+    -- Unused since 0.10.0 (branch support was removed); kept for existing databases
     branch          VARCHAR(500),
     metadata        LONGTEXT,
     UNIQUE KEY uq_ai_session_event_seq (seq),

@@ -38,7 +38,7 @@ import org.springframework.util.Assert;
  * {@code UserMessage}, {@code AssistantMessage}, {@code SystemMessage}, and
  * {@code ToolResponseMessage} classes carry the actual content. {@code SessionEvent} adds
  * only what {@code Message} intentionally lacks: identity, ordering, session-level
- * provenance, and agent-branch attribution.
+ * provenance and compaction state.
  *
  * <p>
  * The wrapped {@code Message} already encodes the event type via its {@link MessageType}:
@@ -78,18 +78,15 @@ public final class SessionEvent {
 
 	private final Map<String, Object> metadata;
 
-	@Nullable private final String branch;
-
 	private final boolean archived;
 
 	private SessionEvent(String id, String sessionId, Instant timestamp, Message message, Map<String, Object> metadata,
-			@Nullable String branch, boolean archived) {
+			boolean archived) {
 		this.id = id;
 		this.sessionId = sessionId;
 		this.timestamp = timestamp;
 		this.message = message;
 		this.metadata = Map.copyOf(metadata);
-		this.branch = branch;
 		this.archived = archived;
 	}
 
@@ -122,34 +119,6 @@ public final class SessionEvent {
 	}
 
 	/**
-	 * Dot-separated agent hierarchy path that produced this event (e.g.
-	 * {@code "orchestrator.researcher"}). {@code null} for root-level events that predate
-	 * any delegation. Used by {@link EventFilter#forBranch(String)} to isolate peer
-	 * sub-agents' histories from each other.
-	 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
-	 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
-	 * reference page).
-	 */
-	@Deprecated(since = "0.9.0", forRemoval = true)
-	@Nullable public String getBranch() {
-		return this.branch;
-	}
-
-	/**
-	 * Returns {@code true} if this event belongs to the root conversation thread, i.e.
-	 * was not produced inside any delegated sub-agent branch. Root events have a
-	 * {@code null} branch.
-	 * @return {@code true} if this event is a root-level event, {@code false} otherwise
-	 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
-	 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
-	 * reference page).
-	 */
-	@Deprecated(since = "0.9.0", forRemoval = true)
-	public boolean isRootEvent() {
-		return (this.branch == null);
-	}
-
-	/**
 	 * Returns {@code true} if this event has been archived by compaction. Archived events
 	 * are removed from the active context window injected into the prompt, but are
 	 * retained in the event log and remain searchable via the Recall Storage tools (see
@@ -172,8 +141,7 @@ public final class SessionEvent {
 		if (this.archived) {
 			return this;
 		}
-		return new SessionEvent(this.id, this.sessionId, this.timestamp, this.message, this.metadata, this.branch,
-				true);
+		return new SessionEvent(this.id, this.sessionId, this.timestamp, this.message, this.metadata, true);
 	}
 
 	/**
@@ -228,7 +196,7 @@ public final class SessionEvent {
 	 *
 	 * <p>
 	 * Defaults: {@code id} is auto-generated (random UUID), {@code timestamp} is
-	 * {@link Instant#now()}, {@code metadata} is empty, {@code branch} is {@code null},
+	 * {@link Instant#now()}, {@code metadata} is empty,
 	 * {@code archived} is {@code false}. {@code sessionId} and {@code message} are required.
 	 */
 	public static final class Builder {
@@ -242,8 +210,6 @@ public final class SessionEvent {
 		@Nullable private Message message;
 
 		private Map<String, Object> metadata = new HashMap<>();
-
-		@Nullable private String branch;
 
 		private boolean archived = false;
 
@@ -287,19 +253,6 @@ public final class SessionEvent {
 		}
 
 		/**
-		 * The dot-separated agent path that produced this event. Pass {@code null} (the
-		 * default) for root-level events.
-		 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
-		 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
-		 * reference page).
-		 */
-		@Deprecated(since = "0.9.0", forRemoval = true)
-		public Builder branch(@Nullable String branch) {
-			this.branch = branch;
-			return this;
-		}
-
-		/**
 		 * Marks the event as archived. Archived events are excluded from the active context
 		 * window but retained for Recall Storage search. Defaults to {@code false}.
 		 */
@@ -315,7 +268,7 @@ public final class SessionEvent {
 			Assert.notNull(this.timestamp, "timestamp must not be null");
 			Assert.notNull(this.message, "message must not be null");
 			return new SessionEvent(this.id, this.sessionId, this.timestamp,
-					Objects.requireNonNull(this.message, "message must not be null"), this.metadata, this.branch,
+					Objects.requireNonNull(this.message, "message must not be null"), this.metadata,
 					this.archived);
 		}
 

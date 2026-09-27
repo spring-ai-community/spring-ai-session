@@ -35,7 +35,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Contract: fields from {@code other} win when non-null/non-default;
  * {@code excludeSynthetic} is OR-ed so either side can opt in.
  */
-@SuppressWarnings("removal") // exercises the deprecated branch support
 class EventFilterMergeTests {
 
 	// --- other fields win when set ---
@@ -45,13 +44,6 @@ class EventFilterMergeTests {
 		EventFilter base = EventFilter.lastN(10);
 		EventFilter other = EventFilter.lastN(3);
 		assertThat(base.merge(other).lastN()).isEqualTo(3);
-	}
-
-	@Test
-	void otherBranchOverridesBase() {
-		EventFilter base = EventFilter.forBranch("orch");
-		EventFilter other = EventFilter.forBranch("orch.researcher");
-		assertThat(base.merge(other).branch()).isEqualTo("orch.researcher");
 	}
 
 	@Test
@@ -137,10 +129,10 @@ class EventFilterMergeTests {
 	@Test
 	void basePaginationKeptWhenOtherHasNoRetrievalModifier() {
 		EventFilter base = EventFilter.builder().page(3).pageSize(10).build();
-		EventFilter merged = base.merge(EventFilter.forBranch("orch"));
+		EventFilter merged = base.merge(EventFilter.builder().keyword("orch").build());
 		assertThat(merged.page()).isEqualTo(3);
 		assertThat(merged.pageSize()).isEqualTo(10);
-		assertThat(merged.branch()).isEqualTo("orch");
+		assertThat(merged.keyword()).isEqualTo("orch");
 	}
 
 	@Test
@@ -148,13 +140,6 @@ class EventFilterMergeTests {
 		EventFilter base = EventFilter.lastN(5);
 		EventFilter other = EventFilter.all();
 		assertThat(base.merge(other).lastN()).isEqualTo(5);
-	}
-
-	@Test
-	void baseBranchKeptWhenOtherHasNoBranch() {
-		EventFilter base = EventFilter.forBranch("orch.writer");
-		EventFilter other = EventFilter.all();
-		assertThat(base.merge(other).branch()).isEqualTo("orch.writer");
 	}
 
 	// --- excludeSynthetic is OR-ed ---

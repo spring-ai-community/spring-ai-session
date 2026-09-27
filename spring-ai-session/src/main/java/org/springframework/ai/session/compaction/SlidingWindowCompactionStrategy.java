@@ -31,17 +31,15 @@ import org.springframework.util.Assert;
  *
  * <h3>Algorithm</h3>
  * <ol>
- * <li>Separate the latest stored system message of each branch (that agent's system prompt — earlier stored system
- * messages are superseded and archived; see {@code CompactionUtils#pinnedSystemEvents}) and synthetic
- * summary events — they are always preserved, placed first in the result, and do not
- * consume slots from the {@code maxEvents} budget.</li>
- * <li>Compute a raw cut index based on root (non-branch) real events only. Branch events
- * produced by sub-agents do not consume slots from the {@code maxEvents} budget — they
- * are always included with their enclosing root turn.</li>
- * <li>Snap the raw cut index forward to the nearest root-level
+ * <li>Separate the latest stored system message (the system prompt — earlier stored
+ * system messages are superseded and archived; see
+ * {@code CompactionUtils#pinnedSystemEvents}) and synthetic summary events — they are
+ * always preserved, placed first in the result, and do not consume slots from the
+ * {@code maxEvents} budget.</li>
+ * <li>Compute a raw cut index that keeps the last {@code maxEvents} real events.</li>
+ * <li>Snap the raw cut index forward to the nearest
  * {@link org.springframework.ai.chat.messages.MessageType#USER} event so the kept window
- * always starts at a turn boundary. Sub-agent USER messages are skipped because they are
- * turn-internal, not turn starts.</li>
+ * always starts at a turn boundary.</li>
  * <li>Return: {@code [system messages] + [synthetic summaries] + [kept real events]}.</li>
  * </ol>
  *
@@ -70,7 +68,6 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 		this.tokenCountEstimator = tokenCountEstimator;
 	}
 
-	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public CompactionResult compact(CompactionRequest context) {
 
@@ -79,10 +76,9 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 
 		List<SessionEvent> events = context.events();
 
-		// Separate the latest stored system message of each branch (that agent's system prompt — kept
-		// and placed first), superseded earlier ones (archived), and synthetic summary
-		// events (always preserved) from the real conversation events the window applies
-		// to.
+		// Separate the latest stored system message (the system prompt — kept and placed
+		// first), superseded earlier ones (archived), and synthetic summary events (always
+		// preserved) from the real conversation events the window applies to.
 		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
 		List<SessionEvent> supersededSystem = CompactionUtils.supersededSystemEvents(events, pinnedSystem);
 		List<SessionEvent> synthetic = events.stream().filter(SessionEvent::isSynthetic).toList();
@@ -91,37 +87,14 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 
 		// maxEvents controls the real-events window only; system and synthetic summary
 		// events are always preserved on top and do not consume slots from the budget.
-		// Branch events produced inside sub-agent sessions also do not consume slots —
-		// they are always included with their enclosing root turn.
-		int slotsForReal = this.maxEvents;
-
-		// Count only root (non-branch) real events to determine whether compaction is needed
-		// and where to place the raw cut. Branch events tagged with a non-null branch are
-		// turn-internal and are always carried along with their enclosing root turn.
-		long rootEventCount = real.stream().filter(SessionEvent::isRootEvent).count();
-
-		// No-op if root events fit within the available slots
-		if (rootEventCount <= slotsForReal) {
+		// No-op if the real events fit within the available slots.
+		if (real.size() <= this.maxEvents) {
 			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, synthetic, real, supersededSystem,
 					tokens);
 		}
 
-		// Find the index in 'real' just after the last root event to archive.
-		// Walk forward counting root events; place the raw cut right after the
-		// (rootEventCount - slotsForReal)-th root event so snapToTurnStart can advance
-		// it to the next root-level USER event.
-		long rootEventsToArchive = rootEventCount - slotsForReal;
-		int rawCutIndex = 0;
-		long rootSeen = 0;
-		for (int i = 0; i < real.size(); i++) {
-			if (real.get(i).isRootEvent()) {
-				rootSeen++;
-				if (rootSeen == rootEventsToArchive) {
-					rawCutIndex = i + 1;
-					break;
-				}
-			}
-		}
+		// Raw cut: keep the last maxEvents real events
+		int rawCutIndex = real.size() - this.maxEvents;
 
 		// Snap forward to the nearest turn start (USER message) so we never keep a
 		// partial turn — e.g. an assistant reply without its originating user message.

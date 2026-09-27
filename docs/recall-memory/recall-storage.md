@@ -26,12 +26,6 @@ SessionEventTools tools = SessionEventTools.builder(sessionService)
     .pageSize(20)
     .build();
 
-// Sub-agent in a shared multi-agent session: only search events visible to this branch.
-// Deprecated since 0.9.0: prefer a session per sub-agent
-SessionEventTools researcherTools = SessionEventTools.builder(sessionService)
-    .branch("orch.researcher")
-    .build();
-
 ChatClient client = ChatClient.builder(chatModel)
     .defaultTools(tools)
     .defaultAdvisors(advisor)
@@ -87,10 +81,7 @@ are searched too.
 
 !!! note "Multi-agent sessions"
     With a [session per sub-agent](../session-management/multi-agent.md#session-per-sub-agent),
-    each sub-agent's `conversation_search` searches only its own session. With the
-    deprecated branches, where agents share one session, it searches every branch unless the
-    tool instance is built with `.branch("orch.researcher")`, which applies the same
-    visibility rule as `EventFilter.forBranch(...)`.
+    each sub-agent's `conversation_search` searches only its own session.
 
 ---
 

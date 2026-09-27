@@ -36,7 +36,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Tests for {@link TokenCountCompactionStrategy}.
  */
-@SuppressWarnings("removal") // exercises the deprecated branch support
 class TokenCountCompactionStrategyTests {
 
 	private static final String SESSION_ID = "test-session";
@@ -255,56 +254,6 @@ class TokenCountCompactionStrategyTests {
 		assertThat(result.archivedEvents()).isEmpty();
 	}
 
-	// --- branch-awareness ---
-
-	@Test
-	void snapSkipsBranchUserEventOnTurnBoundary() {
-		// Events (CHAR_ESTIMATOR costs based on formatEvent output):
-		//   u1-root "User: u1" = 8, a1-root "Assistant: a1" = 13
-		//   u2-sub  "User: u2" = 8, a2-sub  "Assistant: a2" = 13  (branch="sub")
-		//   u3-root "User: u3" = 8, a3-root "Assistant: a3" = 13
-		//
-		// Backwards scan with budget=40:
-		//   a3-root(13) fits, u3-root(8) → 21 fits, a2-sub(13) → 34 fits,
-		//   u2-sub(8)   → 42 > 40, stop  →  rawCutIndex = 3 (a2-sub)
-		//
-		// snapToTurnStart(real, 3):
-		//   idx=3: a2-sub (branch → not root → skip)
-		//   idx=4: u3-root (root USER → stop)
-		// → cutIndex=4, kept=[u3-root, a3-root]
-		//
-		// Without branch-awareness the old snap would have stopped at u2-sub (branch USER),
-		// leaving the kept window starting on a sub-agent message.
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(40)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
-
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a1")).build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new UserMessage("u2"))
-			.branch("sub")
-			.build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new AssistantMessage("a2"))
-			.branch("sub")
-			.build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u3")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a3")).build());
-
-		CompactionResult result = strategy.compact(requestWith(events));
-
-		// Kept window must start at root USER u3, not branch USER u2
-		assertThat(result.compactedEvents()).hasSize(2);
-		assertThat(result.compactedEvents().get(0).getMessage().getText()).isEqualTo("u3");
-		assertThat(result.compactedEvents().get(1).getMessage().getText()).isEqualTo("a3");
-		assertThat(result.archivedEvents()).hasSize(4); // u1, a1, u2-sub, a2-sub
-	}
-
 	// --- tool call / tool response token counting ---
 
 	@Test
@@ -397,49 +346,16 @@ class TokenCountCompactionStrategyTests {
 	}
 
 	@Test
-	void subAgentSystemPromptsDoNotReduceTheConversationBudget() {
-		// Only the root agent's system prompt is sent with the root/full view of the
-		// conversation; a sub-agent's prompt is sent only to that sub-agent. Deducting it
-		// from the budget would over-count and archive conversation needlessly.
-		// "System: sys" = 11, a 48-token sub-agent prompt, two 21-token turns.
-		// 60 - 11 = 49 leaves room for both turns (42), so nothing is archived.
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(60)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(system("sys"));
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.branch("orch.researcher")
-			.message(new SystemMessage("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))
-			.build());
-		events.addAll(turn("hi", "ok"));
-		events.addAll(turn("yo", "ok"));
-
-		CompactionResult result = strategy.compact(requestWith(events));
-
-		assertThat(result.archivedEvents()).isEmpty();
-	}
-
-	@Test
-	void pinnedSystemMessagesOverTheBudgetStillKeepTheNewestTurn() {
-		// An orchestrator and four sub-agents each store a large system prompt. Together
-		// they exceed maxTokens, leaving no budget for the conversation: the newest turn
-		// must still be kept (retainLastTurn), never the whole conversation archived.
+	void pinnedSystemMessageOverTheBudgetStillKeepsTheNewestTurn() {
+		// A system prompt larger than maxTokens leaves no budget for the conversation: the
+		// newest turn must still be kept (retainLastTurn), never the whole conversation
+		// archived.
 		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
 			.maxTokens(40)
 			.tokenCountEstimator(CHAR_ESTIMATOR)
 			.build();
 		List<SessionEvent> events = new ArrayList<>();
-		events.add(system("orchestrator prompt"));
-		for (String branch : List.of("orch.a", "orch.b", "orch.c", "orch.d")) {
-			events.add(SessionEvent.builder()
-				.sessionId(SESSION_ID)
-				.branch(branch)
-				.message(new SystemMessage("prompt for " + branch))
-				.build());
-		}
+		events.add(system("a system prompt that is longer than the whole token budget"));
 		events.addAll(turn("q1", "r1"));
 		events.addAll(turn("q2", "r2"));
 
@@ -447,8 +363,7 @@ class TokenCountCompactionStrategyTests {
 
 		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("q1", "r1");
 		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
-			.containsExactly("orchestrator prompt", "prompt for orch.a", "prompt for orch.b", "prompt for orch.c",
-					"prompt for orch.d", "q2", "r2");
+			.containsExactly("a system prompt that is longer than the whole token budget", "q2", "r2");
 	}
 
 	// --- helpers ---
@@ -464,21 +379,13 @@ class TokenCountCompactionStrategyTests {
 	}
 
 	@Test
-	void compactionWithoutRootUserMessageArchivesNothing() {
-		// Every event is on a sub-agent branch (e.g. a top-level agent whose advisor has a
-		// branch), so there is no root turn to cut at: nothing may be archived.
+	void compactionWithoutUserMessageArchivesNothing() {
+		// No USER event at all (e.g. only assistant and tool steps), so there is no turn
+		// boundary to cut at: nothing may be archived.
 		List<SessionEvent> events = new ArrayList<>();
 		for (int i = 1; i <= 6; i++) {
-			events.add(SessionEvent.builder()
-				.sessionId(SESSION_ID)
-				.message(new UserMessage("question " + i))
-				.branch("orch")
-				.build());
-			events.add(SessionEvent.builder()
-				.sessionId(SESSION_ID)
-				.message(new AssistantMessage("answer " + i))
-				.branch("orch")
-				.build());
+			events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("step " + i)).build());
+			events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("answer " + i)).build());
 		}
 
 		CompactionResult result = TokenCountCompactionStrategy.builder().maxTokens(10).tokenCountEstimator(CHAR_ESTIMATOR).build().compact(requestWith(events));

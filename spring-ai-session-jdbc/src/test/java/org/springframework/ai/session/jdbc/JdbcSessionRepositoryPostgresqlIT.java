@@ -101,11 +101,6 @@ class JdbcSessionRepositoryPostgresqlIT {
 	}
 
 	@Test
-	void branchWildcardCharactersMatchLiterally() {
-		DialectScenarios.branchWildcardCharactersMatchLiterally(this.repository);
-	}
-
-	@Test
 	void appendConcurrentWithCompactionIsOrderedAfterRetainedEvents() throws Exception {
 		String sessionId = UUID.randomUUID().toString();
 		this.repository.save(Session.builder().id(sessionId).userId("user-pg").build());

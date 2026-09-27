@@ -12,10 +12,10 @@ Claude Code subagents, Microsoft Agent Framework's agent-as-tool, Google ADK's
 `AgentTool` and the OpenAI Agents SDK's `as_tool`. It also follows the common context
 engineering advice to give every sub-agent the minimum context it needs.
 
-!!! warning "Branches are deprecated"
+!!! note "Branches were removed in 0.10.0"
     Earlier versions isolated sub-agents inside **one** session with ADK-style
-    `SessionEvent.branch` labels. That support is deprecated since 0.9.0 and will be
-    removed in 0.10.0. See [Branches (deprecated)](#branches-deprecated).
+    `SessionEvent.branch` labels. That support was deprecated in 0.9.0 and removed in
+    0.10.0; see [Upgrading to 0.10.0](../migration.md#upgrading-to-0100).
 
 ---
 
@@ -138,79 +138,3 @@ List<Session> children = sessionService.findByUserId(userId)
   every session of a user, including sub-agent sessions.
 - **Timeline.** There is no single merged timeline of a multi-agent run. Merge the sessions'
   events by timestamp if you need one.
-
----
-
-## Branches (deprecated)
-
-!!! warning "Deprecated since 0.9.0, removed in 0.10.0"
-    The following APIs are deprecated for removal: `SessionEvent.Builder.branch(...)`,
-    `SessionEvent.getBranch()` and `isRootEvent()`, `EventFilter.forBranch(...)`,
-    `EventFilter.Builder.branch(...)` and `EventFilter.branch()`, and
-    `SessionEventTools.Builder.branch(...)`. Use a
-    [session per sub-agent](#session-per-sub-agent) instead.
-
-Branches follow the [Google ADK `Event.branch`](https://github.com/google/adk-java/blob/main/core/src/main/java/com/google/adk/events/Event.java)
-model: all agents share **one** session, and each event carries a dot-separated path of the
-agent that produced it (`"orch"`, `"orch.researcher"`, `"orch.writer"`). A `null` branch
-marks a root event, such as the end user's message.
-
-### Filtering by branch
-
-`EventFilter.forBranch("orch.researcher")` returns the root events, the ancestors' events
-(`"orch"`) and the agent's own events (`"orch.researcher"`). It hides siblings
-(`"orch.writer"`) and children (`"orch.researcher.summarizer"`). The dot-separator check
-means that `"orch"` is never confused with `"orchestra"`.
-
-`SessionMemoryAdvisor` applies the branch of its `eventFilter` to both sides: it reads the
-agent's view of the session, and it records the agent's user and assistant messages on
-that branch.
-
-```java
-SessionMemoryAdvisor researcherAdvisor = SessionMemoryAdvisor.builder(sessionService)
-    .eventFilter(EventFilter.forBranch("orch.researcher"))
-    .build();
-```
-
-### Visibility flows down, not up
-
-An agent sees its ancestors' events, never its descendants'. The exception is a reader
-**without** a branch filter: `EventFilter.all()`, the advisor's default, sees every event
-of every branch. There is no "root events only" filter.
-
-| Reader's filter | Root events | Ancestor branches | Own branch | Sub-agent and sibling branches |
-|---|---|---|---|---|
-| `EventFilter.all()` (no branch) | yes | — | — | **yes, all of them** |
-| `EventFilter.forBranch("orch")` | yes | — | yes | no |
-| `EventFilter.forBranch("orch.researcher")` | yes | yes (`"orch"`) | yes | no |
-
-### Compaction and branches
-
-Compaction runs over the whole session, all branches at once:
-
-- **Turns are root turns.** Compaction cuts only at root-level `USER` events, and a
-  sub-agent's events are archived or kept together with the root turn that contains them
-  (see [Turn-boundary Safety](compaction.md#turn-boundary-safety)). A sub-agent that grows
-  inside the newest turn is never compacted.
-- **Budgets measure all branches.** The token-based trigger and strategy count every
-  branch's events, even though each agent sends only its own view. The event-count
-  strategies count only root events.
-- **Summaries are visible to every agent.** Synthetic summary events have no branch, so an
-  agent can read a summary of a sibling's work.
-- **No root turn, no compaction.** If the top-level agent is on a branch too, its advisor
-  records the user's messages on that branch, so the session has no root turns. Since
-  0.9.0 compaction then archives nothing (before, `TokenCountCompactionStrategy` archived
-  the whole active window).
-
-### System messages and branches
-
-When system messages are stored (an opt-in), each agent's system prompt is the latest one
-on its own branch, and compaction keeps the latest one of every branch. Only the root
-agent's system message counts toward the token budget. See
-[System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins).
-
-### Recall search and branches
-
-`conversation_search` searches the whole session by default, including sibling agents'
-events. `SessionEventTools.builder(sessionService).branch("orch.researcher")` limits it to
-what that branch can see.

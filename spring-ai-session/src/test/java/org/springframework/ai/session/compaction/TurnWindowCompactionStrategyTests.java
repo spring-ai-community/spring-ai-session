@@ -34,7 +34,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Tests for {@link TurnWindowCompactionStrategy}.
  */
-@SuppressWarnings("removal") // exercises the deprecated branch support
 class TurnWindowCompactionStrategyTests {
 
 	private static final String SESSION_ID = "test-session";
@@ -278,76 +277,6 @@ class TurnWindowCompactionStrategyTests {
 		assertThat(result.tokensEstimatedSaved()).isGreaterThan(0);
 	}
 
-	// --- branch-awareness ---
-
-	@Test
-	void branchUserEventsDoNotInflateTurnCount() {
-		// Root turn 1: [u1, a1, sub-q (branch), sub-a (branch)] — sub-agent exchange inside turn 1
-		// Root turn 2: [u2, a2]
-		// Root turn 3: [u3, a3]
-		// Without branch-awareness the branch USER event would be counted as a 4th turn start,
-		// causing premature archiving.
-		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(2).build();
-
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a1")).build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new UserMessage("sub-q"))
-			.branch("sub")
-			.build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new AssistantMessage("sub-a"))
-			.branch("sub")
-			.build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u2")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a2")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u3")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a3")).build());
-
-		CompactionResult result = strategy.compact(requestWith(events));
-
-		// Exactly 3 root turns; archive root turn 1 (4 events incl. branch), keep turns 2 and 3
-		assertThat(result.archivedEvents()).hasSize(4);
-		assertThat(result.compactedEvents()).hasSize(4);
-		assertThat(result.compactedEvents().get(0).getMessage().getText()).isEqualTo("u2");
-		assertThat(result.compactedEvents().get(2).getMessage().getText()).isEqualTo("u3");
-	}
-
-	@Test
-	void preambleScanSkipsBranchUserEvents() {
-		// Branch events appear before the first root USER — they belong to the preamble.
-		// maxTurns=1 → archive root turn 1, keep root turn 2.
-		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(1).build();
-
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new UserMessage("sub-q"))
-			.branch("sub")
-			.build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new AssistantMessage("sub-a"))
-			.branch("sub")
-			.build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a1")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u2")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a2")).build());
-
-		CompactionResult result = strategy.compact(requestWith(events));
-
-		// Preamble [sub-q, sub-a] preserved; root turn 1 [u1, a1] archived; root turn 2 [u2, a2] kept
-		assertThat(result.archivedEvents()).hasSize(2);
-		assertThat(result.archivedEvents().get(0).getMessage().getText()).isEqualTo("u1");
-		assertThat(result.compactedEvents()).hasSize(4); // [sub-q, sub-a, u2, a2]
-		assertThat(result.compactedEvents().get(0).getMessage().getText()).isEqualTo("sub-q");
-		assertThat(result.compactedEvents().get(2).getMessage().getText()).isEqualTo("u2");
-	}
-
 	@Test
 	void latestSystemMessageIsKeptFirstAndEarlierOnesAreArchived() {
 		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(1).build();
@@ -366,14 +295,10 @@ class TurnWindowCompactionStrategyTests {
 	}
 
 	@Test
-	void subAgentSystemMessageSurvivesWhenItsTurnIsArchived() {
+	void systemMessageSurvivesWhenItsTurnIsArchived() {
 		TurnWindowCompactionStrategy strategy = TurnWindowCompactionStrategy.builder().maxTurns(1).build();
 		List<SessionEvent> events = new ArrayList<>(turn("u1", "a1"));
-		events.add(1, SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.branch("orch.researcher")
-			.message(new SystemMessage("Researcher rules"))
-			.build());
+		events.add(1, system("Researcher rules"));
 		events.addAll(turn("u2", "a2"));
 
 		CompactionResult result = strategy.compact(requestWith(events));
@@ -396,21 +321,13 @@ class TurnWindowCompactionStrategyTests {
 	}
 
 	@Test
-	void compactionWithoutRootUserMessageArchivesNothing() {
-		// Every event is on a sub-agent branch (e.g. a top-level agent whose advisor has a
-		// branch), so there is no root turn to cut at: nothing may be archived.
+	void compactionWithoutUserMessageArchivesNothing() {
+		// No USER event at all (e.g. only assistant and tool steps), so there is no turn
+		// boundary to cut at: nothing may be archived.
 		List<SessionEvent> events = new ArrayList<>();
 		for (int i = 1; i <= 6; i++) {
-			events.add(SessionEvent.builder()
-				.sessionId(SESSION_ID)
-				.message(new UserMessage("question " + i))
-				.branch("orch")
-				.build());
-			events.add(SessionEvent.builder()
-				.sessionId(SESSION_ID)
-				.message(new AssistantMessage("answer " + i))
-				.branch("orch")
-				.build());
+			events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("step " + i)).build());
+			events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("answer " + i)).build());
 		}
 
 		CompactionResult result = TurnWindowCompactionStrategy.builder().maxTurns(1).build().compact(requestWith(events));

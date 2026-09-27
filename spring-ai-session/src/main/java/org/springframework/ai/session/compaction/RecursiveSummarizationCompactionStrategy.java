@@ -42,10 +42,10 @@ import org.springframework.util.Assert;
  *
  * <h3>Algorithm</h3>
  * <ol>
- * <li>Separate the latest stored system message of each branch (that agent's system
- * prompt — always kept verbatim and first, never summarized; earlier ones are superseded
- * and archived; see {@code CompactionUtils#pinnedSystemEvents}) and synthetic summary
- * events from real conversation events.</li>
+ * <li>Separate the latest stored system message (the system prompt — always kept
+ * verbatim and first, never summarized; earlier ones are superseded and archived; see
+ * {@code CompactionUtils#pinnedSystemEvents}) and synthetic summary events from real
+ * conversation events.</li>
  * <li>Keep the last {@code maxEventsToKeep} real events intact (the <em>active
  * window</em>), snapping the cut point forward to the next turn boundary so a partial
  * turn is never kept. If no later turn boundary exists, the most recent turn is kept even
@@ -65,7 +65,7 @@ import org.springframework.util.Assert;
  * summary. This means each summary <em>builds on</em> its predecessors rather than
  * starting from scratch, creating a rolling window of compressed context.
  *
- * <h3>No-op condition</h3> If the number of root (non-branch) real events does not exceed
+ * <h3>No-op condition</h3> If the number of real events does not exceed
  * {@code maxEventsToKeep} no LLM call is made and the events are returned unchanged. If
  * superseded stored system messages are present, only those are
  * archived.
@@ -146,7 +146,6 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		this.eventFormatter = eventFormatter;
 	}
 
-	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public CompactionResult compact(CompactionRequest context) {
 
@@ -155,44 +154,27 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 		List<SessionEvent> events = context.events();
 
-		// The latest stored system message of each branch is that agent's system prompt:
-		// kept verbatim and first, never counted against maxEventsToKeep and never
-		// summarized. Earlier ones are superseded: archived, never summarized.
+		// The latest stored system message is the system prompt: kept verbatim and first,
+		// never counted against maxEventsToKeep and never summarized. Earlier ones are
+		// superseded: archived, never summarized.
 		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
 		List<SessionEvent> supersededSystem = CompactionUtils.supersededSystemEvents(events, pinnedSystem);
 		List<SessionEvent> syntheticEvents = events.stream().filter(SessionEvent::isSynthetic).toList();
 		List<SessionEvent> realEvents = CompactionUtils.compactableEvents(events);
 		ToIntFunction<SessionEvent> tokens = e -> this.tokenCountEstimator.estimate(this.eventFormatter.apply(e));
 
-		// Count only root (non-branch) real events. Branch events from sub-agent sessions
-		// are bundled with their enclosing root turns and do not consume slots from the
-		// maxEventsToKeep budget.
-		long rootEventCount = realEvents.stream().filter(SessionEvent::isRootEvent).count();
-
-		if (rootEventCount <= this.maxEventsToKeep) {
+		if (realEvents.size() <= this.maxEventsToKeep) {
 			// Nothing to summarize — only superseded system messages (if any) are
 			// archived
 			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, syntheticEvents, realEvents,
 					supersededSystem, tokens);
 		}
 
-		// Find the index in realEvents just after the last root event to archive.
-		long rootEventsToArchive = rootEventCount - this.maxEventsToKeep;
-		int rawCutIndex = 0;
-		long rootSeen = 0;
-		for (int i = 0; i < realEvents.size(); i++) {
-			if (realEvents.get(i).isRootEvent()) {
-				rootSeen++;
-				if (rootSeen == rootEventsToArchive) {
-					rawCutIndex = i + 1;
-					break;
-				}
-			}
-		}
+		// Raw cut: keep the last maxEventsToKeep real events
+		int rawCutIndex = realEvents.size() - this.maxEventsToKeep;
 
-		// Snap forward to the nearest root-level turn start (USER message) so the active
-		// window always begins at a turn boundary and is never a partial turn.
-		// Sub-agent USER messages (branch != null) are skipped — they are turn-internal.
+		// Snap forward to the nearest turn start (USER message) so the active window
+		// always begins at a turn boundary and is never a partial turn.
 		// If no later turn start exists (the newest turn alone exceeds the budget), keep
 		// that last turn rather than archiving the whole active window.
 		int cutIndex = CompactionUtils.retainLastTurn(realEvents,
@@ -213,8 +195,7 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		List<SessionEvent> overlapEvents = activeWindow.subList(0, Math.min(this.overlapSize, activeWindow.size()));
 
 		// System messages are configuration, not conversation, so none is ever
-		// summarized.
-		// Stored ones (every branch) were separated above; this also guards the overlap
+		// summarized. Stored ones were separated above; this also guards the overlap
 		// and any other system-typed event from reaching the summarizer.
 		List<SessionEvent> toSummarize = withoutSystemMessages(toArchive);
 

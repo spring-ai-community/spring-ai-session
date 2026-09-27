@@ -134,8 +134,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private static final String INSERT_EVENT =
 		"INSERT INTO AI_SESSION_EVENT"
 		+ " (id, session_id, timestamp, message_type, message_content, message_data,"
-		+ "  synthetic, archived, branch, metadata)"
-		+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		+ "  synthetic, archived, metadata)"
+		+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 	private static final String INCREMENT_EVENT_VERSION =
 		"UPDATE AI_SESSION SET event_version = event_version + 1 WHERE id = ?";
@@ -163,7 +163,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 	private static final String SELECT_EVENTS_BASE =
 		"SELECT e.id, e.session_id, e.timestamp, e.message_type, e.message_content,"
-		+ "       e.message_data, e.synthetic, e.archived, e.branch, e.metadata"
+		+ "       e.message_data, e.synthetic, e.archived, e.metadata"
 		+ " FROM AI_SESSION_EVENT e"
 		+ " WHERE e.session_id = ? ";
 
@@ -337,7 +337,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 		return result.isEmpty() ? 0L : (result.get(0) != null ? result.get(0) : 0L);
 	}
 
-	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public List<SessionEvent> findEvents(String sessionId, EventFilter filter) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
@@ -379,13 +378,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 		if (filter.excludeArchived()) {
 			sql.append("AND e.archived = ? ");
 			params.add(false);
-		}
-		if (filter.branch() != null) {
-			// Visibility: null branch (root events) OR exact match OR caller is a
-			// descendant (filterBranch starts with eventBranch + '.')
-			sql.append(this.dialect.getBranchFilterFragment());
-			params.add(filter.branch());
-			params.add(filter.branch());
 		}
 		if (filter.keyword() != null) {
 			sql.append(this.dialect.getKeywordFilterFragment()).append(" ");
@@ -477,18 +469,16 @@ public final class JdbcSessionRepository implements SessionRepository {
 		return "%" + escaped + "%";
 	}
 
-	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	private void insertEvent(SessionEvent event) {
 		Message msg = event.getMessage();
 		this.jdbcTemplate.update(INSERT_EVENT, event.getId(), event.getSessionId(), toUtc(event.getTimestamp()),
 				msg.getMessageType().name(), msg.getText(), messageDataToJson(msg), event.isSynthetic(),
-				event.isArchived(), event.getBranch(), toJson(event.getMetadata()));
+				event.isArchived(), toJson(event.getMetadata()));
 	}
 
 	/**
 	 * Inserts the supplied events using a JDBC batch operation.
 	 */
-	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	private void batchInsertEvents(List<SessionEvent> events) {
 		this.jdbcTemplate.batchUpdate(INSERT_EVENT, events, events.size(), (ps, event) -> {
 			Message msg = event.getMessage();
@@ -500,8 +490,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 			ps.setString(6, messageDataToJson(msg));
 			ps.setBoolean(7, event.isSynthetic());
 			ps.setBoolean(8, event.isArchived());
-			ps.setString(9, event.getBranch());
-			ps.setString(10, toJson(event.getMetadata()));
+			ps.setString(9, toJson(event.getMetadata()));
 		});
 	}
 
@@ -643,7 +632,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 	private class SessionEventRowMapper implements RowMapper<SessionEvent> {
 
-		@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 		@Override
 		public SessionEvent mapRow(ResultSet rs, int rowNum) throws SQLException {
 			MessageType messageType = MessageType.valueOf(rs.getString("message_type"));
@@ -661,7 +649,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 				.sessionId(rs.getString("session_id"))
 				.timestamp(Objects.requireNonNull(fromUtc(rs, "timestamp")))
 				.message(message)
-				.branch(rs.getString("branch"))
 				.archived(rs.getBoolean("archived"))
 				.metadata(metadata)
 				.build();

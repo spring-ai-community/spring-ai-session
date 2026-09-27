@@ -43,7 +43,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  * database: {@code LIKE}-based filters treat {@code %}, {@code _} and the {@code !} escape
  * character literally, and timestamps are stored as UTC independent of the JVM time zone.
  */
-@SuppressWarnings("removal") // exercises the deprecated branch support
 final class DialectScenarios {
 
 	private DialectScenarios() {
@@ -52,7 +51,7 @@ final class DialectScenarios {
 	static void keywordWildcardCharactersMatchLiterally(JdbcSessionRepository repository) {
 		String sessionId = newSession(repository);
 		for (String text : List.of("100% done", "1000 done", "snake_case", "snakeXcase", "a!b", "ab")) {
-			append(repository, sessionId, text, null);
+			append(repository, sessionId, text);
 		}
 
 		assertThat(texts(repository, sessionId, EventFilter.keywordSearch("100%"))).containsExactly("100% done");
@@ -60,20 +59,6 @@ final class DialectScenarios {
 		assertThat(texts(repository, sessionId, EventFilter.keywordSearch("a!b"))).containsExactly("a!b");
 		assertThat(texts(repository, sessionId, EventFilter.keywordsSearch(List.of("0%", "e_c"), MatchMode.ANY)))
 			.containsExactly("100% done", "snake_case");
-	}
-
-	static void branchWildcardCharactersMatchLiterally(JdbcSessionRepository repository) {
-		String sessionId = newSession(repository);
-		append(repository, sessionId, "root", null);
-		append(repository, sessionId, "underscore", "a_b");
-		append(repository, sessionId, "percent", "a%");
-
-		// "a_b" / "a%" must not act as wildcards matching the unrelated branch "axb.c".
-		assertThat(texts(repository, sessionId, EventFilter.forBranch("axb.c"))).containsExactly("root");
-		assertThat(texts(repository, sessionId, EventFilter.forBranch("a_b.c"))).containsExactly("root",
-				"underscore");
-		assertThat(texts(repository, sessionId, EventFilter.forBranch("a%.child"))).containsExactly("root",
-				"percent");
 	}
 
 	static void timestampsAreStoredAsUtcRegardlessOfJvmTimeZone(JdbcSessionRepository repository,
@@ -113,7 +98,7 @@ final class DialectScenarios {
 		String sessionId = UUID.randomUUID().toString();
 		Instant created = Instant.parse("2026-01-01T00:00:00Z");
 		repository.save(Session.builder().id(sessionId).userId("user-1").createdAt(created).build());
-		append(repository, sessionId, "kept", null);
+		append(repository, sessionId, "kept");
 
 		Instant laterExpiry = Instant.parse("2027-01-01T00:00:00Z");
 		Session saved = repository.save(Session.builder()
@@ -166,9 +151,8 @@ final class DialectScenarios {
 		return sessionId;
 	}
 
-	private static void append(JdbcSessionRepository repository, String sessionId, String text, String branch) {
-		repository
-			.appendEvent(SessionEvent.builder().sessionId(sessionId).message(new UserMessage(text)).branch(branch).build());
+	private static void append(JdbcSessionRepository repository, String sessionId, String text) {
+		repository.appendEvent(SessionEvent.builder().sessionId(sessionId).message(new UserMessage(text)).build());
 	}
 
 	private static List<String> texts(JdbcSessionRepository repository, String sessionId, EventFilter filter) {

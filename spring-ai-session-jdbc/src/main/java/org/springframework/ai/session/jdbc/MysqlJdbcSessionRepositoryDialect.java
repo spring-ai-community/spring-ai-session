@@ -43,11 +43,4 @@ public class MysqlJdbcSessionRepositoryDialect implements JdbcSessionRepositoryD
 		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
 	}
 
-	@Override
-	public String getBranchFilterFragment() {
-		// || is logical OR in MySQL/MariaDB; use CONCAT() for string concatenation.
-		return "AND (e.branch IS NULL OR e.branch = ? OR ? LIKE CONCAT("
-				+ "REPLACE(REPLACE(REPLACE(e.branch, '!', '!!'), '%', '!%'), '_', '!_'), '.%') ESCAPE '!') ";
-	}
-
 }

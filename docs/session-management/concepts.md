@@ -56,18 +56,17 @@ what `Message` intentionally omits: identity, ownership, ordering, and framework
 | `timestamp` | Chronological ordering (`Instant.now()` by default) |
 | `message` | The Spring AI message — no duplication of content |
 | `metadata` | Framework flags such as `METADATA_SYNTHETIC` and `METADATA_COMPACTION_SOURCE` |
-| `branch` | Dot-separated agent path (e.g. `"orch.researcher"`); `null` for root-level events. Deprecated since 0.9.0, see [Multi-Agent](multi-agent.md) |
 | `archived` | `true` once compaction has moved the event out of the active window; it stays in the log and remains searchable (see [Event lifecycle](#event-lifecycle)) |
 
 ### Message types
 
 | Message type | `SessionEvent.isSynthetic()` | Meaning | Compaction |
 |---|---|---|---|
-| `UserMessage` | `false` | Real user input. A root-level one starts a [turn](#turn) | Archived with its turn |
+| `UserMessage` | `false` | Real user input. It starts a [turn](#turn) | Archived with its turn |
 | `AssistantMessage` (no tool calls) | `false` | Agent response | Archived with its turn |
 | `AssistantMessage` (with tool calls) | `false` | Agent tool invocation | Archived with its turn, never separated from its tool results |
 | `ToolResponseMessage` | `false` | Tool output | Archived with its turn |
-| `SystemMessage` | `false` | A stored system prompt: configuration, not conversation. Storing one is opt-in | The latest one per branch is kept; earlier ones are archived. Never summarized. See [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins) |
+| `SystemMessage` | `false` | A stored system prompt: configuration, not conversation. Storing one is opt-in | The latest one is kept; earlier ones are archived. Never summarized. See [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins) |
 | `UserMessage` | `true` | Synthetic shadow prompt opening a summary turn | Kept by the sliding-window, turn-window and token-count strategies. Replaced (deleted) by the next recursive summary |
 | `AssistantMessage` | `true` | Synthetic summary text closing a summary turn | As above. Its text is fed to the next recursive summary as the prior summary |
 | `SystemMessage` | `true` | Legacy summary format from earlier versions | As above. Still read as a prior summary by the recursive strategy |
@@ -78,17 +77,10 @@ are summarized before they are archived.
 ### Building events
 
 ```java
-// Root event (no branch) — visible to all agents; timestamped at Instant.now()
+// Timestamped at Instant.now()
 SessionEvent event = SessionEvent.builder()
     .sessionId(sessionId)
     .message(new UserMessage("Hello"))
-    .build();
-
-// Branched event — attributed to a specific sub-agent (deprecated since 0.9.0)
-SessionEvent branched = SessionEvent.builder()
-    .sessionId(sessionId)
-    .message(new AssistantMessage("Research result..."))
-    .branch("orch.researcher")
     .build();
 
 // With metadata
@@ -108,7 +100,7 @@ SessionEvent deterministic = SessionEvent.builder()
 ```
 
 Builder defaults: `id` is a random UUID, `timestamp` is `Instant.now()`, `metadata` is
-empty, `branch` is `null`. Only `sessionId` and `message` are required.
+empty. Only `sessionId` and `message` are required.
 
 ---
 
@@ -129,10 +121,9 @@ Turn 2: [USER "Can it use tools?"]   [ASSISTANT (tool call)]  [TOOL result]  [AS
 Turn 3: [USER "Show me an example"]  [ASSISTANT "Here is..."]
 ```
 
-Turn count is measured via `CompactionRequest.currentTurnCount()`, which counts only
-non-synthetic, **root-level** (`branch == null`) `USER` events. Synthetic and sub-agent
-`USER` messages on named branches are excluded so that multi-agent sessions do not inflate
-the count used by `TurnCountTrigger`.
+Turn count is measured via `CompactionRequest.currentTurnCount()`, which counts the
+non-synthetic `USER` events. The shadow prompt of a synthetic summary turn is excluded, so
+it does not inflate the count used by `TurnCountTrigger`.
 
 ---
 
@@ -232,10 +223,8 @@ classDiagram
         timestamp
         message
         metadata
-        branch
         archived
         +isSynthetic() boolean
-        +isRootEvent() boolean
     }
     class Message {
         <<Spring AI>>
@@ -244,7 +233,6 @@ classDiagram
         <<record>>
         +all()$ EventFilter
         +active()$ EventFilter
-        +forBranch(branch)$ EventFilter
         +keywordSearch(keyword)$ EventFilter
     }
 
@@ -281,8 +269,8 @@ stateDiagram-v2
 - **Active:** part of the active context window. Appending an event with an id that
   already exists is an idempotent replay and changes nothing.
 - **Archived:** compaction moved it out of the active window, for example an old turn, or
-  a stored system message superseded by a newer one on the same branch. The latest stored
-  system message of each branch always stays active.
+  a stored system message superseded by a newer one. The latest stored system message
+  always stays active.
 - **Deleted:** gone from the log. This only happens to a synthetic summary that a new
   summary replaces, or when its whole session is deleted (`delete`, or
   `deleteExpiredSessions` for expired sessions).

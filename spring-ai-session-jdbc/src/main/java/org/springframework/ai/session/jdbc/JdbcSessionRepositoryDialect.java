@@ -91,30 +91,11 @@ public interface JdbcSessionRepositoryDialect {
 	 * <p>
 	 * Defaults to the same expression as {@link #getKeywordFilterFragment()} minus the
 	 * {@code AND } prefix, which is correct for every dialect shipped today (they all use
-	 * identical {@code LOWER(COALESCE(...)) LIKE ?} SQL — only branch-visibility
-	 * concatenation actually differs across databases). Override only if a future dialect
-	 * needs different substring-match SQL.
+	 * identical {@code LOWER(COALESCE(...)) LIKE ?} SQL). Override only if a future
+	 * dialect needs different substring-match SQL.
 	 */
 	default String getKeywordPredicateFragment() {
 		return "LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
-	}
-
-	/**
-	 * Branch visibility filter fragment for multi-agent event isolation. The clause
-	 * matches events that are visible to the given branch: root events (null branch),
-	 * exact branch match, or ancestor branches (the caller is a descendant).
-	 *
-	 * <p>
-	 * The fragment must be a complete {@code AND (...)} clause with two {@code ?}
-	 * placeholders, both bound to the filter branch value. The stored branch is used as a
-	 * {@code LIKE} prefix pattern, so {@code !}, {@code %} and {@code _} in it are escaped
-	 * with {@code !} to match literally. The default implementation uses {@code ||} for
-	 * string concatenation (PostgreSQL / H2). MySQL/MariaDB must override this with
-	 * {@code CONCAT()} because {@code ||} is logical OR in those databases.
-	 */
-	default String getBranchFilterFragment() {
-		return "AND (e.branch IS NULL OR e.branch = ? OR ? LIKE "
-				+ "REPLACE(REPLACE(REPLACE(e.branch, '!', '!!'), '%', '!%'), '_', '!_') || '.%' ESCAPE '!') ";
 	}
 
 	/**

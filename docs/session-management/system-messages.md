@@ -19,10 +19,10 @@ rather than as part of the conversation, and which part of the work belongs to w
   system message unless you enable `allowSystemMessages`. If you do enable it, **the latest
   stored system message wins**: it is the session's system prompt, and earlier ones are
   superseded and archived by compaction.
-- **The integration** uses only the latest stored system message of the agent's own
-  branch, puts system messages first, drops exact duplicates, and avoids re-sending
-  history inside a tool loop. `SessionMemoryAdvisor` does this for `ChatClient`.
-  Any other integration must do it itself.
+- **The integration** uses only the latest stored system message, puts system messages
+  first, drops exact duplicates, and avoids re-sending history inside a tool loop.
+  `SessionMemoryAdvisor` does this for `ChatClient`. Any other integration must do it
+  itself.
 
 ---
 
@@ -126,25 +126,19 @@ combining several instructions into it is the integration's responsibility. Ever
 
 - the latest one stays in the active window, is placed first, and is never archived or
   summarized;
-- it doesn't use `maxEvents` / `maxTurns` / `maxEventsToKeep` slots. For the root agent,
+- it doesn't use `maxEvents` / `maxTurns` / `maxEventsToKeep` slots.
   `TokenCountCompactionStrategy` subtracts its tokens from the budget, because it is sent
-  with the conversation; a sub-agent's is not subtracted, because it is only sent to that
-  sub-agent;
+  with the conversation;
 - earlier ones are **superseded**: archived whenever compaction runs (even when the
   budget needs no cut), never summarized, and still searchable through
   [Recall Storage](../recall-memory/recall-storage.md).
 
-At most one stored system message per branch is ever active, so an integration that
-stores one per turn cannot grow the active window.
+At most one stored system message is ever active, so an integration that stores one per
+turn cannot grow the active window.
 
 **Sub-agents.** With a [session per sub-agent](multi-agent.md#session-per-sub-agent), each
 sub-agent's system messages live in its own session, so these rules apply to each session
-as usual. With the deprecated [branches](multi-agent.md#branches-deprecated), system
-messages are scoped by branch: each agent's system prompt is the latest system message stored on **its own**
-branch, and a sub-agent's system messages configure only that sub-agent. Compaction keeps
-the latest one of every branch, so a sub-agent that is delegated to again in a later turn
-still has its system prompt, even after the turn it was stored in has been archived. Like
-every system message, they are never summarized.
+separately.
 
 ---
 
@@ -156,11 +150,9 @@ Whatever builds the prompt sent to the model owns these steps:
    `Session.metadata`. Don't append it to the session.
 2. **Load only the active history**: `getActiveMessages(...)` or
    `getEvents(..., EventFilter.active())`.
-3. **Use only the latest stored system message of your agent's own branch** (`null` for
-   the root agent, whose filter has no branch) from the loaded history. Earlier ones are superseded (they may still be
-   active until the next compaction), and other branches' system messages configure other
-   agents. Put system messages first: many models reject or ignore a system message that
-   is not at the start.
+3. **Use only the latest stored system message** from the loaded history. Earlier ones are
+   superseded (they may still be active until the next compaction). Put system messages
+   first: many models reject or ignore a system message that is not at the start.
 4. **Drop exact duplicates**, for example a stored system message that is also supplied
    with the request. Don't merge or rewrite texts, so the prompt stays byte-stable for
    prompt caching.
@@ -174,7 +166,7 @@ Whatever builds the prompt sent to the model owns these steps:
 
 `SessionMemoryAdvisor` implements all of these steps for `ChatClient`. The system prompt
 comes from `defaultSystem` / `.system` and is never persisted. Of the stored system
-messages, the advisor sends only the latest one of its own `EventFilter` branch; it puts
+messages, the advisor sends only the latest one; it puts
 every `SystemMessage` first (stored one, then the request's) and sends exact duplicates
 once. Inside a tool loop (see [Setup](../chat-client/chat-client.md#setup)) its "already in the prompt"
 check ignores system messages, so stored history is not re-sent.
@@ -185,7 +177,7 @@ flowchart TB
     LOG[("Session event log")] -->|"active history"| H["History"]
     UM["Current user message"]
     SP --> C["Combine history + prompt"]
-    H --> SEL["Keep only the latest stored system<br/>message of the agent's own branch"]
+    H --> SEL["Keep only the latest stored<br/>system message"]
     SEL --> C
     UM --> C
     C --> F["Move all system messages to the front,<br/>drop exact duplicates"]
@@ -224,14 +216,13 @@ SystemMessage systemPrompt = new SystemMessage(
         "You are a helpful travel assistant. Answer in " + session.metadata().get("language") + ".");
 
 // 2. Active history, in log order. Load events rather than getActiveMessages(...):
-//    choosing the stored system message needs each event's branch.
+//    choosing the stored system message needs each event's synthetic flag.
 List<SessionEvent> events = sessionService.getEvents(sessionId, EventFilter.active());
 
-// 3 + 4. The latest stored system message of this (root) agent, if any, and the
-//        request's, first. Other branches' system messages are skipped, and exact
+// 3 + 4. The latest stored system message, if any, and the request's, first. Exact
 //        duplicates are dropped.
 Optional<Message> storedPrompt = events.stream()
-    .filter(e -> e.isRootEvent() && !e.isSynthetic() && e.getMessageType() == MessageType.SYSTEM)
+    .filter(e -> !e.isSynthetic() && e.getMessageType() == MessageType.SYSTEM)
     .map(SessionEvent::getMessage)
     .reduce((earlier, later) -> later);
 Set<String> seen = new HashSet<>();
@@ -314,7 +305,7 @@ sessionService.appendMessage(session.id(), new SystemMessage("Answer in German."
 Keep in mind the trade-offs:
 
 - It doesn't change when your code changes; you must store a new, complete one.
-- Its tokens are sent on every request, and the root agent's count toward
+- Its tokens are sent on every request, and they count toward
   `TokenCountCompactionStrategy`'s budget.
 - A custom loop must still pick the latest one, put it first and drop duplicates
   (steps 3 and 4 above).

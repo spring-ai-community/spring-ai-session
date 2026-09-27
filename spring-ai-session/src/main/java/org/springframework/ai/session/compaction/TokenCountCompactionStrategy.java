@@ -32,21 +32,18 @@ import org.springframework.util.Assert;
  *
  * <h3>Algorithm</h3>
  * <ol>
- * <li>Separate the latest stored system message of each branch (that agent's system
- * prompt; earlier stored system messages are superseded and archived, see
+ * <li>Separate the latest stored system message (the system prompt; earlier stored
+ * system messages are superseded and archived, see
  * {@code CompactionUtils#pinnedSystemEvents}) and the synthetic summary events. They are
- * always preserved and placed first in the result. The token cost of the root agent's
- * system message and of the summaries is deducted from the budget before real events are
- * considered, so a large system prompt or prior compaction summary reduces the space
- * available for real events. Sub-agent system messages are kept but not deducted, because
- * they are only sent to their own sub-agent.</li>
+ * always preserved and placed first in the result. Their token cost is deducted from the
+ * budget before real events are considered, so a large system prompt or prior compaction
+ * summary reduces the space available for real events.</li>
  * <li>Walk real events from newest to oldest, accumulating cost until the budget is
  * exhausted. Stops at the first event that would exceed the remaining budget, producing a
  * contiguous kept window (a suffix of the real-event list). Skipping oversize events and
  * continuing would produce non-contiguous gaps that break conversation coherence.</li>
- * <li>Snap the cut point to the next root-level ({@code branch == null}) user message.
- * This guarantees the kept window always starts at a turn boundary — sub-agent
- * {@code USER} messages are skipped because they are turn-internal, not turn starts.</li>
+ * <li>Snap the cut point to the next user message. This guarantees the kept window
+ * always starts at a turn boundary.</li>
  * <li>Return: {@code [system messages] + [synthetic events] + [kept events]}.</li>
  * </ol>
  *
@@ -74,7 +71,6 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 		this.tokenCountEstimator = tokenCountEstimator;
 	}
 
-	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public CompactionResult compact(CompactionRequest context) {
 
@@ -83,7 +79,7 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 
 		List<SessionEvent> events = context.events();
 
-		// Always keep the latest stored system message of each branch and synthetic events; earlier stored
+		// Always keep the latest stored system message and synthetic events; earlier stored
 		// system messages are superseded and archived
 		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
 		List<SessionEvent> supersededSystem = CompactionUtils.supersededSystemEvents(events, pinnedSystem);
@@ -93,12 +89,7 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 
 		// Preserved events are sent to the model too, so their cost comes off the budget
 		// first.
-		// Only the root agent's system prompt is sent with the root view; sub-agent prompts go
-		// to their own sub-agent only, so they don't reduce the conversation budget.
-		int preservedTokens = Stream
-			.concat(pinnedSystem.stream().filter(SessionEvent::isRootEvent), synthetic.stream())
-			.mapToInt(tokens)
-			.sum();
+		int preservedTokens = Stream.concat(pinnedSystem.stream(), synthetic.stream()).mapToInt(tokens).sum();
 
 		int remainingBudget = this.maxTokens - preservedTokens;
 
@@ -119,9 +110,8 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 			}
 		}
 
-		// Snap the raw cut forward to the nearest root-level USER event so the kept
-		// window always starts at a turn boundary. Sub-agent USER messages (branch != null)
-		// are skipped — they are turn-internal, not turn starts.
+		// Snap the raw cut forward to the nearest USER event so the kept window always
+		// starts at a turn boundary.
 		// If no later turn start exists (the newest turn alone exceeds the budget), keep
 		// that last turn rather than archiving the whole active window.
 		int cutIndex = CompactionUtils.retainLastTurn(real, CompactionUtils.snapToTurnStart(real, rawCutIndex));

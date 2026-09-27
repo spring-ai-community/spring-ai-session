@@ -198,8 +198,8 @@ public class DefaultSessionService implements SessionService {
 		 * {@code false}: system prompts are configuration, best supplied on every request
 		 * rather than stored in the session, so storing one is rejected with an
 		 * {@link IllegalArgumentException} that explains how to enable it. Set to
-		 * {@code true} to store system messages anyway. The latest stored system message of
-		 * each branch is then that agent's system prompt; see
+		 * {@code true} to store system messages anyway. The latest stored system message is
+		 * then the system prompt; see
 		 * {@link org.springframework.ai.session.compaction.CompactionStrategy} implementations.
 		 */
 		public Builder allowSystemMessages(boolean allowSystemMessages) {

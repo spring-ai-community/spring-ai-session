@@ -41,19 +41,15 @@ public record CompactionRequest(Session session, List<SessionEvent> events, int 
 	/**
 	 * Creates a {@code CompactionRequest} from the given session and its event list.
 	 */
-	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	public static CompactionRequest of(Session session, List<SessionEvent> events) {
 		Assert.notNull(session, "session must not be null");
 		Assert.notNull(events, "events must not be null");
 		int eventCount = events.size();
-		// Count only non-synthetic, root-level (branch == null) USER messages.
-		// Sub-agents in multi-agent sessions write USER messages attributed to their own
-		// branch; counting those would inflate the turn count and cause premature
-		// compaction of the root conversation.
+		// Count only non-synthetic USER messages: a synthetic summary turn's shadow prompt
+		// is not a real turn.
 		int turnCount = (int) events.stream()
 			.filter(e -> !e.isSynthetic())
 			.filter(e -> e.getMessageType() == MessageType.USER)
-			.filter(SessionEvent::isRootEvent)
 			.count();
 		return new CompactionRequest(session, events, eventCount, turnCount);
 	}

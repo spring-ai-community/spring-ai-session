@@ -19,7 +19,6 @@ package org.springframework.ai.session.tool;
 import java.util.List;
 import java.util.Map;
 
-import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -90,12 +89,9 @@ public class SessionEventTools {
 
 	private final int pageSize;
 
-	@Nullable private final String branch;
-
-	private SessionEventTools(SessionService sessionService, int pageSize, @Nullable String branch) {
+	private SessionEventTools(SessionService sessionService, int pageSize) {
 		this.sessionService = sessionService;
 		this.pageSize = pageSize;
-		this.branch = branch;
 	}
 
 	/**
@@ -115,8 +111,6 @@ public class SessionEventTools {
 		private final SessionService sessionService;
 
 		private int pageSize = EventFilter.DEFAULT_PAGE_SIZE;
-
-		@Nullable private String branch;
 
 		private Builder(SessionService sessionService) {
 			if (sessionService == null) {
@@ -140,30 +134,11 @@ public class SessionEventTools {
 		}
 
 		/**
-		 * Restricts {@code conversation_search} to events visible to the agent at this
-		 * dot-separated branch path, applying the same isolation rule as
-		 * {@link EventFilter#forBranch(String)}: root events, the agent's own events and
-		 * its ancestors' events are searchable, peer sub-agents' events are not. Set this
-		 * on the tool instance given to a sub-agent in a multi-agent session. Defaults to
-		 * {@code null} (search every event in the session).
-		 * @param branch the agent's branch path, e.g. {@code "orch.researcher"}
-		 * @return this builder
-		 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
-		 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
-		 * reference page).
-		 */
-		@Deprecated(since = "0.9.0", forRemoval = true)
-		public Builder branch(@Nullable String branch) {
-			this.branch = branch;
-			return this;
-		}
-
-		/**
 		 * Builds the {@link SessionEventTools} instance.
 		 * @return a configured {@code SessionEventTools}
 		 */
 		public SessionEventTools build() {
-			return new SessionEventTools(this.sessionService, this.pageSize, this.branch);
+			return new SessionEventTools(this.sessionService, this.pageSize);
 		}
 
 	}
@@ -211,9 +186,6 @@ public class SessionEventTools {
 		}
 
 		EventFilter filter = EventFilter.keywordSearch(query, pageNumber, this.pageSize);
-		if (this.branch != null) {
-			filter = filter.merge(branchFilter(this.branch));
-		}
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, filter);
 
 		List<Map<String, String>> results = events.stream()
@@ -227,11 +199,6 @@ public class SessionEventTools {
 		}
 
 		return JsonParser.toJson(results);
-	}
-
-	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
-	private static EventFilter branchFilter(String branch) {
-		return EventFilter.forBranch(branch);
 	}
 
 }

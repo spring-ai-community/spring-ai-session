@@ -110,7 +110,7 @@ classDiagram
 
 | Trigger | Fires when | Settings |
 |---|---|---|
-| `TurnCountTrigger` | more than `maxTurns` turns (root, non-synthetic `USER` events) | `maxTurns` (constructor) |
+| `TurnCountTrigger` | more than `maxTurns` turns (non-synthetic `USER` events) | `maxTurns` (constructor) |
 | `TokenCountTrigger` | estimated tokens `>=` `threshold`, counted like the strategy's [budget](compaction.md#how-the-budget-is-spent) | `threshold` (required), `tokenCountEstimator` (default JTokkit) |
 | `CompositeCompactionTrigger` | any of its triggers fires | `anyOf(...)` |
 
@@ -156,14 +156,14 @@ classDiagram
 
 | Strategy | Keeps | Settings (defaults) |
 |---|---|---|
-| `SlidingWindowCompactionStrategy` | the newest `maxEvents` root-level real events, cut at a turn boundary | `maxEvents` (20), `tokenCountEstimator` (JTokkit) |
+| `SlidingWindowCompactionStrategy` | the newest `maxEvents` real events, cut at a turn boundary | `maxEvents` (20), `tokenCountEstimator` (JTokkit) |
 | `TurnWindowCompactionStrategy` | the newest `maxTurns` complete turns | `maxTurns` (10), `tokenCountEstimator` (JTokkit) |
 | `TokenCountCompactionStrategy` | a contiguous suffix of real events within `maxTokens`, cut at a turn boundary | `maxTokens` (4000), `tokenCountEstimator` (JTokkit) |
-| `RecursiveSummarizationCompactionStrategy` | the newest `maxEventsToKeep` root-level real events, plus an LLM summary of the rest | `chatClient` (required), `maxEventsToKeep` (10), `overlapSize` (2), `systemPrompt`, `shadowPrompt` (`DEFAULT_SUMMARY_SHADOW_PROMPT`), `eventFormatter`, `onSummarizationFailure`, `tokenCountEstimator` (JTokkit) |
+| `RecursiveSummarizationCompactionStrategy` | the newest `maxEventsToKeep` real events, plus an LLM summary of the rest | `chatClient` (required), `maxEventsToKeep` (10), `overlapSize` (2), `systemPrompt`, `shadowPrompt` (`DEFAULT_SUMMARY_SHADOW_PROMPT`), `eventFormatter`, `onSummarizationFailure`, `tokenCountEstimator` (JTokkit) |
 
 All four share the helpers in `CompactionUtils`:
 
-- **Split the events:** `pinnedSystemEvents` (latest stored system message per branch),
+- **Split the events:** `pinnedSystemEvents` (the latest stored system message),
   `supersededSystemEvents` and `compactableEvents`.
 - **Choose the cut:** `snapToTurnStart` and `retainLastTurn`.
 - **Build the result:** `unchangedExceptSuperseded` and `archiving`.
@@ -195,7 +195,7 @@ sequenceDiagram
     Note right of Svc: read the version BEFORE the events,<br/>so v is never newer than the events read
     Svc->>Repo: findEvents(sessionId, EventFilter.active())
     Repo-->>Svc: active events (archived excluded)
-    Svc->>Svc: CompactionRequest.of(session, events)<br/>(counts root, non-synthetic USER turns)
+    Svc->>Svc: CompactionRequest.of(session, events)<br/>(counts non-synthetic USER turns)
     Svc->>Trg: shouldCompact(request)
     alt trigger does not fire
         Trg-->>Svc: false
@@ -242,7 +242,7 @@ flowchart TB
 
     subgraph split["1. Split the events (CompactionUtils)"]
         direction TB
-        s1["pinned = latest stored SYSTEM event of each branch<br/>(pinnedSystemEvents)"]
+        s1["pinned = latest stored SYSTEM event<br/>(pinnedSystemEvents)"]
         s2["superseded = every other stored SYSTEM event<br/>(supersededSystemEvents)"]
         s3["synthetic = previous summary events"]
         s4["real = everything else<br/>(compactableEvents)"]
@@ -253,11 +253,11 @@ flowchart TB
     noop -- yes --> r0([Result: events unchanged, nothing archived])
     noop -- no --> r1(["Result: [pinned] + [synthetic] + [real]<br/>archived = superseded"])
 
-    budget -- no --> raw["3. Compute the raw cut index into real<br/>SlidingWindow / Recursive: after the N-th oldest root event<br/>TokenCount: walk newest to oldest within maxTokens<br/>minus the root system prompt and summary tokens<br/>TurnWindow: group into turns, cut whole turns"]
-    raw --> snap["4. snapToTurnStart: move the cut FORWARD to the next<br/>root-level USER event (sub-agent USER events are skipped)"]
+    budget -- no --> raw["3. Compute the raw cut index into real<br/>SlidingWindow / Recursive: keep the newest N real events<br/>TokenCount: walk newest to oldest within maxTokens<br/>minus the system prompt and summary tokens<br/>TurnWindow: group into turns, cut whole turns"]
+    raw --> snap["4. snapToTurnStart: move the cut FORWARD<br/>to the next USER event"]
     snap --> end1{"cut == real.size()?<br/>(no later turn start)"}
     end1 -- no --> cut
-    end1 -- yes --> retain["5. retainLastTurn: move the cut BACK to the<br/>last root-level USER event, so the newest<br/>turn is kept even if it exceeds the budget"]
+    end1 -- yes --> retain["5. retainLastTurn: move the cut BACK to the<br/>last USER event, so the newest turn is kept<br/>even if it exceeds the budget (no USER at all:<br/>cut = 0, nothing is archived)"]
     retain --> cut["kept = real[cut..]<br/>removed = real[..cut)"]
     cut --> empty{"removed empty?<br/>(whole history is one turn)"}
     empty -- yes --> noop
@@ -266,11 +266,11 @@ flowchart TB
 
 **Invariants the pipeline guarantees:**
 
-- **The kept window always starts at a root-level `USER` event.** No kept assistant reply
+- **The kept window always starts at a `USER` event.** No kept assistant reply
   or tool result loses the user message that started its turn.
 - **The newest turn is never archived.** Step 5 keeps it even when it alone exceeds the
   budget.
-- **At most one stored system message per branch stays active,** and it is never
+- **At most one stored system message stays active,** and it is never
   summarized. Superseded ones are archived on every pass, even when no cut is needed,
   except a recursive pass skipped because the summarizer returned a blank summary.
 - **Synthetic summaries survive** the sliding-window, turn-window and token-count
@@ -294,13 +294,12 @@ sequenceDiagram
     Caller->>R: compact(request)
     R->>U: pinnedSystemEvents / supersededSystemEvents / compactableEvents
     U-->>R: pinned, superseded, synthetic (prior summaries), real
-    R->>R: rootEventCount = root events in real
-    alt rootEventCount <= maxEventsToKeep
+    alt real.size() <= maxEventsToKeep
         R->>U: unchangedExceptSuperseded(...)
         U-->>R: unchanged, or only superseded archived
         R-->>Caller: result (no LLM call)
     else over budget
-        R->>R: rawCut = just after the (rootEventCount - maxEventsToKeep)-th root event
+        R->>R: rawCut = real.size() - maxEventsToKeep
         R->>U: snapToTurnStart(real, rawCut), then retainLastTurn(...)
         U-->>R: cut
         R->>R: toArchive = real[..cut), activeWindow = real[cut..]
@@ -395,8 +394,7 @@ the version.
 
 Each example gives the active events before compaction and the resulting
 `compactedEvents` / `archivedEvents`. `S:` is a stored system message, `U`/`A` are user
-and assistant messages, `[x]` marks a sub-agent (branched) event, and `Σ` is the synthetic
-summary turn.
+and assistant messages, and `Σ` is the synthetic summary turn.
 
 | # | Case | Before (active) | Strategy | Kept (active after) | Archived |
 |---|---|---|---|---|---|
@@ -404,10 +402,9 @@ summary turn.
 | 2 | Newest turn alone is over budget | `U1 A1 U2 A2 A3 A4` | SlidingWindow, `maxEvents = 2` | `U2 A2 A3 A4` | `U1 A1` |
 | 3 | Whole history is one oversize turn | `U1 A1 A2 A3` | SlidingWindow, `maxEvents = 2` | unchanged | nothing |
 | 4 | System message updated mid-session | `S:v1 U1 A1 S:v2 U2 A2` | SlidingWindow, `maxEvents = 20` | `S:v2 U1 A1 U2 A2` | `S:v1` |
-| 5 | Sub-agent system prompt in an old turn | `U1 [S:researcher] A1 U2 A2 U3 A3` | SlidingWindow, `maxEvents = 2` | `[S:researcher] U3 A3` | `U1 A1 U2 A2` |
-| 6 | Sub-agent USER is not a turn start | `U1 A1 [U:sub] [A:sub] U2 A2` | TurnWindow, `maxTurns = 1` | `U2 A2` | `U1 A1 [U:sub] [A:sub]` |
-| 7 | Token budget with a system prompt | `S:sys(11) U(8) A(13) U(8) A(13)` | TokenCount, `maxTokens = 45` | `S:sys U A` (newest turn) | the older turn |
-| 8 | Recursive with a prior summary | `Σold U1 A1 U2 A2 U3 A3` | Recursive, `maxEventsToKeep = 2`, `overlapSize = 1` | `Σnew U3 A3` | `U1 A1 U2 A2` (`Σold` deleted) |
+| 5 | System prompt stored in an old turn | `U1 S A1 U2 A2 U3 A3` | SlidingWindow, `maxEvents = 2` | `S U3 A3` | `U1 A1 U2 A2` |
+| 6 | Token budget with a system prompt | `S:sys(11) U(8) A(13) U(8) A(13)` | TokenCount, `maxTokens = 45` | `S:sys U A` (newest turn) | the older turn |
+| 7 | Recursive with a prior summary | `Σold U1 A1 U2 A2 U3 A3` | Recursive, `maxEventsToKeep = 2`, `overlapSize = 1` | `Σnew U3 A3` | `U1 A1 U2 A2` (`Σold` deleted) |
 
 **Notes on the examples:**
 
@@ -418,15 +415,12 @@ summary turn.
 3. Snapping and retaining leave nothing to remove, so the pass is a no-op.
 4. The budget needs no cut, but the superseded `S:v1` is still archived, and `S:v2` moves
    to the front.
-5. The researcher's system prompt was stored in turn 1. Turn 1 is archived, but the
-   latest system message of the `researcher` branch is kept, so a later delegation to the
-   researcher still has it.
-6. The sub-agent's `USER` event is turn-internal: it neither starts a turn nor counts
-   toward `maxTurns`, and it is archived with the root turn that contains it.
-7. The system prompt's 11 tokens come off the budget first, leaving 34. Only the newest
+5. The system prompt was stored in turn 1. Turn 1 is archived, but the latest stored
+   system message is kept and placed first, so later turns still have it.
+6. The system prompt's 11 tokens come off the budget first, leaving 34. Only the newest
    turn fits, so the older turn is archived. Without the system prompt both turns (42)
    would fit in 45.
-8. The LLM receives `Σold`'s text as the prior summary plus `U1 A1 U2 A2` (and the overlap
+7. The LLM receives `Σold`'s text as the prior summary plus `U1 A1 U2 A2` (and the overlap
    `U3`). `Σold` ends up in neither list, so the repository deletes it; its content lives
    on in `Σnew`.
 
@@ -436,6 +430,6 @@ summary turn.
 
 - [Context Compaction](compaction.md): triggers, strategies and how to configure them
 - [System Messages](system-messages.md): why stored system messages are treated as
-  configuration, and the "latest wins per branch" rule
+  configuration, and the "latest wins" rule
 - [Session JDBC](../session-jdbc/index.md): the JDBC repository, schema and design notes
-- [Multi-Agent](multi-agent.md): sessions per sub-agent, and the deprecated branches
+- [Multi-Agent](multi-agent.md): a session per sub-agent

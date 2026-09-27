@@ -42,8 +42,8 @@ service.compact(sessionId, req -> true, SlidingWindowCompactionStrategy.builder(
   write entirely. See the [compaction pass sequence](compaction-internals.md#2-sequence-a-compaction-pass-end-to-end)
   and the [JDBC concurrency diagram](compaction-internals.md#5-sequence-jdbc-compactevents-and-a-concurrent-append).
 - **Stored system messages are configuration.** If you store them (opt-in), the latest one
-  of each branch is always kept, placed first, never summarized and not counted against
-  `maxEvents` / `maxTurns` / `maxEventsToKeep`; earlier ones are archived on every pass. See
+  is always kept, placed first, never summarized and not counted against `maxEvents` /
+  `maxTurns` / `maxEventsToKeep`; earlier ones are archived on every pass. See
   [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins).
 
 ---
@@ -55,8 +55,8 @@ compaction should run based on the current `CompactionRequest`.
 
 ### TurnCountTrigger
 
-Fires when the session has more than `n` complete turns. Only non-synthetic, root-level
-(`branch == null`) `USER` events count toward the turn total.
+Fires when the session has more than `n` complete turns. Every non-synthetic `USER` event
+counts toward the turn total.
 
 ```java
 new TurnCountTrigger(20);  // compact when > 20 turns
@@ -67,8 +67,8 @@ new TurnCountTrigger(20);  // compact when > 20 turns
 Fires when the estimated total token count is at or above a threshold (`threshold` is
 required). It uses the same [token accounting](#token-accounting) as the strategies, so tool
 calls and responses count, and it counts the same events as
-`TokenCountCompactionStrategy`'s [budget](#how-the-budget-is-spent): the root agent's latest
-stored system message, the summaries and the conversation.
+`TokenCountCompactionStrategy`'s [budget](#how-the-budget-is-spent): the latest stored
+system message, the summaries and the conversation.
 
 ```java
 // Uses JTokkitTokenCountEstimator by default
@@ -105,13 +105,11 @@ Strategies implement `CompactionStrategy` (a `@FunctionalInterface`). Each recei
 
 **Common behaviour.** Every strategy:
 
-- keeps the latest stored system message of each branch and the synthetic summary events,
-  places them first, and archives earlier stored system messages;
-- keeps sub-agent (branched) events with the root turn that contains them. The
-  event-count strategies count only root-level (`branch == null`) events against their
-  limit; the token-based strategy counts every non-system event's tokens;
-- starts the kept window at a root-level `USER` message and always keeps the most recent
-  turn (see [Turn-boundary Safety](#turn-boundary-safety));
+- keeps the latest stored system message and the synthetic summary events, places them
+  first, and archives earlier stored system messages;
+- applies its limit only to the real conversation events;
+- starts the kept window at a `USER` message and always keeps the most recent turn (see
+  [Turn-boundary Safety](#turn-boundary-safety));
 - returns `[system messages] + [synthetics] + [kept events]`.
 
 ### Token accounting
@@ -133,7 +131,7 @@ This keeps `tokensEstimatedSaved` accurate for tool-heavy turns.
 
 ### SlidingWindowCompactionStrategy
 
-Keeps the last `N` **root-level real** events (default `N` = `DEFAULT_MAX_EVENTS` = 20).
+Keeps the last `N` **real** events (default `N` = `DEFAULT_MAX_EVENTS` = 20).
 Simple, predictable, no LLM call required.
 
 ```java
@@ -144,8 +142,8 @@ SlidingWindowCompactionStrategy.builder().maxEvents(20).build();
 SlidingWindowCompactionStrategy.builder().maxEvents(20).tokenCountEstimator(myEstimator).build();
 ```
 
-It keeps the last `maxEvents` root-level real events, then snaps the cut forward to the
-next root-level `USER` message.
+It keeps the last `maxEvents` real events, then snaps the cut forward to the next `USER`
+message.
 
 ### TurnWindowCompactionStrategy
 
@@ -161,9 +159,9 @@ TurnWindowCompactionStrategy.builder().maxTurns(10).build();
 TurnWindowCompactionStrategy.builder().maxTurns(10).tokenCountEstimator(myEstimator).build();
 ```
 
-It groups events into turns (each starting at a root-level `USER` message) and archives
-the oldest until `maxTurns` remain. Events before the first root-level `USER` message form
-a **preamble** that is always kept, placed after the synthetics and before the turns.
+It groups events into turns (each starting at a `USER` message) and archives the oldest
+until `maxTurns` remain. Events before the first `USER` message form a **preamble** that is
+always kept, placed after the synthetics and before the turns.
 
 ### TokenCountCompactionStrategy
 
@@ -181,7 +179,7 @@ TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEst
 It walks real events from newest to oldest and stops at the first event that would exceed
 the remaining budget. The result is a **contiguous suffix**: skipping individual oversize
 events would leave gaps that break conversation coherence. Leading kept events that are
-not root-level `USER` messages are then dropped.
+not `USER` messages are then dropped.
 
 #### How the budget is spent
 
@@ -189,16 +187,14 @@ The preserved events that are sent with the conversation take their tokens off
 `maxTokens` before any conversation is considered:
 
 ```
-remainingBudget = maxTokens − tokens(root agent's kept system message + synthetic summary events)
+remainingBudget = maxTokens − tokens(kept system message + synthetic summary events)
 ```
 
-Sub-agent system messages are kept too, but they are not deducted: each is sent only to
-its own sub-agent, never with the root view of the conversation, so counting them would
-shrink the conversation's budget for nothing. See
-[worked example 7](compaction-internals.md#6-worked-examples-of-the-tricky-cases).
+[Worked example 6](compaction-internals.md#6-worked-examples-of-the-tricky-cases) walks
+through a budget with a stored system prompt.
 
 If the deducted events use up the whole budget (`remainingBudget ≤ 0`), for example a
-very large stored root system prompt, only the newest turn is kept and every compaction
+very large stored system prompt, only the newest turn is kept and every compaction
 drops all older context. Size `maxTokens` so that the deducted events leave room for the
 conversation, or keep system prompts out of the session (see
 [System Messages](system-messages.md)).
@@ -212,7 +208,7 @@ can build on it — creating a rolling, recursive compressed history.
 ```java
 RecursiveSummarizationCompactionStrategy strategy =
     RecursiveSummarizationCompactionStrategy.builder(chatClient)
-        .maxEventsToKeep(10)           // active window size: root-level real events kept
+        .maxEventsToKeep(10)           // active window size: real events kept
                                        // intact; defaults to 10
         .overlapSize(2)                // events from active window fed to summary prompt;
                                        // >= 0 and < maxEventsToKeep, else
@@ -232,7 +228,7 @@ RecursiveSummarizationCompactionStrategy strategy =
 
 **Algorithm**
 
-1. Compute the cut so that the newest `maxEventsToKeep` root-level real events form the
+1. Compute the cut so that the newest `maxEventsToKeep` real events form the
    active window, and snap it to a turn boundary. If that leaves nothing to summarize,
    stop without calling the LLM.
 2. Feed `[prior synthetic summaries] + [events to archive] + [overlap events]` to the LLM.
@@ -288,9 +284,8 @@ RecursiveSummarizationCompactionStrategy strategy =
 ## Turn-boundary Safety
 
 All four strategies share a common safety rule: the kept window always starts at a
-**root-level** `USER` message — one whose `branch` is `null`. The sliding-window,
-token-count and recursive-summarization strategies snap their cut point forward to the
-next such message (package-private `CompactionUtils.snapToTurnStart`);
+`USER` message. The sliding-window, token-count and recursive-summarization strategies snap
+their cut point forward to the next such message (package-private `CompactionUtils.snapToTurnStart`);
 `TurnWindowCompactionStrategy` gets the same result by grouping events into turns. This
 prevents keeping a tool result or assistant reply without the user message that started
 its turn.
@@ -300,7 +295,7 @@ Before snap:  [u1, a1, u2, a2, | a3, u3, a3]   ← cut lands on a3 (middle of tu
 After snap:   [u1, a1, u2, a2, a3, | u3, a3]   ← cut moved to u3 (turn start)
 ```
 
-The full cut-point pipeline and eight worked examples are in
+The full cut-point pipeline and seven worked examples are in
 [Compaction Internals](compaction-internals.md#3-activity-how-a-strategy-chooses-what-to-archive).
 
 ### The most recent turn is always kept
@@ -311,36 +306,11 @@ example a long tool-calling loop or a very large tool result. That turn stays ac
 though it goes over `maxEvents` / `maxTokens` / `maxEventsToKeep`, so compaction never
 archives the turn in progress. When the whole history is a single oversize turn, nothing
 is archived (and `RecursiveSummarizationCompactionStrategy` makes no LLM call). The same
-holds when the active window has no root-level `USER` message at all: there is no turn
-boundary to cut at, so nothing is archived.
+holds when the active window has no `USER` message at all: there is no turn boundary to
+cut at, so nothing is archived.
 
 ```
 Budget: 2 events   [u1, a1, u2, a2, a3, a4]
 Forward snap:      no USER after the cut → would archive everything
 Kept instead:      [u1, a1, | u2, a2, a3, a4]   ← last turn kept, over budget
 ```
-
-### Branch-awareness in multi-agent sessions
-
-!!! warning "Branches are deprecated"
-    Branch support is deprecated since 0.9.0 and will be removed in 0.10.0. Give each
-    sub-agent its own session instead; see [Multi-Agent](multi-agent.md).
-
-In multi-agent sessions, `UserMessage` events also appear on named branches (e.g.
-`branch="orch.researcher"`). A branched `UserMessage` is the prompt sent *to* a sub-agent:
-it is **turn-internal**, not a turn boundary. A single root turn can contain an entire
-sub-agent exchange:
-
-```
-[branch=null]  USER:      "What's the weather in Paris?"      ← real turn start
-[branch=null]  ASSISTANT: [tool call: delegate_to_agent]
-[branch="sub"] USER:      "Fetch weather for Paris"           ← internal sub-agent prompt
-[branch="sub"] ASSISTANT: [tool call: get_weather]
-[branch="sub"] TOOL:      {temp: "22C"}
-[branch="sub"] ASSISTANT: "It's 22°C in Paris"
-[branch=null]  ASSISTANT: "The weather in Paris is 22°C"
-```
-
-`snapToTurnStart` skips all branched events and stops only at a `USER` event with
-`branch == null` (`SessionEvent.isRootEvent()`), so the cut never lands on a sub-agent
-prompt and leaves the root turn's user message archived.

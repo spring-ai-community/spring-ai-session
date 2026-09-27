@@ -66,7 +66,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @TestPropertySource(properties = { "spring.datasource.url=jdbc:h2:mem:sessiontest;DB_CLOSE_DELAY=-1" })
 @Sql(scripts = "classpath:org/springframework/ai/session/jdbc/schema-h2.sql",
 		executionPhase = ExecutionPhase.BEFORE_TEST_CLASS)
-@SuppressWarnings("removal") // exercises the deprecated branch support
 @ContextConfiguration(classes = JdbcSessionRepositoryTests.TestConfig.class)
 class JdbcSessionRepositoryTests {
 
@@ -550,11 +549,6 @@ class JdbcSessionRepositoryTests {
 	}
 
 	@Test
-	void branchWildcardCharactersMatchLiterally() {
-		DialectScenarios.branchWildcardCharactersMatchLiterally(this.repository);
-	}
-
-	@Test
 	void appendEventWithIdOfAnotherSessionIsRejected() {
 		Session first = buildSession("user-a");
 		Session second = buildSession("user-b");
@@ -710,69 +704,6 @@ class JdbcSessionRepositoryTests {
 		assertThat(this.repository.findEvents(session.id(), EventFilter.active()))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("s2", "e3");
-	}
-
-	// -------------------------------------------------------------------------
-	// Branch filtering
-	// -------------------------------------------------------------------------
-
-	@Test
-	void findEventsWithBranchFilterDelegatesToDialect() {
-		// Verify that the branch filter SQL comes from the dialect, not hardcoded.
-		// A custom dialect that wraps H2's fragment with a recognizable comment is used
-		// to confirm the call is made.
-		JdbcSessionRepository repoWithCustomDialect = JdbcSessionRepository.builder()
-			.dataSource(this.dataSource)
-			.dialect(new H2JdbcSessionRepositoryDialect() {
-				@Override
-				public String getBranchFilterFragment() {
-					return super.getBranchFilterFragment(); // delegates to default || impl
-				}
-			})
-			.build();
-
-		Session session = buildSession("user-dialect-wiring");
-		repoWithCustomDialect.save(session);
-		repoWithCustomDialect.appendEvent(
-				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("root")).branch(null).build());
-		repoWithCustomDialect.appendEvent(SessionEvent.builder()
-			.sessionId(session.id())
-			.message(new UserMessage("child"))
-			.branch("a.b")
-			.build());
-
-		List<SessionEvent> forChild = repoWithCustomDialect.findEvents(session.id(), EventFilter.forBranch("a.b"));
-		assertThat(forChild).hasSize(2); // root + exact match
-	}
-
-	@Test
-	void findEventsWithBranchFilterIsolatesPeerAgents() {
-		Session session = buildSession("user-branch");
-		this.repository.save(session);
-
-		this.repository.appendEvent(
-				SessionEvent.builder().sessionId(session.id()).message(new UserMessage("root")).branch(null).build());
-		this.repository.appendEvent(SessionEvent.builder()
-			.sessionId(session.id())
-			.message(new UserMessage("by orchestrator"))
-			.branch("orch")
-			.build());
-		this.repository.appendEvent(SessionEvent.builder()
-			.sessionId(session.id())
-			.message(new UserMessage("by researcher"))
-			.branch("orch.researcher")
-			.build());
-		this.repository.appendEvent(SessionEvent.builder()
-			.sessionId(session.id())
-			.message(new UserMessage("by writer"))
-			.branch("orch.writer")
-			.build());
-
-		List<SessionEvent> forResearcher = this.repository.findEvents(session.id(),
-				EventFilter.forBranch("orch.researcher"));
-
-		assertThat(forResearcher).hasSize(3);
-		assertThat(forResearcher).noneMatch(e -> "by writer".equals(e.getMessage().getText()));
 	}
 
 	@Test

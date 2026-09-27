@@ -49,7 +49,6 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
  * <p>
  * The LLM call is mocked so tests run without a real AI model.
  */
-@SuppressWarnings("removal") // exercises the deprecated branch support
 class RecursiveSummarizationCompactionStrategyTests {
 
 	private static final String SESSION_ID = "test-session";
@@ -575,7 +574,7 @@ class RecursiveSummarizationCompactionStrategyTests {
 	}
 
 	@Test
-	void subAgentSystemMessageIsKeptAndNeverSummarized() {
+	void systemMessageStoredMidConversationIsKeptAndNeverSummarized() {
 		AtomicReference<String> summarizationPrompt = new AtomicReference<>();
 		ChatClient.ChatClientRequestSpec afterUser = mock(ChatClient.ChatClientRequestSpec.class,
 				Answers.RETURNS_DEEP_STUBS);
@@ -589,7 +588,7 @@ class RecursiveSummarizationCompactionStrategyTests {
 			.maxEventsToKeep(2)
 			.overlapSize(1)
 			.build();
-		List<SessionEvent> events = List.of(user("u1"), system("Researcher rules", "orch.researcher"),
+		List<SessionEvent> events = List.of(user("u1"), system("Researcher rules"),
 				assistant("a1"), user("u2"), assistant("a2"));
 
 		CompactionResult result = strategy.compact(contextFor(events));
@@ -649,10 +648,6 @@ class RecursiveSummarizationCompactionStrategyTests {
 		return SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage(text)).build();
 	}
 
-	private static SessionEvent system(String text, String branch) {
-		return SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage(text)).branch(branch).build();
-	}
-
 	private static SessionEvent user(String text) {
 		return SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage(text)).build();
 	}
@@ -670,21 +665,13 @@ class RecursiveSummarizationCompactionStrategyTests {
 	}
 
 	@Test
-	void compactionWithoutRootUserMessageArchivesNothing() {
-		// Every event is on a sub-agent branch (e.g. a top-level agent whose advisor has a
-		// branch), so there is no root turn to cut at: nothing may be archived.
+	void compactionWithoutUserMessageArchivesNothing() {
+		// No USER event at all (e.g. only assistant and tool steps), so there is no turn
+		// boundary to cut at: nothing may be archived.
 		List<SessionEvent> events = new ArrayList<>();
 		for (int i = 1; i <= 6; i++) {
-			events.add(SessionEvent.builder()
-				.sessionId(SESSION_ID)
-				.message(new UserMessage("question " + i))
-				.branch("orch")
-				.build());
-			events.add(SessionEvent.builder()
-				.sessionId(SESSION_ID)
-				.message(new AssistantMessage("answer " + i))
-				.branch("orch")
-				.build());
+			events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("step " + i)).build());
+			events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("answer " + i)).build());
 		}
 
 		CompactionResult result = RecursiveSummarizationCompactionStrategy.builder(this.chatClient).maxEventsToKeep(4).build().compact(contextFor(events));

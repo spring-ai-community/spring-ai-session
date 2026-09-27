@@ -36,7 +36,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Tests for {@link SessionEventTools#conversationSearch}.
  */
-@SuppressWarnings("removal") // exercises the deprecated branch support
 class SessionEventToolsTests {
 
 	private SessionService sessionService;
@@ -198,30 +197,6 @@ class SessionEventToolsTests {
 				new ToolContext(Map.of(SessionEventTools.SESSION_ID_CONTEXT_KEY, " ")));
 
 		assertThat(result).isEqualTo(SessionEventTools.MISSING_SESSION_ID_RESULT);
-	}
-
-	@Test
-	void branchScopedToolDoesNotSeePeerSubAgentEvents() {
-		this.sessionService.appendMessage(this.sessionId, new UserMessage("root note about spring"));
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(this.sessionId)
-			.branch("orch.researcher")
-			.message(new AssistantMessage("researcher found spring docs"))
-			.build());
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(this.sessionId)
-			.branch("orch.writer")
-			.message(new AssistantMessage("writer drafted spring article"))
-			.build());
-
-		SessionEventTools researcherTools = SessionEventTools.builder(this.sessionService)
-			.branch("orch.researcher")
-			.build();
-		String result = researcherTools.conversationSearch("thinking...", "spring", 0, toolContext());
-
-		assertThat(result).contains("root note about spring", "researcher found spring docs")
-			.doesNotContain("writer drafted");
-		assertThat(search("spring", 0)).contains("writer drafted");
 	}
 
 	// --- helpers ---

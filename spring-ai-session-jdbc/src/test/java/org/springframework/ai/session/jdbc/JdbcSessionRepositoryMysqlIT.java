@@ -83,9 +83,4 @@ class JdbcSessionRepositoryMysqlIT {
 		DialectScenarios.upsertKeepsCreatedAtAndEvents(this.repository);
 	}
 
-	@Test
-	void branchWildcardCharactersMatchLiterally() {
-		DialectScenarios.branchWildcardCharactersMatchLiterally(this.repository);
-	}
-
 }

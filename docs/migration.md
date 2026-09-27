@@ -1,5 +1,53 @@
 # Migration Guide
 
+## Upgrading to 0.10.0
+
+### Breaking: branch-based multi-agent isolation removed
+
+ADK-style branches, deprecated in 0.9.0, are removed. These APIs no longer exist:
+
+- `SessionEvent.Builder.branch(...)`, `SessionEvent.getBranch()` and
+  `SessionEvent.isRootEvent()`;
+- `EventFilter.forBranch(...)`, `EventFilter.Builder.branch(...)` and the `branch`
+  component of the `EventFilter` record (`EventFilter.branch()` and the constructor
+  parameter);
+- `SessionEventTools.Builder.branch(...)`.
+
+Give each sub-agent its own session instead, with its own `SessionMemoryAdvisor` and
+compaction settings, and pass only the task in and the result back. See
+[Multi-Agent](session-management/multi-agent.md#session-per-sub-agent) for an example.
+
+### Behavior changes
+
+- **Every `USER` event starts a turn.** Turn counting (`TurnCountTrigger`) and every
+  strategy's turn boundaries now use all non-synthetic `USER` events, and the event-count
+  strategies (`maxEvents`, `maxEventsToKeep`) count all real events. Events that were
+  stored on a branch before the upgrade become ordinary events: every reader sees them,
+  and their `USER` events now count as turns and turn boundaries. Sessions with branched
+  history may therefore be compacted sooner after the upgrade.
+- **One latest stored system message per session.** When system messages are stored
+  (opt-in), the latest one in the session is the system prompt; it used to be the latest
+  one per branch. Earlier ones, including those stored on former branches, are archived at
+  the next compaction. The kept system message counts fully toward the
+  `TokenCountCompactionStrategy` budget and the `TokenCountTrigger` threshold.
+- **`SessionMemoryAdvisor`** no longer reads or writes by branch: it records every user and
+  assistant event as an ordinary event and uses the latest stored system message.
+
+### JDBC: the `branch` column is unused
+
+`JdbcSessionRepository` no longer reads or writes `AI_SESSION_EVENT.branch`. The column
+stays in the bundled schema scripts so existing databases keep working, and it will be
+removed from them in a later release. You can drop it yourself:
+
+```sql
+ALTER TABLE AI_SESSION_EVENT DROP COLUMN branch;
+```
+
+### Custom implementers: `JdbcSessionRepositoryDialect.getBranchFilterFragment()` removed
+
+The method is gone from the dialect contract. A custom dialect that overrides it no longer
+compiles because of its `@Override`; delete the method.
+
 ## Upgrading to 0.9.0
 
 ### Application changes
@@ -101,8 +149,7 @@ deprecated APIs are:
 They still work in 0.9.0. Give each sub-agent its own session instead, with its own
 `SessionMemoryAdvisor` and compaction settings, and pass only the task in and the result
 back. See [Multi-Agent](session-management/multi-agent.md#session-per-sub-agent) for an
-example, and [the limits of branches](session-management/multi-agent.md#compaction-and-branches)
-for why they are being removed.
+example. Branches were removed in 0.10.0; see [Upgrading to 0.10.0](#upgrading-to-0100).
 
 ### Custom implementers
 
@@ -152,7 +199,8 @@ The built-in PostgreSQL, MySQL/MariaDB and H2 dialects already follow these rule
   branch. Advisors without a branch filter (the default) still write root events. Since
   only root `USER` events count as turns, a branched advisor's messages no longer advance
   `TurnCountTrigger` or move compaction's turn boundaries. Events already stored at the
-  root are not moved. See [Multi-Agent Branch Isolation](session-management/multi-agent.md#visibility-flows-down-not-up).
+  root are not moved. Branches were removed in 0.10.0; see
+  [Upgrading to 0.10.0](#upgrading-to-0100).
 - **The latest stored system message wins.** Stored system messages used to be archived
   like any other event. Now every strategy keeps the latest one per branch active, places
   it first and never summarizes it; earlier ones are archived when compaction runs, and

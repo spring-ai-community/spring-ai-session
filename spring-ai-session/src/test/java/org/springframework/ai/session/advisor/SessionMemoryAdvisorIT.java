@@ -67,7 +67,6 @@ import static org.mockito.Mockito.mock;
  *
  * @author Christian Tzolov
  */
-@SuppressWarnings("removal") // exercises the deprecated branch support
 @SpringBootTest(classes = SessionMemoryAdvisorIT.TestConfig.class)
 class SessionMemoryAdvisorIT {
 
@@ -415,56 +414,11 @@ class SessionMemoryAdvisorIT {
 	}
 
 	@Test
-	void orchestratorDoesNotPickUpASubAgentSystemMessage() {
-		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Orchestrator rules."));
+	void storedSystemPromptStillAppliesAfterCompaction() {
+		// The system prompt was stored in turn 1; after later turns have been compacted it
+		// must still apply.
 		this.sessionService.appendMessage(this.sessionId, new UserMessage("Research Paris."));
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(this.sessionId)
-			.branch("orch.researcher")
-			.message(new SystemMessage("Researcher rules."))
-			.build());
-
-		// The root advisor loads every branch, but only root system messages configure it.
-		List<Message> instructions = beforeWithPrompt(new UserMessage("Summarize the findings."));
-
-		assertThat(instructions).filteredOn(SystemMessage.class::isInstance)
-			.extracting(Message::getText)
-			.containsExactly("Orchestrator rules.");
-	}
-
-	@Test
-	void subAgentUsesItsOwnSystemMessageNotItsAncestors() {
-		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Orchestrator rules."));
-		this.sessionService.appendMessage(this.sessionId, new UserMessage("Research Paris."));
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(this.sessionId)
-			.branch("orch.researcher")
-			.message(new SystemMessage("Researcher rules."))
-			.build());
-		SessionMemoryAdvisor researcher = SessionMemoryAdvisor.builder(this.sessionService)
-			.eventFilter(EventFilter.forBranch("orch.researcher"))
-			.build();
-
-		List<Message> instructions = researcher.before(ChatClientRequest.builder()
-			.prompt(new Prompt(List.of(new UserMessage("Find sources."))))
-			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
-			.build(), mock(AdvisorChain.class)).prompt().getInstructions();
-
-		assertThat(instructions).filteredOn(SystemMessage.class::isInstance)
-			.extracting(Message::getText)
-			.containsExactly("Researcher rules.");
-	}
-
-	@Test
-	void subAgentKeepsItsSystemPromptAfterCompaction() {
-		// The orchestrator delegates to the researcher in turn 1 and again after later turns
-		// have been compacted: the researcher's stored system prompt must still apply.
-		this.sessionService.appendMessage(this.sessionId, new UserMessage("Research Paris."));
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(this.sessionId)
-			.branch("orch.researcher")
-			.message(new SystemMessage("Researcher rules."))
-			.build());
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Researcher rules."));
 		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("Paris findings."));
 		for (int i = 2; i <= 4; i++) {
 			this.sessionService.appendMessage(this.sessionId, new UserMessage("question " + i));
@@ -472,14 +426,7 @@ class SessionMemoryAdvisorIT {
 		}
 		this.sessionService.compact(this.sessionId, request -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
-		SessionMemoryAdvisor researcher = SessionMemoryAdvisor.builder(this.sessionService)
-			.eventFilter(EventFilter.forBranch("orch.researcher"))
-			.build();
-
-		List<Message> instructions = researcher.before(ChatClientRequest.builder()
-			.prompt(new Prompt(List.of(new UserMessage("Research Rome."))))
-			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
-			.build(), mock(AdvisorChain.class)).prompt().getInstructions();
+		List<Message> instructions = beforeWithPrompt(new UserMessage("Research Rome."));
 
 		assertThat(instructions).filteredOn(SystemMessage.class::isInstance)
 			.extracting(Message::getText)
@@ -535,116 +482,6 @@ class SessionMemoryAdvisorIT {
 
 		// Must not throw even though session.userId() is "test-user"
 		this.advisor.before(request, chain);
-	}
-
-	// --- historyFilter ---
-
-	@Test
-	void historyFilterExcludesSiblingBranchEvents() {
-		// Root event (null branch) + orch.writer event (sibling branch) +
-		// orch.researcher event (target branch).
-		// An advisor configured for orch.researcher must see root + orch.researcher
-		// events only; orch.writer events must be excluded from the injected history.
-		this.sessionService.appendEvent(
-				SessionEvent.builder().sessionId(this.sessionId).message(new UserMessage("root question")).build()); // null
-																														// branch
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(this.sessionId)
-			.message(new AssistantMessage("writer output"))
-			.branch("orch.writer")
-			.build());
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(this.sessionId)
-			.message(new AssistantMessage("researcher output"))
-			.branch("orch.researcher")
-			.build());
-
-		SessionMemoryAdvisor branchAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
-			.eventFilter(EventFilter.forBranch("orch.researcher"))
-			.build();
-
-		ChatClientRequest request = buildRequest(this.sessionId, "follow-up");
-		AdvisorChain chain = mock(AdvisorChain.class);
-
-		ChatClientRequest modified = branchAdvisor.before(request, chain);
-
-		List<Message> instructions = modified.prompt().getInstructions();
-		List<String> texts = instructions.stream().map(Message::getText).toList();
-
-		assertThat(texts).contains("root question");
-		assertThat(texts).contains("researcher output");
-		assertThat(texts).doesNotContain("writer output");
-	}
-
-	@Test
-	void branchedAdvisorRecordsUserAndAssistantEventsOnItsBranch() {
-		SessionMemoryAdvisor researcher = SessionMemoryAdvisor.builder(this.sessionService)
-			.eventFilter(EventFilter.forBranch("orch.researcher"))
-			.build();
-		AdvisorChain chain = mock(AdvisorChain.class);
-
-		researcher.before(buildRequest(this.sessionId, "Find sources."), chain);
-		researcher.after(buildResponse(this.sessionId, "Three sources found."), chain);
-
-		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getBranch)
-			.containsExactly("orch.researcher", "orch.researcher");
-	}
-
-	@Test
-	void defaultAdvisorRecordsRootEvents() {
-		AdvisorChain chain = mock(AdvisorChain.class);
-
-		this.advisor.before(buildRequest(this.sessionId, "Hello"), chain);
-		this.advisor.after(buildResponse(this.sessionId, "Hi!"), chain);
-
-		assertThat(this.sessionService.getEvents(this.sessionId)).allMatch(SessionEvent::isRootEvent).hasSize(2);
-	}
-
-	@Test
-	void perRequestFilterBranchIsUsedForRecordedEvents() {
-		AdvisorChain chain = mock(AdvisorChain.class);
-		Map<String, Object> context = Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId,
-				SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, EventFilter.forBranch("orch.writer"));
-
-		this.advisor.before(ChatClientRequest.builder()
-			.prompt(new Prompt(List.of(new UserMessage("Write it up."))))
-			.context(context)
-			.build(), chain);
-		this.advisor.after(ChatClientResponse.builder()
-			.chatResponse(ChatResponse.builder().generations(List.of(new Generation(new AssistantMessage("Draft.")))).build())
-			.context(context)
-			.build(), chain);
-
-		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getBranch)
-			.containsExactly("orch.writer", "orch.writer");
-	}
-
-	@Test
-	void siblingAgentsDoNotSeeEachOthersRecordedConversation() {
-		SessionMemoryAdvisor researcher = SessionMemoryAdvisor.builder(this.sessionService)
-			.eventFilter(EventFilter.forBranch("orch.researcher"))
-			.build();
-		SessionMemoryAdvisor writer = SessionMemoryAdvisor.builder(this.sessionService)
-			.eventFilter(EventFilter.forBranch("orch.writer"))
-			.build();
-		AdvisorChain chain = mock(AdvisorChain.class);
-
-		researcher.before(buildRequest(this.sessionId, "Find sources."), chain);
-		researcher.after(buildResponse(this.sessionId, "Three sources found."), chain);
-
-		List<String> writerPrompt = writer.before(buildRequest(this.sessionId, "Write it up."), chain)
-			.prompt()
-			.getInstructions()
-			.stream()
-			.map(Message::getText)
-			.toList();
-		List<String> rootPrompt = beforeWithPrompt(new UserMessage("Summarize.")).stream()
-			.map(Message::getText)
-			.toList();
-
-		assertThat(writerPrompt).containsExactly("Write it up.");
-		// The root agent (no branch filter) sees every branch.
-		assertThat(rootPrompt).contains("Find sources.", "Three sources found.");
 	}
 
 	// --- Per-request EventFilter override ---

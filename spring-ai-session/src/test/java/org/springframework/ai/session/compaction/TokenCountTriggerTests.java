@@ -35,7 +35,6 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 /**
  * Tests for {@link TokenCountTrigger}.
  */
-@SuppressWarnings("removal") // exercises the deprecated branch support
 class TokenCountTriggerTests {
 
 	private static final String SESSION_ID = "test-session";
@@ -154,10 +153,10 @@ class TokenCountTriggerTests {
 	}
 
 	@Test
-	void subAgentAndSupersededSystemMessagesDoNotCountTowardTheThreshold() {
-		// Measures what the strategy budgets: the root agent's latest system message, the
-		// summaries and the conversation. Sub-agent prompts and superseded root prompts are
-		// not sent with the root view, so they must not make the trigger fire.
+	void supersededSystemMessagesDoNotCountTowardTheThreshold() {
+		// Measures what the strategy budgets: the latest system message, the summaries and
+		// the conversation. Superseded system messages are not sent, so they must not make
+		// the trigger fire.
 		// "System: new" (11) + "User: hi" (8) + "Assistant: ok" (13) = 32.
 		TokenCountTrigger trigger = TokenCountTrigger.builder()
 			.threshold(33)
@@ -165,11 +164,6 @@ class TokenCountTriggerTests {
 			.build();
 		List<SessionEvent> events = new ArrayList<>();
 		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage("old xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")).build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.branch("orch.researcher")
-			.message(new SystemMessage("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))
-			.build());
 		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage("new")).build());
 		events.addAll(turn("hi", "ok"));
 

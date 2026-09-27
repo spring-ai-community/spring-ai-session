@@ -63,9 +63,9 @@ import org.springframework.util.Assert;
  * On each interaction:
  * <ol>
  * <li>Retrieves the session's event history and prepends it to the prompt messages. Of the
- * system messages stored in the session only the latest one on the advisor's own branch is
- * used (it is that agent's system prompt); all system messages are moved to the front, and
- * exact-text duplicates are sent only once.</li>
+ * system messages stored in the session only the latest one is used (it is the system
+ * prompt); all system messages are moved to the front, and exact-text duplicates are sent
+ * only once.</li>
  * <li>Appends the current user message to the session, if accepted by the configured
  * {@link MessageFilter}.</li>
  * <li>After the model responds, appends the assistant message(s) to the session; messages
@@ -73,13 +73,6 @@ import org.springframework.util.Assert;
  * assistant messages (blank text, no tool calls, and no media) are filtered out.</li>
  * <li>Optionally triggers context compaction if the configured trigger fires.</li>
  * </ol>
- *
- * <p>
- * <strong>Branches:</strong> the branch of the configured {@link EventFilter} (merged with
- * any per-request filter) is the agent's branch. It scopes both sides: the history read
- * (the agent's own branch plus its ancestors') and the user and assistant events written,
- * which are recorded on that branch. With the default {@link EventFilter#all()} the branch
- * is {@code null}, so events are written as root events and every branch is read.
  *
  * <p>
  * The session is identified by the {@link #SESSION_ID_CONTEXT_KEY} value in the advisor
@@ -195,7 +188,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		return this.scheduler;
 	}
 
-	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public ChatClientRequest before(ChatClientRequest request, AdvisorChain advisorChain) {
 
@@ -242,18 +234,13 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// (e.g. when the request also carries its own system prompt). Stored system
 		// messages are always added; step 3 then drops the exact-text copy an earlier
 		// round already put in the prompt.
-		// Latest wins, per branch: of the system messages stored in the session, only the
-		// latest one stored on this advisor's own branch (null for the root agent) is its
-		// system prompt. Earlier ones are superseded (compaction archives them), and system
-		// messages of other branches (ancestors, peers or sub-agents) configure other
-		// agents, so neither is sent. Synthetic events (e.g. legacy SYSTEM summaries) are
-		// kept.
-		String agentBranch = eventFilter.branch();
+		// Latest wins: of the system messages stored in the session, only the latest one
+		// is the system prompt. Earlier ones are superseded (compaction archives them), so
+		// they are not sent. Synthetic events (e.g. legacy SYSTEM summaries) are kept.
 		SessionEvent latestStoredSystem = null;
 		for (int i = events.size() - 1; i >= 0; i--) {
 			SessionEvent event = events.get(i);
-			if (!event.isSynthetic() && event.getMessageType() == MessageType.SYSTEM
-					&& Objects.equals(event.getBranch(), agentBranch)) {
+			if (!event.isSynthetic() && event.getMessageType() == MessageType.SYSTEM) {
 				latestStoredSystem = event;
 				break;
 			}
@@ -297,32 +284,27 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		// 4. Append the current user message to the session, subject to the configured
 		// message filter. Skipping only affects persistence — the outgoing prompt is
-		// untouched. The event is recorded on the agent's branch, so what the agent
-		// writes is isolated exactly like what it reads.
+		// untouched.
 		Message userMessage = request.prompt().getLastUserOrToolResponseMessage();
 		if (userMessage != null && shouldPersist(userMessage, sessionId)) {
 			this.sessionService.appendEvent(SessionEvent.builder()
 				.id(this.requestEventIdGenerator.generate(request, userMessage))
 				.sessionId(sessionId)
 				.message(userMessage)
-				.branch(agentBranch)
 				.build());
 		}
 
 		return request.mutate().prompt(request.prompt().mutate().messages(combined).build()).build();
 	}
 
-	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public ChatClientResponse after(ChatClientResponse response, AdvisorChain advisorChain) {
 		String sessionId = getSessionId(response.context());
 
 		// 1. Append the assistant message(s) produced by the model, subject to the
 		// configured message filter. By default excludes messages that carry no
-		// content — blank text, no tool calls, and no media. Like the user message, the
-		// reply is recorded on the agent's branch.
+		// content — blank text, no tool calls, and no media.
 		if (response.chatResponse() != null) {
-			String agentBranch = resolveEventFilter(response.context()).branch();
 			response.chatResponse()
 				.getResults()
 				.stream()
@@ -332,7 +314,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 					.id(this.responseEventIdGenerator.generate(response, msg))
 					.sessionId(sessionId)
 					.message(msg)
-					.branch(agentBranch)
 					.build()));
 		}
 
@@ -381,8 +362,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	/**
 	 * Returns the advisor's configured filter, merged with the per-request filter from
 	 * {@link #EVENT_FILTER_CONTEXT_KEY} when present, so that request-level parameters
-	 * override the advisor defaults. Its branch is the agent's branch: it scopes both the
-	 * history read and the events written.
+	 * override the advisor defaults.
 	 */
 	private EventFilter resolveEventFilter(Map<String, @Nullable Object> context) {
 		Object requestFilterValue = context.get(EVENT_FILTER_CONTEXT_KEY);
@@ -555,15 +535,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		/**
 		 * Filter applied when loading the session's event history to inject into the
 		 * prompt. Defaults to {@link EventFilter#all()} (all events).
-		 * <p>
-		 * Use {@link EventFilter#forBranch(String)} in multi-agent scenarios so each
-		 * agent only sees events on its own branch and its ancestors'. The filter's
-		 * branch is also the branch the advisor records the agent's user and assistant
-		 * events on: <pre>{@code
-		 * SessionMemoryAdvisor.builder(sessionService)
-		 *     .eventFilter(EventFilter.forBranch("orch.researcher"))
-		 *     .build();
-		 * }</pre>
 		 */
 		public Builder eventFilter(EventFilter eventFilter) {
 			Assert.notNull(eventFilter, "eventFilter must not be null");

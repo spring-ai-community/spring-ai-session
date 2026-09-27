@@ -134,8 +134,7 @@ an in-process scan.
 **`EventFilter.keyword()`/`keywords()`** translate to `LOWER(...) LIKE ? ESCAPE '!'`
 predicates — one for `keyword`, one per term for `keywords`, joined with `AND`/`OR` per
 `matchMode`. Terms are always bound as JDBC parameters, and `%`, `_` and `!` are escaped so
-they match literally, as in the in-memory repository. The branch filter escapes the stored
-branch name the same way.
+they match literally, as in the in-memory repository.
 
 **`EventFilter.pattern()` falls back to in-memory filtering.** Java regex cannot be
 translated to portable SQL — each database has its own regex dialect, none a superset of

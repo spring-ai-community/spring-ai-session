@@ -34,7 +34,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Tests for {@link SlidingWindowCompactionStrategy}.
  */
-@SuppressWarnings("removal") // exercises the deprecated branch support
 class SlidingWindowCompactionStrategyTests {
 
 	private static final String SESSION_ID = "test-session";
@@ -224,71 +223,6 @@ class SlidingWindowCompactionStrategyTests {
 		assertThat(result.tokensEstimatedSaved()).isGreaterThan(0);
 	}
 
-	// --- branch-awareness ---
-
-	@Test
-	void branchEventsDoNotConsumeMaxEventsSlots() {
-		// real=[u1, a1, sub-q(branch), sub-a(branch), u2, a2] → 4 root events, 2 branch
-		// maxEvents=2 → archive 2 root events (u1, a1); kept window starts at u2.
-		// Branch events between the archived and kept root turns are also archived because
-		// they fall before the snap cut point.
-		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(2).build();
-
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a1")).build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new UserMessage("sub-q"))
-			.branch("sub")
-			.build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new AssistantMessage("sub-a"))
-			.branch("sub")
-			.build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u2")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a2")).build());
-
-		CompactionResult result = strategy.compact(contextFor(events));
-
-		assertThat(result.compactedEvents()).hasSize(2);
-		assertThat(result.compactedEvents().get(0).getMessage().getText()).isEqualTo("u2");
-		assertThat(result.compactedEvents().get(1).getMessage().getText()).isEqualTo("a2");
-		assertThat(result.archivedEvents()).hasSize(4); // u1, a1, sub-q, sub-a
-	}
-
-	@Test
-	void noCompactionWhenRootEventsWithinBudgetDespiteExcessTotalEvents() {
-		// real=[u1, a1, sub-q(branch), sub-a(branch), u2, a2] — 6 total, 4 root events
-		// maxEvents=4 → 4 root events <= 4 slots → no-op (branch events come for free)
-		// Old behaviour (count all real events): 6 > 4 → would compact and start window
-		// at branch USER u2-sub, which is semantically wrong.
-		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(4).build();
-
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a1")).build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new UserMessage("sub-q"))
-			.branch("sub")
-			.build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new AssistantMessage("sub-a"))
-			.branch("sub")
-			.build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u2")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a2")).build());
-
-		CompactionResult result = strategy.compact(contextFor(events));
-
-		// All 6 events returned unchanged — no compaction needed
-		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.compactedEvents()).hasSize(6);
-	}
-
 	@Test
 	void oversizeLastTurnIsKeptInsteadOfArchivingEverything() {
 		// The last turn (u2..a4) alone holds more root events than maxEvents; the cut
@@ -377,11 +311,11 @@ class SlidingWindowCompactionStrategyTests {
 	}
 
 	@Test
-	void subAgentSystemMessageSurvivesCompactionOfTheTurnItWasStoredIn() {
-		// The orchestrator may delegate to the same sub-agent again in a later turn, so the
-		// sub-agent's latest system prompt must stay active like the root agent's.
+	void systemMessageSurvivesCompactionOfTheTurnItWasStoredIn() {
+		// The latest system prompt stays active even when the turn it was stored in is
+		// archived.
 		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(2).build();
-		List<SessionEvent> events = List.of(user("u1"), system("Researcher rules", "orch.researcher"),
+		List<SessionEvent> events = List.of(user("u1"), system("Researcher rules"),
 				assistant("a1"), user("u2"), assistant("a2"), user("u3"), assistant("a3"));
 
 		CompactionResult result = strategy.compact(contextFor(events));
@@ -392,26 +326,8 @@ class SlidingWindowCompactionStrategyTests {
 			.containsExactly("u1", "a1", "u2", "a2");
 	}
 
-	@Test
-	void olderSubAgentSystemMessageOnTheSameBranchIsSuperseded() {
-		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(20).build();
-		List<SessionEvent> events = List.of(system("Orchestrator rules"), user("u1"),
-				system("Researcher v1", "orch.researcher"), assistant("a1"), user("u2"),
-				system("Researcher v2", "orch.researcher"), assistant("a2"));
-
-		CompactionResult result = strategy.compact(contextFor(events));
-
-		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("Researcher v1");
-		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
-			.containsExactly("Orchestrator rules", "Researcher v2", "u1", "a1", "u2", "a2");
-	}
-
 	private static SessionEvent system(String text) {
 		return SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage(text)).build();
-	}
-
-	private static SessionEvent system(String text, String branch) {
-		return SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage(text)).branch(branch).build();
 	}
 
 	private static SessionEvent user(String text) {
@@ -431,21 +347,13 @@ class SlidingWindowCompactionStrategyTests {
 	}
 
 	@Test
-	void compactionWithoutRootUserMessageArchivesNothing() {
-		// Every event is on a sub-agent branch (e.g. a top-level agent whose advisor has a
-		// branch), so there is no root turn to cut at: nothing may be archived.
+	void compactionWithoutUserMessageArchivesNothing() {
+		// No USER event at all (e.g. only assistant and tool steps), so there is no turn
+		// boundary to cut at: nothing may be archived.
 		List<SessionEvent> events = new ArrayList<>();
 		for (int i = 1; i <= 6; i++) {
-			events.add(SessionEvent.builder()
-				.sessionId(SESSION_ID)
-				.message(new UserMessage("question " + i))
-				.branch("orch")
-				.build());
-			events.add(SessionEvent.builder()
-				.sessionId(SESSION_ID)
-				.message(new AssistantMessage("answer " + i))
-				.branch("orch")
-				.build());
+			events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("step " + i)).build());
+			events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("answer " + i)).build());
 		}
 
 		CompactionResult result = SlidingWindowCompactionStrategy.builder().maxEvents(2).build().compact(contextFor(events));

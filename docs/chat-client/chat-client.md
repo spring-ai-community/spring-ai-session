@@ -17,18 +17,16 @@ On every request the advisor:
    `EventFilter.all()`), merged with any per-request `EVENT_FILTER_CONTEXT_KEY` filter, and
    **prepends** it to the prompt. `EventFilter.active()` is always merged in on top, so
    archived (compacted-out) events never reach the prompt. Of any stored system messages
-   (an opt-in), only the latest one of the advisor's own branch is kept.
+   (an opt-in), only the latest one is kept.
 3. Moves all `SystemMessage`s to the front, in their relative order, and sends a text that
    exactly matches an earlier one only once. Texts are never merged or rewritten, so the
    prompt stays stable for prompt caching. See [System Messages](../session-management/system-messages.md).
 4. Appends the prompt's last user message to the session, if the configured
    `MessageFilter` accepts it. Inside a tool-calling loop this is the trailing
-   tool-response message instead (`Prompt.getLastUserOrToolResponseMessage()`). The event
-   is recorded on the filter's branch (`null`, a root event, by default). Branches are
-   deprecated; see [Multi-Agent](../session-management/multi-agent.md#filtering-by-branch).
-5. After the model responds, appends the assistant message(s), on the same branch, through
-   the configured `MessageFilter` (default: `MessageFilter.skipEmptyMessages()`). By default,
-   empty assistant messages (blank text, no tool calls, and no media) are skipped — some
+   tool-response message instead (`Prompt.getLastUserOrToolResponseMessage()`).
+5. After the model responds, appends the assistant message(s) through the configured
+   `MessageFilter` (default: `MessageFilter.skipEmptyMessages()`). By default, empty
+   assistant messages (blank text, no tool calls, and no media) are skipped — some
    models (e.g. Bedrock Converse) emit an empty `end_turn` frame after tool use that
    would otherwise be replayed and rejected on the next request.
 6. If a trigger fires, runs compaction **synchronously** before returning — the full turn

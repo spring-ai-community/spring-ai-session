@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS AI_SESSION_EVENT (
     message_data    LONGVARCHAR,
     synthetic       BOOLEAN       NOT NULL DEFAULT FALSE,
     archived        BOOLEAN       NOT NULL DEFAULT FALSE,
+    -- Unused since 0.10.0 (branch support was removed); kept for existing databases
     branch          VARCHAR(500),
     metadata        LONGVARCHAR,
     CONSTRAINT fk_ai_session_event_session

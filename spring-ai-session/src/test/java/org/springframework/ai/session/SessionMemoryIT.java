@@ -37,13 +37,12 @@ import org.springframework.context.annotation.Bean;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Integration tests for session lifecycle, event management, compaction strategies, and
- * multi-agent branch isolation — exercised end-to-end through a Spring Boot application
- * context with {@link DefaultSessionService} and {@link InMemorySessionRepository}.
+ * Integration tests for session lifecycle, event management and compaction strategies —
+ * exercised end-to-end through a Spring Boot application context with
+ * {@link DefaultSessionService} and {@link InMemorySessionRepository}.
  *
  * @author Christian Tzolov
  */
-@SuppressWarnings("removal") // exercises the deprecated branch support
 @SpringBootTest(classes = SessionMemoryIT.TestConfig.class)
 class SessionMemoryIT {
 
@@ -309,79 +308,6 @@ class SessionMemoryIT {
 		// Synthetic events must survive compaction
 		long syntheticCount = result.compactedEvents().stream().filter(SessionEvent::isSynthetic).count();
 		assertThat(syntheticCount).isEqualTo(2);
-	}
-
-	// --- Multi-agent branch isolation ---
-
-	@Test
-	void branchFilterIsolatesSiblingAgentEvents() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-10").build());
-
-		// Root event (no branch) — visible to all
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(session.id())
-			.message(new UserMessage("orchestrator root task"))
-			.build());
-
-		// Researcher agent events
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(session.id())
-			.message(new UserMessage("research query"))
-			.branch("orch.researcher")
-			.build());
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(session.id())
-			.message(new AssistantMessage("research result"))
-			.branch("orch.researcher")
-			.build());
-
-		// Writer agent events (sibling — must NOT see researcher events)
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(session.id())
-			.message(new UserMessage("write task"))
-			.branch("orch.writer")
-			.build());
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(session.id())
-			.message(new AssistantMessage("written content"))
-			.branch("orch.writer")
-			.build());
-
-		// Researcher's view: sees root + own events, NOT writer's events
-		List<SessionEvent> researcherView = this.sessionService.getEvents(session.id(),
-				EventFilter.forBranch("orch.researcher"));
-		assertThat(researcherView).hasSize(3);
-		assertThat(researcherView).noneMatch(e -> "orch.writer".equals(e.getBranch()));
-
-		// Writer's view: sees root + own events, NOT researcher's events
-		List<SessionEvent> writerView = this.sessionService.getEvents(session.id(),
-				EventFilter.forBranch("orch.writer"));
-		assertThat(writerView).hasSize(3);
-		assertThat(writerView).noneMatch(e -> "orch.researcher".equals(e.getBranch()));
-	}
-
-	@Test
-	void branchFilterAncestorEventsVisibleToChildAgent() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-11").build());
-
-		// Orchestrator-level event
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(session.id())
-			.message(new UserMessage("orch task"))
-			.branch("orch")
-			.build());
-
-		// Sub-researcher event
-		this.sessionService.appendEvent(SessionEvent.builder()
-			.sessionId(session.id())
-			.message(new AssistantMessage("sub result"))
-			.branch("orch.researcher")
-			.build());
-
-		// Deep child — can see both orch and orch.researcher events
-		List<SessionEvent> deepView = this.sessionService.getEvents(session.id(),
-				EventFilter.forBranch("orch.researcher.sub"));
-		assertThat(deepView).hasSize(2);
 	}
 
 	// --- Spring Boot configuration ---
