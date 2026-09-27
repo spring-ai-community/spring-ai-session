@@ -1284,7 +1284,7 @@ repository and <code>SessionService</code> (schema auto-initialised with an embe
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">&lt;dependency&gt;</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="nt">&lt;groupId&gt;</span>org.springaicommunity<span class="nt">&lt;/groupId&gt;</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&lt;artifactId&gt;</span>spring-ai-starter-session-jdbc<span class="nt">&lt;/artifactId&gt;</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&lt;version&gt;</span>${spring-ai-session.version}<span class="nt">&lt;/version&gt;</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&lt;version&gt;</span>${spring-ai-session.version}<span class="nt">&lt;/version&gt;</span><span class="w"> </span><span class="cm">&lt;!-- e.g. 0.9.0 --&gt;</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">&lt;/dependency&gt;</span>
 </span></code></pre></div>
 <div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nd">@Bean</span>
@@ -1303,8 +1303,8 @@ repository and <code>SessionService</code> (schema auto-initialised with an embe
 </span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
 </span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
-<p>See <a href="getting-started/">Getting Started</a> for the full setup, including persistent
-databases and a no-Boot programmatic option.</p>
+<p>See <a href="getting-started/">Getting Started</a> for the full setup, including manual JDBC and
+in-memory setups.</p>
 <p><strong>Requirements:</strong> Java 17+, Spring AI <code>2.0.1+</code>, Spring Boot <code>4.1.1+</code>.</p>
 <hr />
 <h2 id="links">Links<a class="headerlink" href="#links" title="Permanent link">&para;</a></h2>

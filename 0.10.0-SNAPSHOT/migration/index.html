@@ -1971,6 +1971,13 @@ removed from them in a later release. You can drop it yourself:</p>
 <p>The method is gone from the dialect contract. A custom dialect that overrides it no longer
 compiles because of its <code>@Override</code>; delete the method.</p>
 <h2 id="upgrading-to-090">Upgrading to 0.9.0<a class="headerlink" href="#upgrading-to-090" title="Permanent link">&para;</a></h2>
+<div class="admonition note">
+<p class="admonition-title">Branches were removed in 0.10.0</p>
+<p>The branch-related items below (branch filters, <code>getBranchFilterFragment()</code>,
+<code>SessionEventTools.builder().branch(...)</code>, per-branch system messages and root-level
+turns) are superseded by <a href="#upgrading-to-0100">Upgrading to 0.10.0</a>. If you upgrade from
+0.8 straight to 0.10, skip them.</p>
+</div>
 <h3 id="application-changes">Application changes<a class="headerlink" href="#application-changes" title="Permanent link">&para;</a></h3>
 <h4 id="breaking-conversation_search-needs-the-session-id-in-the-tool-context">Breaking: <code>conversation_search</code> needs the session ID in the tool context<a class="headerlink" href="#breaking-conversation_search-needs-the-session-id-in-the-tool-context" title="Permanent link">&para;</a></h4>
 <p><code>SessionEventTools</code> reads the session ID from the <code>ToolContext</code>, and Spring AI does not copy

@@ -1552,7 +1552,7 @@ lifecycle:</p>
 </span></code></pre></div>
 <hr />
 <h2 id="sessionevent">SessionEvent<a class="headerlink" href="#sessionevent" title="Permanent link">&para;</a></h2>
-<p><code>SessionEvent</code> is an immutable record that wraps a Spring AI <code>Message</code> type. It adds only
+<p><code>SessionEvent</code> is an immutable value object that wraps a Spring AI <code>Message</code> type. It adds only
 what <code>Message</code> intentionally omits: identity, ownership, ordering, and framework flags.</p>
 <table>
 <thead>
@@ -1830,12 +1830,13 @@ whole log, archived events included. This makes the MemGPT recall pattern work: 
 can surface any prior exchange after it has been compacted out of context. Only a
 superseded synthetic summary is deleted instead, because its content is carried into the
 new summary.</p>
-<p>In the JDBC repository, newly archived events are updated in place (their row is never
-rewritten); only the active window is replaced with the retained events on each pass, so
+<p>In the JDBC repository, newly archived events are flagged with an in-place <code>UPDATE</code>
+(their row is never deleted and re-inserted); only the active window is replaced with the retained events on each pass, so
 the growing archived history is never re-read or re-written.</p>
 <h3 id="optimistic-concurrency">Optimistic concurrency<a class="headerlink" href="#optimistic-concurrency" title="Permanent link">&para;</a></h3>
 <p><code>SessionRepository.getEventVersion(sessionId)</code> is a monotonically increasing counter,
-incremented on every <code>appendEvent</code> and <code>compactEvents</code> call. Callers read it before
+incremented on every <code>appendEvent</code> that appends a new event and on every successful
+<code>compactEvents</code> call. Callers read it before
 fetching events and pass it to <code>compactEvents(sessionId, archivedEvents, retainedEvents,
 expectedVersion)</code>. If another writer changed the log in between, this compare-and-swap
 (CAS) returns <code>false</code>, and the caller treats it as a no-op rather than retrying. Durable

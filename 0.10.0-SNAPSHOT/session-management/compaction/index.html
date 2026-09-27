@@ -1597,8 +1597,8 @@ only runs the strategy — and writes back to the repository — when the trigge
 <p>Triggers implement <code>CompactionTrigger</code> (a <code>@FunctionalInterface</code>) and decide whether
 compaction should run based on the current <code>CompactionRequest</code>.</p>
 <h3 id="turncounttrigger">TurnCountTrigger<a class="headerlink" href="#turncounttrigger" title="Permanent link">&para;</a></h3>
-<p>Fires when the session has more than <code>n</code> complete turns. Every non-synthetic <code>USER</code> event
-counts toward the turn total.</p>
+<p>Fires when the session has more than <code>n</code> turns. Every non-synthetic <code>USER</code> event counts
+toward the turn total, including the turn in progress.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">new</span><span class="w"> </span><span class="n">TurnCountTrigger</span><span class="p">(</span><span class="mi">20</span><span class="p">);</span><span class="w">  </span><span class="c1">// compact when &gt; 20 turns</span>
 </span></code></pre></div>
 <h3 id="tokencounttrigger">TokenCountTrigger<a class="headerlink" href="#tokencounttrigger" title="Permanent link">&para;</a></h3>
@@ -1666,8 +1666,11 @@ system message, the summaries and the conversation.</p>
   first, and archives earlier stored system messages;</li>
 <li>applies its limit only to the real conversation events;</li>
 <li>starts the kept window at a <code>USER</code> message and always keeps the most recent turn (see
-  <a href="#turn-boundary-safety">Turn-boundary Safety</a>);</li>
-<li>returns <code>[system messages] + [synthetics] + [kept events]</code>.</li>
+  <a href="#turn-boundary-safety">Turn-boundary Safety</a>). The exception is
+  <code>TurnWindowCompactionStrategy</code>'s preamble: events before the first <code>USER</code> message, kept
+  verbatim;</li>
+<li>returns <code>[latest stored system message] + [synthetics] + [kept events]</code>
+  (<code>TurnWindowCompactionStrategy</code> puts its preamble before the kept turns).</li>
 </ul>
 <h3 id="token-accounting">Token accounting<a class="headerlink" href="#token-accounting" title="Permanent link">&para;</a></h3>
 <p>All four strategies — and <code>TokenCountTrigger</code> — estimate token cost using the same event
@@ -1733,8 +1736,10 @@ always kept, placed after the synthetics and before the turns.</p>
 </span></code></pre></div>
 <p>It walks real events from newest to oldest and stops at the first event that would exceed
 the remaining budget. The result is a <strong>contiguous suffix</strong>: skipping individual oversize
-events would leave gaps that break conversation coherence. Leading kept events that are
-not <code>USER</code> messages are then dropped.</p>
+events would leave gaps that break conversation coherence. The cut then snaps forward to
+the next <code>USER</code> message, so leading events that are not <code>USER</code> messages are archived with
+the older ones. Unlike the other strategies it has no "everything fits" shortcut: it
+always walks the events.</p>
 <h4 id="how-the-budget-is-spent">How the budget is spent<a class="headerlink" href="#how-the-budget-is-spent" title="Permanent link">&para;</a></h4>
 <p>The preserved events that are sent with the conversation take their tokens off
 <code>maxTokens</code> before any conversation is considered:</p>
@@ -1818,13 +1823,13 @@ rendering or multilingual summaries:</p>
 <hr />
 <h2 id="turn-boundary-safety">Turn-boundary Safety<a class="headerlink" href="#turn-boundary-safety" title="Permanent link">&para;</a></h2>
 <p>All four strategies share a common safety rule: the kept window always starts at a
-<code>USER</code> message. The sliding-window, token-count and recursive-summarization strategies snap
+<code>USER</code> message (apart from <code>TurnWindowCompactionStrategy</code>'s preamble, see above). The sliding-window, token-count and recursive-summarization strategies snap
 their cut point forward to the next such message (package-private <code>CompactionUtils.snapToTurnStart</code>);
 <code>TurnWindowCompactionStrategy</code> gets the same result by grouping events into turns. This
 prevents keeping a tool result or assistant reply without the user message that started
 its turn.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>Before snap:  [u1, a1, u2, a2, | a3, u3, a3]   ← cut lands on a3 (middle of turn 2)
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>After snap:   [u1, a1, u2, a2, a3, | u3, a3]   ← cut moved to u3 (turn start)
+<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>Before snap:  [u1, a1, u2, a2a, | a2b, u3, a3]   ← cut lands on a2b (middle of turn 2)
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>After snap:   [u1, a1, u2, a2a, a2b, | u3, a3]   ← cut moved to u3 (turn start)
 </span></code></pre></div>
 <p>The full cut-point pipeline and seven worked examples are in
 <a href="../compaction-internals/#3-activity-how-a-strategy-chooses-what-to-archive">Compaction Internals</a>.</p>

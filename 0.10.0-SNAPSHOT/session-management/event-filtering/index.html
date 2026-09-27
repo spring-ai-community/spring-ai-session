@@ -1450,7 +1450,7 @@ than one and an event must satisfy all of them. In practice, callers set exactly
 <tr>
 <td><code>pageSize</code></td>
 <td><code>Integer</code></td>
-<td>Results per page (default 10; must be &gt; 0 if set)</td>
+<td>Results per page. Unset means no pagination; the <code>*Search</code> factories use 10. Must be &gt; 0 if set</td>
 </tr>
 <tr>
 <td><code>excludeArchived</code></td>

@@ -1621,7 +1621,8 @@ connects them. Any caller can invoke it: <code>SessionMemoryAdvisor</code>, or y
 <ul>
 <li><strong>Split the events:</strong> <code>pinnedSystemEvents</code> (the latest stored system message),
   <code>supersededSystemEvents</code> and <code>compactableEvents</code>.</li>
-<li><strong>Choose the cut:</strong> <code>snapToTurnStart</code> and <code>retainLastTurn</code>.</li>
+<li><strong>Choose the cut:</strong> <code>snapToTurnStart</code> and <code>retainLastTurn</code>. <code>TurnWindowCompactionStrategy</code>
+  only uses <code>isTurnStart</code>: it groups events into whole turns, so it needs no snapping.</li>
 <li><strong>Build the result:</strong> <code>unchangedExceptSuperseded</code> and <code>archiving</code>.</li>
 </ul>
 <p>How these fit together is shown in <a href="#3-activity-how-a-strategy-chooses-what-to-archive">section 3</a>.</p>
@@ -1679,8 +1680,14 @@ version, so the write is rejected. The service never writes a result computed fr
 that are newer than the version it checks.</p>
 <hr />
 <h2 id="3-activity-how-a-strategy-chooses-what-to-archive">3. Activity: how a strategy chooses what to archive<a class="headerlink" href="#3-activity-how-a-strategy-chooses-what-to-archive" title="Permanent link">&para;</a></h2>
-<p>All four strategies share this pipeline. They differ only in step 3: how the raw cut is
-computed.</p>
+<p>All four strategies share this pipeline. They differ in step 3, how the raw cut is
+computed, and in two more places:</p>
+<ul>
+<li><code>TokenCountCompactionStrategy</code> has no step 2 shortcut: it always walks the events and
+  computes a cut.</li>
+<li><code>TurnWindowCompactionStrategy</code> cuts whole turns, so it skips steps 4 and 5. Events
+  before its first <code>USER</code> event form a preamble that is always kept.</li>
+</ul>
 <pre class="mermaid"><code>flowchart TB
     start([CompactionRequest.events]) --&gt; split
 
@@ -1708,8 +1715,9 @@ computed.</p>
     empty -- no --&gt; r2(["6. Result: [pinned] + [synthetic] + [kept]&lt;br/&gt;archived = removed + superseded (log order)"])</code></pre>
 <p><strong>Invariants the pipeline guarantees:</strong></p>
 <ul>
-<li><strong>The kept window always starts at a <code>USER</code> event.</strong> No kept assistant reply
-  or tool result loses the user message that started its turn.</li>
+<li><strong>The kept window always starts at a <code>USER</code> event,</strong> apart from
+  <code>TurnWindowCompactionStrategy</code>'s preamble. No kept assistant reply or tool result loses
+  the user message that started its turn.</li>
 <li><strong>The newest turn is never archived.</strong> Step 5 keeps it even when it alone exceeds the
   budget.</li>
 <li><strong>At most one stored system message stays active,</strong> and it is never
@@ -1769,10 +1777,11 @@ and has to keep system messages out of the summary.</p>
 <p><strong>What makes it "recursive".</strong> Each pass feeds the previous summary's text back to the
 LLM as <code>=== PRIOR SUMMARY ===</code>. The new summary therefore builds on the old one, and the
 old synthetic events are dropped rather than archived. The resulting active window is
-always <code>[system prompt(s)] + [one summary turn] + [recent real events]</code>.</p>
+always <code>[latest stored system message, if any] + [one summary turn] + [recent real events]</code>.</p>
 <p><strong>Why the summary is a user + assistant pair.</strong> Many providers require the messages after
-the system prompt to alternate user and assistant. A lone assistant summary followed by
-the kept window, which starts with a user message, keeps that alternation valid.</p>
+the system prompt to alternate user and assistant. The shadow-prompt user message plus
+the assistant summary, followed by a kept window that starts with a user message, keep
+that alternation valid; a lone assistant summary would not.</p>
 <hr />
 <h2 id="5-sequence-jdbc-compactevents-and-a-concurrent-append">5. Sequence: JDBC <code>compactEvents</code> and a concurrent append<a class="headerlink" href="#5-sequence-jdbc-compactevents-and-a-concurrent-append" title="Permanent link">&para;</a></h2>
 <p>On JDBC the CAS is a row-level lock on the session row. Both writers take that lock
