@@ -1406,18 +1406,16 @@ no manual history loading or appending required in application code.</p>
    <code>EventFilter.all()</code>), merged with any per-request <code>EVENT_FILTER_CONTEXT_KEY</code> filter, and
    <strong>prepends</strong> it to the prompt. <code>EventFilter.active()</code> is always merged in on top, so
    archived (compacted-out) events never reach the prompt. Of any stored system messages
-   (an opt-in), only the latest one of the advisor's own branch is kept.</li>
+   (an opt-in), only the latest one is kept.</li>
 <li>Moves all <code>SystemMessage</code>s to the front, in their relative order, and sends a text that
    exactly matches an earlier one only once. Texts are never merged or rewritten, so the
    prompt stays stable for prompt caching. See <a href="../../session-management/system-messages/">System Messages</a>.</li>
 <li>Appends the prompt's last user message to the session, if the configured
    <code>MessageFilter</code> accepts it. Inside a tool-calling loop this is the trailing
-   tool-response message instead (<code>Prompt.getLastUserOrToolResponseMessage()</code>). The event
-   is recorded on the filter's branch (<code>null</code>, a root event, by default). Branches are
-   deprecated; see <a href="../../session-management/multi-agent/#filtering-by-branch">Multi-Agent</a>.</li>
-<li>After the model responds, appends the assistant message(s), on the same branch, through
-   the configured <code>MessageFilter</code> (default: <code>MessageFilter.skipEmptyMessages()</code>). By default,
-   empty assistant messages (blank text, no tool calls, and no media) are skipped — some
+   tool-response message instead (<code>Prompt.getLastUserOrToolResponseMessage()</code>).</li>
+<li>After the model responds, appends the assistant message(s) through the configured
+   <code>MessageFilter</code> (default: <code>MessageFilter.skipEmptyMessages()</code>). By default, empty
+   assistant messages (blank text, no tool calls, and no media) are skipped — some
    models (e.g. Bedrock Converse) emit an empty <code>end_turn</code> frame after tool use that
    would otherwise be replayed and rejected on the next request.</li>
 <li>If a trigger fires, runs compaction <strong>synchronously</strong> before returning — the full turn

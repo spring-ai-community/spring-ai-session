@@ -793,78 +793,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#branches-deprecated" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Branches (deprecated)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Branches (deprecated)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#filtering-by-branch" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Filtering by branch
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#visibility-flows-down-not-up" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Visibility flows down, not up
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#compaction-and-branches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Compaction and branches
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#system-messages-and-branches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        System messages and branches
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#recall-search-and-branches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recall search and branches
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1261,78 +1189,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#branches-deprecated" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Branches (deprecated)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Branches (deprecated)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#filtering-by-branch" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Filtering by branch
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#visibility-flows-down-not-up" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Visibility flows down, not up
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#compaction-and-branches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Compaction and branches
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#system-messages-and-branches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        System messages and branches
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#recall-search-and-branches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recall search and branches
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1386,11 +1242,11 @@
 Claude Code subagents, Microsoft Agent Framework's agent-as-tool, Google ADK's
 <code>AgentTool</code> and the OpenAI Agents SDK's <code>as_tool</code>. It also follows the common context
 engineering advice to give every sub-agent the minimum context it needs.</p>
-<div class="admonition warning">
-<p class="admonition-title">Branches are deprecated</p>
+<div class="admonition note">
+<p class="admonition-title">Branches were removed in 0.10.0</p>
 <p>Earlier versions isolated sub-agents inside <strong>one</strong> session with ADK-style
-<code>SessionEvent.branch</code> labels. That support is deprecated since 0.9.0 and will be
-removed in 0.10.0. See <a href="#branches-deprecated">Branches (deprecated)</a>.</p>
+<code>SessionEvent.branch</code> labels. That support was deprecated in 0.9.0 and removed in
+0.10.0; see <a href="../../migration/#upgrading-to-0100">Upgrading to 0.10.0</a>.</p>
 </div>
 <hr />
 <h2 id="session-per-sub-agent">Session per sub-agent<a class="headerlink" href="#session-per-sub-agent" title="Permanent link">&para;</a></h2>
@@ -1501,96 +1357,6 @@ key:</p>
   every session of a user, including sub-agent sessions.
 - <strong>Timeline.</strong> There is no single merged timeline of a multi-agent run. Merge the sessions'
   events by timestamp if you need one.</p>
-<hr />
-<h2 id="branches-deprecated">Branches (deprecated)<a class="headerlink" href="#branches-deprecated" title="Permanent link">&para;</a></h2>
-<div class="admonition warning">
-<p class="admonition-title">Deprecated since 0.9.0, removed in 0.10.0</p>
-<p>The following APIs are deprecated for removal: <code>SessionEvent.Builder.branch(...)</code>,
-<code>SessionEvent.getBranch()</code> and <code>isRootEvent()</code>, <code>EventFilter.forBranch(...)</code>,
-<code>EventFilter.Builder.branch(...)</code> and <code>EventFilter.branch()</code>, and
-<code>SessionEventTools.Builder.branch(...)</code>. Use a
-<a href="#session-per-sub-agent">session per sub-agent</a> instead.</p>
-</div>
-<p>Branches follow the <a href="https://github.com/google/adk-java/blob/main/core/src/main/java/com/google/adk/events/Event.java">Google ADK <code>Event.branch</code></a>
-model: all agents share <strong>one</strong> session, and each event carries a dot-separated path of the
-agent that produced it (<code>"orch"</code>, <code>"orch.researcher"</code>, <code>"orch.writer"</code>). A <code>null</code> branch
-marks a root event, such as the end user's message.</p>
-<h3 id="filtering-by-branch">Filtering by branch<a class="headerlink" href="#filtering-by-branch" title="Permanent link">&para;</a></h3>
-<p><code>EventFilter.forBranch("orch.researcher")</code> returns the root events, the ancestors' events
-(<code>"orch"</code>) and the agent's own events (<code>"orch.researcher"</code>). It hides siblings
-(<code>"orch.writer"</code>) and children (<code>"orch.researcher.summarizer"</code>). The dot-separator check
-means that <code>"orch"</code> is never confused with <code>"orchestra"</code>.</p>
-<p><code>SessionMemoryAdvisor</code> applies the branch of its <code>eventFilter</code> to both sides: it reads the
-agent's view of the session, and it records the agent's user and assistant messages on
-that branch.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">SessionMemoryAdvisor</span><span class="w"> </span><span class="n">researcherAdvisor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">sessionService</span><span class="p">)</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="p">.</span><span class="na">eventFilter</span><span class="p">(</span><span class="n">EventFilter</span><span class="p">.</span><span class="na">forBranch</span><span class="p">(</span><span class="s">"orch.researcher"</span><span class="p">))</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span></code></pre></div>
-<h3 id="visibility-flows-down-not-up">Visibility flows down, not up<a class="headerlink" href="#visibility-flows-down-not-up" title="Permanent link">&para;</a></h3>
-<p>An agent sees its ancestors' events, never its descendants'. The exception is a reader
-<strong>without</strong> a branch filter: <code>EventFilter.all()</code>, the advisor's default, sees every event
-of every branch. There is no "root events only" filter.</p>
-<table>
-<thead>
-<tr>
-<th>Reader's filter</th>
-<th>Root events</th>
-<th>Ancestor branches</th>
-<th>Own branch</th>
-<th>Sub-agent and sibling branches</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>EventFilter.all()</code> (no branch)</td>
-<td>yes</td>
-<td>—</td>
-<td>—</td>
-<td><strong>yes, all of them</strong></td>
-</tr>
-<tr>
-<td><code>EventFilter.forBranch("orch")</code></td>
-<td>yes</td>
-<td>—</td>
-<td>yes</td>
-<td>no</td>
-</tr>
-<tr>
-<td><code>EventFilter.forBranch("orch.researcher")</code></td>
-<td>yes</td>
-<td>yes (<code>"orch"</code>)</td>
-<td>yes</td>
-<td>no</td>
-</tr>
-</tbody>
-</table>
-<h3 id="compaction-and-branches">Compaction and branches<a class="headerlink" href="#compaction-and-branches" title="Permanent link">&para;</a></h3>
-<p>Compaction runs over the whole session, all branches at once:</p>
-<ul>
-<li><strong>Turns are root turns.</strong> Compaction cuts only at root-level <code>USER</code> events, and a
-  sub-agent's events are archived or kept together with the root turn that contains them
-  (see <a href="../compaction/#turn-boundary-safety">Turn-boundary Safety</a>). A sub-agent that grows
-  inside the newest turn is never compacted.</li>
-<li><strong>Budgets measure all branches.</strong> The token-based trigger and strategy count every
-  branch's events, even though each agent sends only its own view. The event-count
-  strategies count only root events.</li>
-<li><strong>Summaries are visible to every agent.</strong> Synthetic summary events have no branch, so an
-  agent can read a summary of a sibling's work.</li>
-<li><strong>No root turn, no compaction.</strong> If the top-level agent is on a branch too, its advisor
-  records the user's messages on that branch, so the session has no root turns. Since
-  0.9.0 compaction then archives nothing (before, <code>TokenCountCompactionStrategy</code> archived
-  the whole active window).</li>
-</ul>
-<h3 id="system-messages-and-branches">System messages and branches<a class="headerlink" href="#system-messages-and-branches" title="Permanent link">&para;</a></h3>
-<p>When system messages are stored (an opt-in), each agent's system prompt is the latest one
-on its own branch, and compaction keeps the latest one of every branch. Only the root
-agent's system message counts toward the token budget. See
-<a href="../system-messages/#compaction-the-latest-stored-system-message-wins">System Messages</a>.</p>
-<h3 id="recall-search-and-branches">Recall search and branches<a class="headerlink" href="#recall-search-and-branches" title="Permanent link">&para;</a></h3>
-<p><code>conversation_search</code> searches the whole session by default, including sibling agents'
-events. <code>SessionEventTools.builder(sessionService).branch("orch.researcher")</code> limits it to
-what that branch can see.</p>
 
 
 

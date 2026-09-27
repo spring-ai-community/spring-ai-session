@@ -1344,8 +1344,7 @@ an in-process scan.</p>
 <p><strong><code>EventFilter.keyword()</code>/<code>keywords()</code></strong> translate to <code>LOWER(...) LIKE ? ESCAPE '!'</code>
 predicates — one for <code>keyword</code>, one per term for <code>keywords</code>, joined with <code>AND</code>/<code>OR</code> per
 <code>matchMode</code>. Terms are always bound as JDBC parameters, and <code>%</code>, <code>_</code> and <code>!</code> are escaped so
-they match literally, as in the in-memory repository. The branch filter escapes the stored
-branch name the same way.</p>
+they match literally, as in the in-memory repository.</p>
 <p><strong><code>EventFilter.pattern()</code> falls back to in-memory filtering.</strong> Java regex cannot be
 translated to portable SQL — each database has its own regex dialect, none a superset of
 Java's (backreferences, lookaround, named groups). When <code>pattern</code> is set, every other

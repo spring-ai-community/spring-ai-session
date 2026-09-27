@@ -1583,10 +1583,6 @@ what <code>Message</code> intentionally omits: identity, ownership, ordering, an
 <td>Framework flags such as <code>METADATA_SYNTHETIC</code> and <code>METADATA_COMPACTION_SOURCE</code></td>
 </tr>
 <tr>
-<td><code>branch</code></td>
-<td>Dot-separated agent path (e.g. <code>"orch.researcher"</code>); <code>null</code> for root-level events. Deprecated since 0.9.0, see <a href="../multi-agent/">Multi-Agent</a></td>
-</tr>
-<tr>
 <td><code>archived</code></td>
 <td><code>true</code> once compaction has moved the event out of the active window; it stays in the log and remains searchable (see <a href="#event-lifecycle">Event lifecycle</a>)</td>
 </tr>
@@ -1606,7 +1602,7 @@ what <code>Message</code> intentionally omits: identity, ownership, ordering, an
 <tr>
 <td><code>UserMessage</code></td>
 <td><code>false</code></td>
-<td>Real user input. A root-level one starts a <a href="#turn">turn</a></td>
+<td>Real user input. It starts a <a href="#turn">turn</a></td>
 <td>Archived with its turn</td>
 </tr>
 <tr>
@@ -1631,7 +1627,7 @@ what <code>Message</code> intentionally omits: identity, ownership, ordering, an
 <td><code>SystemMessage</code></td>
 <td><code>false</code></td>
 <td>A stored system prompt: configuration, not conversation. Storing one is opt-in</td>
-<td>The latest one per branch is kept; earlier ones are archived. Never summarized. See <a href="../system-messages/#compaction-the-latest-stored-system-message-wins">System Messages</a></td>
+<td>The latest one is kept; earlier ones are archived. Never summarized. See <a href="../system-messages/#compaction-the-latest-stored-system-message-wins">System Messages</a></td>
 </tr>
 <tr>
 <td><code>UserMessage</code></td>
@@ -1656,36 +1652,29 @@ what <code>Message</code> intentionally omits: identity, ownership, ordering, an
 <p>With <code>RecursiveSummarizationCompactionStrategy</code>, real events other than system messages
 are summarized before they are archived.</p>
 <h3 id="building-events">Building events<a class="headerlink" href="#building-events" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">// Root event (no branch) — visible to all agents; timestamped at Instant.now()</span>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">// Timestamped at Instant.now()</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">SessionEvent</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionEvent</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="p">.</span><span class="na">sessionId</span><span class="p">(</span><span class="n">sessionId</span><span class="p">)</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="p">.</span><span class="na">message</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">UserMessage</span><span class="p">(</span><span class="s">"Hello"</span><span class="p">))</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1">// Branched event — attributed to a specific sub-agent (deprecated since 0.9.0)</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">SessionEvent</span><span class="w"> </span><span class="n">branched</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionEvent</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1">// With metadata</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">SessionEvent</span><span class="w"> </span><span class="n">custom</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionEvent</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="p">.</span><span class="na">sessionId</span><span class="p">(</span><span class="n">sessionId</span><span class="p">)</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="p">.</span><span class="na">message</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">AssistantMessage</span><span class="p">(</span><span class="s">"Research result..."</span><span class="p">))</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="p">.</span><span class="na">branch</span><span class="p">(</span><span class="s">"orch.researcher"</span><span class="p">)</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="c1">// With metadata</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="n">SessionEvent</span><span class="w"> </span><span class="n">custom</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionEvent</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="p">.</span><span class="na">sessionId</span><span class="p">(</span><span class="n">sessionId</span><span class="p">)</span>
-</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">    </span><span class="p">.</span><span class="na">message</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">AssistantMessage</span><span class="p">(</span><span class="s">"Response"</span><span class="p">))</span>
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">    </span><span class="p">.</span><span class="na">metadata</span><span class="p">(</span><span class="s">"model"</span><span class="p">,</span><span class="w"> </span><span class="s">"gpt-4o"</span><span class="p">)</span>
-</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="p">.</span><span class="na">metadata</span><span class="p">(</span><span class="s">"latencyMs"</span><span class="p">,</span><span class="w"> </span><span class="mi">230</span><span class="p">)</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="p">.</span><span class="na">message</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">AssistantMessage</span><span class="p">(</span><span class="s">"Response"</span><span class="p">))</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="p">.</span><span class="na">metadata</span><span class="p">(</span><span class="s">"model"</span><span class="p">,</span><span class="w"> </span><span class="s">"gpt-4o"</span><span class="p">)</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="p">.</span><span class="na">metadata</span><span class="p">(</span><span class="s">"latencyMs"</span><span class="p">,</span><span class="w"> </span><span class="mi">230</span><span class="p">)</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="c1">// Deterministic timestamp (useful for tests)</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="n">SessionEvent</span><span class="w"> </span><span class="n">deterministic</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionEvent</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">    </span><span class="p">.</span><span class="na">sessionId</span><span class="p">(</span><span class="n">sessionId</span><span class="p">)</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">    </span><span class="p">.</span><span class="na">timestamp</span><span class="p">(</span><span class="n">Instant</span><span class="p">.</span><span class="na">parse</span><span class="p">(</span><span class="s">"2025-06-01T12:00:00Z"</span><span class="p">))</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="p">.</span><span class="na">message</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">UserMessage</span><span class="p">(</span><span class="s">"Hello"</span><span class="p">))</span>
 </span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>
-</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="c1">// Deterministic timestamp (useful for tests)</span>
-</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="n">SessionEvent</span><span class="w"> </span><span class="n">deterministic</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionEvent</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
-</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="w">    </span><span class="p">.</span><span class="na">sessionId</span><span class="p">(</span><span class="n">sessionId</span><span class="p">)</span>
-</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="w">    </span><span class="p">.</span><span class="na">timestamp</span><span class="p">(</span><span class="n">Instant</span><span class="p">.</span><span class="na">parse</span><span class="p">(</span><span class="s">"2025-06-01T12:00:00Z"</span><span class="p">))</span>
-</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="w">    </span><span class="p">.</span><span class="na">message</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">UserMessage</span><span class="p">(</span><span class="s">"Hello"</span><span class="p">))</span>
-</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </span></code></pre></div>
 <p>Builder defaults: <code>id</code> is a random UUID, <code>timestamp</code> is <code>Instant.now()</code>, <code>metadata</code> is
-empty, <code>branch</code> is <code>null</code>. Only <code>sessionId</code> and <code>message</code> are required.</p>
+empty. Only <code>sessionId</code> and <code>message</code> are required.</p>
 <hr />
 <h2 id="turn">Turn<a class="headerlink" href="#turn" title="Permanent link">&para;</a></h2>
 <p>A <strong>turn</strong> is the atomic unit of conversation:</p>
@@ -1700,10 +1689,9 @@ that prompted it.</p>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>Turn 2: [USER "Can it use tools?"]   [ASSISTANT (tool call)]  [TOOL result]  [ASSISTANT "Yes, ..."]
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>Turn 3: [USER "Show me an example"]  [ASSISTANT "Here is..."]
 </span></code></pre></div>
-<p>Turn count is measured via <code>CompactionRequest.currentTurnCount()</code>, which counts only
-non-synthetic, <strong>root-level</strong> (<code>branch == null</code>) <code>USER</code> events. Synthetic and sub-agent
-<code>USER</code> messages on named branches are excluded so that multi-agent sessions do not inflate
-the count used by <code>TurnCountTrigger</code>.</p>
+<p>Turn count is measured via <code>CompactionRequest.currentTurnCount()</code>, which counts the
+non-synthetic <code>USER</code> events. The shadow prompt of a synthetic summary turn is excluded, so
+it does not inflate the count used by <code>TurnCountTrigger</code>.</p>
 <hr />
 <h2 id="synthetic-summary-turn">Synthetic Summary Turn<a class="headerlink" href="#synthetic-summary-turn" title="Permanent link">&para;</a></h2>
 <p>When <code>RecursiveSummarizationCompactionStrategy</code> compacts a session it replaces archived
@@ -1787,10 +1775,8 @@ unit.</p>
         timestamp
         message
         metadata
-        branch
         archived
         +isSynthetic() boolean
-        +isRootEvent() boolean
     }
     class Message {
         &lt;&lt;Spring AI&gt;&gt;
@@ -1799,7 +1785,6 @@ unit.</p>
         &lt;&lt;record&gt;&gt;
         +all()$ EventFilter
         +active()$ EventFilter
-        +forBranch(branch)$ EventFilter
         +keywordSearch(keyword)$ EventFilter
     }
 
@@ -1830,8 +1815,8 @@ does:</p>
 <li><strong>Active:</strong> part of the active context window. Appending an event with an id that
   already exists is an idempotent replay and changes nothing.</li>
 <li><strong>Archived:</strong> compaction moved it out of the active window, for example an old turn, or
-  a stored system message superseded by a newer one on the same branch. The latest stored
-  system message of each branch always stays active.</li>
+  a stored system message superseded by a newer one. The latest stored system message
+  always stays active.</li>
 <li><strong>Deleted:</strong> gone from the log. This only happens to a synthetic summary that a new
   summary replaces, or when its whole session is deleted (<code>delete</code>, or
   <code>deleteExpiredSessions</code> for expired sessions).</li>

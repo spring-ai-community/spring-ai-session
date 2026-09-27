@@ -1525,10 +1525,10 @@ rather than as part of the conversation, and which part of the work belongs to w
   system message unless you enable <code>allowSystemMessages</code>. If you do enable it, <strong>the latest
   stored system message wins</strong>: it is the session's system prompt, and earlier ones are
   superseded and archived by compaction.</li>
-<li><strong>The integration</strong> uses only the latest stored system message of the agent's own
-  branch, puts system messages first, drops exact duplicates, and avoids re-sending
-  history inside a tool loop. <code>SessionMemoryAdvisor</code> does this for <code>ChatClient</code>.
-  Any other integration must do it itself.</li>
+<li><strong>The integration</strong> uses only the latest stored system message, puts system messages
+  first, drops exact duplicates, and avoids re-sending history inside a tool loop.
+  <code>SessionMemoryAdvisor</code> does this for <code>ChatClient</code>. Any other integration must do it
+  itself.</li>
 </ul>
 <hr />
 <h2 id="conversation-or-configuration">Conversation or configuration?<a class="headerlink" href="#conversation-or-configuration" title="Permanent link">&para;</a></h2>
@@ -1638,24 +1638,18 @@ combining several instructions into it is the integration's responsibility. Ever
 <ul>
 <li>the latest one stays in the active window, is placed first, and is never archived or
   summarized;</li>
-<li>it doesn't use <code>maxEvents</code> / <code>maxTurns</code> / <code>maxEventsToKeep</code> slots. For the root agent,
+<li>it doesn't use <code>maxEvents</code> / <code>maxTurns</code> / <code>maxEventsToKeep</code> slots.
   <code>TokenCountCompactionStrategy</code> subtracts its tokens from the budget, because it is sent
-  with the conversation; a sub-agent's is not subtracted, because it is only sent to that
-  sub-agent;</li>
+  with the conversation;</li>
 <li>earlier ones are <strong>superseded</strong>: archived whenever compaction runs (even when the
   budget needs no cut), never summarized, and still searchable through
   <a href="../../recall-memory/recall-storage/">Recall Storage</a>.</li>
 </ul>
-<p>At most one stored system message per branch is ever active, so an integration that
-stores one per turn cannot grow the active window.</p>
+<p>At most one stored system message is ever active, so an integration that stores one per
+turn cannot grow the active window.</p>
 <p><strong>Sub-agents.</strong> With a <a href="../multi-agent/#session-per-sub-agent">session per sub-agent</a>, each
 sub-agent's system messages live in its own session, so these rules apply to each session
-as usual. With the deprecated <a href="../multi-agent/#branches-deprecated">branches</a>, system
-messages are scoped by branch: each agent's system prompt is the latest system message stored on <strong>its own</strong>
-branch, and a sub-agent's system messages configure only that sub-agent. Compaction keeps
-the latest one of every branch, so a sub-agent that is delegated to again in a later turn
-still has its system prompt, even after the turn it was stored in has been archived. Like
-every system message, they are never summarized.</p>
+separately.</p>
 <hr />
 <h2 id="what-your-integration-is-responsible-for">What your integration is responsible for<a class="headerlink" href="#what-your-integration-is-responsible-for" title="Permanent link">&para;</a></h2>
 <p>Whatever builds the prompt sent to the model owns these steps:</p>
@@ -1664,11 +1658,9 @@ every system message, they are never summarized.</p>
    <code>Session.metadata</code>. Don't append it to the session.</li>
 <li><strong>Load only the active history</strong>: <code>getActiveMessages(...)</code> or
    <code>getEvents(..., EventFilter.active())</code>.</li>
-<li><strong>Use only the latest stored system message of your agent's own branch</strong> (<code>null</code> for
-   the root agent, whose filter has no branch) from the loaded history. Earlier ones are superseded (they may still be
-   active until the next compaction), and other branches' system messages configure other
-   agents. Put system messages first: many models reject or ignore a system message that
-   is not at the start.</li>
+<li><strong>Use only the latest stored system message</strong> from the loaded history. Earlier ones are
+   superseded (they may still be active until the next compaction). Put system messages
+   first: many models reject or ignore a system message that is not at the start.</li>
 <li><strong>Drop exact duplicates</strong>, for example a stored system message that is also supplied
    with the request. Don't merge or rewrite texts, so the prompt stays byte-stable for
    prompt caching.</li>
@@ -1681,7 +1673,7 @@ every system message, they are never summarized.</p>
 <h3 id="with-chatclient-sessionmemoryadvisor">With ChatClient: <code>SessionMemoryAdvisor</code><a class="headerlink" href="#with-chatclient-sessionmemoryadvisor" title="Permanent link">&para;</a></h3>
 <p><code>SessionMemoryAdvisor</code> implements all of these steps for <code>ChatClient</code>. The system prompt
 comes from <code>defaultSystem</code> / <code>.system</code> and is never persisted. Of the stored system
-messages, the advisor sends only the latest one of its own <code>EventFilter</code> branch; it puts
+messages, the advisor sends only the latest one; it puts
 every <code>SystemMessage</code> first (stored one, then the request's) and sends exact duplicates
 once. Inside a tool loop (see <a href="../../chat-client/chat-client/#setup">Setup</a>) its "already in the prompt"
 check ignores system messages, so stored history is not re-sent.</p>
@@ -1690,7 +1682,7 @@ check ignores system messages, so stored history is not re-sent.</p>
     LOG[("Session event log")] --&gt;|"active history"| H["History"]
     UM["Current user message"]
     SP --&gt; C["Combine history + prompt"]
-    H --&gt; SEL["Keep only the latest stored system&lt;br/&gt;message of the agent's own branch"]
+    H --&gt; SEL["Keep only the latest stored&lt;br/&gt;system message"]
     SEL --&gt; C
     UM --&gt; C
     C --&gt; F["Move all system messages to the front,&lt;br/&gt;drop exact duplicates"]
@@ -1722,38 +1714,37 @@ a Spring AI <code>ChatModel</code> as the model client:</p>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="s">"You are a helpful travel assistant. Answer in "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">session</span><span class="p">.</span><span class="na">metadata</span><span class="p">().</span><span class="na">get</span><span class="p">(</span><span class="s">"language"</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">"."</span><span class="p">);</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
 </span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1">// 2. Active history, in log order. Load events rather than getActiveMessages(...):</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1">//    choosing the stored system message needs each event's branch.</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1">//    choosing the stored system message needs each event's synthetic flag.</span>
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">List</span><span class="o">&lt;</span><span class="n">SessionEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">events</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sessionService</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">active</span><span class="p">());</span>
 </span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="c1">// 3 + 4. The latest stored system message of this (root) agent, if any, and the</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="c1">//        request's, first. Other branches' system messages are skipped, and exact</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="c1">//        duplicates are dropped.</span>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="n">Optional</span><span class="o">&lt;</span><span class="n">Message</span><span class="o">&gt;</span><span class="w"> </span><span class="n">storedPrompt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">events</span><span class="p">.</span><span class="na">stream</span><span class="p">()</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">    </span><span class="p">.</span><span class="na">filter</span><span class="p">(</span><span class="n">e</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="na">isRootEvent</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="n">e</span><span class="p">.</span><span class="na">isSynthetic</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="na">getMessageType</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">MessageType</span><span class="p">.</span><span class="na">SYSTEM</span><span class="p">)</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="p">.</span><span class="na">map</span><span class="p">(</span><span class="n">SessionEvent</span><span class="p">::</span><span class="n">getMessage</span><span class="p">)</span>
-</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">    </span><span class="p">.</span><span class="na">reduce</span><span class="p">((</span><span class="n">earlier</span><span class="p">,</span><span class="w"> </span><span class="n">later</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">later</span><span class="p">);</span>
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="n">Set</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">seen</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashSet</span><span class="o">&lt;&gt;</span><span class="p">();</span>
-</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="n">List</span><span class="o">&lt;</span><span class="n">Message</span><span class="o">&gt;</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;&gt;</span><span class="p">();</span>
-</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="n">Stream</span><span class="p">.</span><span class="na">concat</span><span class="p">(</span><span class="n">storedPrompt</span><span class="p">.</span><span class="na">stream</span><span class="p">(),</span><span class="w"> </span><span class="n">Stream</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">systemPrompt</span><span class="p">))</span>
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">    </span><span class="p">.</span><span class="na">filter</span><span class="p">(</span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">seen</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">getText</span><span class="p">()))</span>
-</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">    </span><span class="p">.</span><span class="na">forEach</span><span class="p">(</span><span class="n">input</span><span class="p">::</span><span class="n">add</span><span class="p">);</span>
-</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="n">events</span><span class="p">.</span><span class="na">stream</span><span class="p">()</span>
-</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="w">    </span><span class="p">.</span><span class="na">filter</span><span class="p">(</span><span class="n">e</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="na">getMessageType</span><span class="p">()</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">MessageType</span><span class="p">.</span><span class="na">SYSTEM</span><span class="p">)</span>
-</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="w">    </span><span class="p">.</span><span class="na">map</span><span class="p">(</span><span class="n">SessionEvent</span><span class="p">::</span><span class="n">getMessage</span><span class="p">)</span>
-</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="w">    </span><span class="p">.</span><span class="na">forEach</span><span class="p">(</span><span class="n">input</span><span class="p">::</span><span class="n">add</span><span class="p">);</span>
-</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>
-</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="n">UserMessage</span><span class="w"> </span><span class="n">userMessage</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">UserMessage</span><span class="p">(</span><span class="n">question</span><span class="p">);</span>
-</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a><span class="n">input</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="n">userMessage</span><span class="p">);</span>
-</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>
-</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a><span class="n">AssistantMessage</span><span class="w"> </span><span class="n">reply</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">chatModel</span><span class="p">.</span><span class="na">call</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">Prompt</span><span class="p">(</span><span class="n">input</span><span class="p">)).</span><span class="na">getResult</span><span class="p">().</span><span class="na">getOutput</span><span class="p">();</span>
-</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>
-</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a><span class="c1">// 5. Persist only the conversation</span>
-</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">appendMessage</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">userMessage</span><span class="p">);</span>
-</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">appendMessage</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">reply</span><span class="p">);</span>
-</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>
-</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a><span class="c1">// 7. Compact when the trigger fires</span>
-</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">compact</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TurnCountTrigger</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
-</span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a><span class="w">        </span><span class="n">TurnWindowCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">().</span><span class="na">maxTurns</span><span class="p">(</span><span class="mi">10</span><span class="p">).</span><span class="na">build</span><span class="p">());</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="c1">// 3 + 4. The latest stored system message, if any, and the request's, first. Exact</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="c1">//        duplicates are dropped.</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="n">Optional</span><span class="o">&lt;</span><span class="n">Message</span><span class="o">&gt;</span><span class="w"> </span><span class="n">storedPrompt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">events</span><span class="p">.</span><span class="na">stream</span><span class="p">()</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="p">.</span><span class="na">filter</span><span class="p">(</span><span class="n">e</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="o">!</span><span class="n">e</span><span class="p">.</span><span class="na">isSynthetic</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="na">getMessageType</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">MessageType</span><span class="p">.</span><span class="na">SYSTEM</span><span class="p">)</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">    </span><span class="p">.</span><span class="na">map</span><span class="p">(</span><span class="n">SessionEvent</span><span class="p">::</span><span class="n">getMessage</span><span class="p">)</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="p">.</span><span class="na">reduce</span><span class="p">((</span><span class="n">earlier</span><span class="p">,</span><span class="w"> </span><span class="n">later</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">later</span><span class="p">);</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="n">Set</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">seen</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashSet</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="n">List</span><span class="o">&lt;</span><span class="n">Message</span><span class="o">&gt;</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="n">Stream</span><span class="p">.</span><span class="na">concat</span><span class="p">(</span><span class="n">storedPrompt</span><span class="p">.</span><span class="na">stream</span><span class="p">(),</span><span class="w"> </span><span class="n">Stream</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">systemPrompt</span><span class="p">))</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">    </span><span class="p">.</span><span class="na">filter</span><span class="p">(</span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">seen</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">getText</span><span class="p">()))</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">    </span><span class="p">.</span><span class="na">forEach</span><span class="p">(</span><span class="n">input</span><span class="p">::</span><span class="n">add</span><span class="p">);</span>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="n">events</span><span class="p">.</span><span class="na">stream</span><span class="p">()</span>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="w">    </span><span class="p">.</span><span class="na">filter</span><span class="p">(</span><span class="n">e</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="na">getMessageType</span><span class="p">()</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">MessageType</span><span class="p">.</span><span class="na">SYSTEM</span><span class="p">)</span>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="w">    </span><span class="p">.</span><span class="na">map</span><span class="p">(</span><span class="n">SessionEvent</span><span class="p">::</span><span class="n">getMessage</span><span class="p">)</span>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="w">    </span><span class="p">.</span><span class="na">forEach</span><span class="p">(</span><span class="n">input</span><span class="p">::</span><span class="n">add</span><span class="p">);</span>
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="n">UserMessage</span><span class="w"> </span><span class="n">userMessage</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">UserMessage</span><span class="p">(</span><span class="n">question</span><span class="p">);</span>
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="n">input</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="n">userMessage</span><span class="p">);</span>
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a><span class="n">AssistantMessage</span><span class="w"> </span><span class="n">reply</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">chatModel</span><span class="p">.</span><span class="na">call</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">Prompt</span><span class="p">(</span><span class="n">input</span><span class="p">)).</span><span class="na">getResult</span><span class="p">().</span><span class="na">getOutput</span><span class="p">();</span>
+</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a><span class="c1">// 5. Persist only the conversation</span>
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">appendMessage</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">userMessage</span><span class="p">);</span>
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">appendMessage</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="n">reply</span><span class="p">);</span>
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a><span class="c1">// 7. Compact when the trigger fires</span>
+</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a><span class="n">sessionService</span><span class="p">.</span><span class="na">compact</span><span class="p">(</span><span class="n">sessionId</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TurnCountTrigger</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
+</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a><span class="w">        </span><span class="n">TurnWindowCompactionStrategy</span><span class="p">.</span><span class="na">builder</span><span class="p">().</span><span class="na">maxTurns</span><span class="p">(</span><span class="mi">10</span><span class="p">).</span><span class="na">build</span><span class="p">());</span>
 </span></code></pre></div>
 <p>If your loop calls tools across several rounds, keep the in-flight messages in the loop,
 and don't reload and prepend the stored history on every round (step 6).</p>
@@ -1793,7 +1784,7 @@ previous one is superseded and archived:</p>
 <p>Keep in mind the trade-offs:</p>
 <ul>
 <li>It doesn't change when your code changes; you must store a new, complete one.</li>
-<li>Its tokens are sent on every request, and the root agent's count toward
+<li>Its tokens are sent on every request, and they count toward
   <code>TokenCountCompactionStrategy</code>'s budget.</li>
 <li>A custom loop must still pick the latest one, put it first and drop duplicates
   (steps 3 and 4 above).</li>

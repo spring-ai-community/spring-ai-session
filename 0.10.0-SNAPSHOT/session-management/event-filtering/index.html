@@ -1356,9 +1356,6 @@ non-null conditions must match for an event to be included.</p>
 </span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>
 </span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="c1">// Regular-expression search — first page (default page size 10)</span>
 </span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">patternSearch</span><span class="p">(</span><span class="n">Pattern</span><span class="p">.</span><span class="na">compile</span><span class="p">(</span><span class="s">"\\bwe decided\\b"</span><span class="p">)));</span>
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="c1">// Events visible to a specific agent branch (own + ancestor events only). Deprecated since 0.9.0</span>
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">forBranch</span><span class="p">(</span><span class="s">"orch.researcher"</span><span class="p">));</span>
 </span></code></pre></div>
 <div class="admonition danger">
 <p class="admonition-title">Never compile an untrusted string into the <code>pattern</code> argument</p>
@@ -1385,8 +1382,7 @@ deliberately exposes only plain-substring <code>keywords</code>/<code>matchMode<
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="p">.</span><span class="na">keywords</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"no,"</span><span class="p">,</span><span class="w"> </span><span class="s">"actually"</span><span class="p">))</span><span class="w">                  </span><span class="c1">// multi-term substring match</span>
 </span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="p">.</span><span class="na">matchMode</span><span class="p">(</span><span class="n">MatchMode</span><span class="p">.</span><span class="na">ANY</span><span class="p">)</span><span class="w">                               </span><span class="c1">// ANY (default) or ALL of keywords</span>
 </span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="p">.</span><span class="na">pattern</span><span class="p">(</span><span class="n">Pattern</span><span class="p">.</span><span class="na">compile</span><span class="p">(</span><span class="s">"\\bwe decided\\b"</span><span class="p">))</span><span class="w">          </span><span class="c1">// compiled regex — developer-authored only</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="p">.</span><span class="na">branch</span><span class="p">(</span><span class="s">"orch.researcher"</span><span class="p">)</span><span class="w">                             </span><span class="c1">// branch isolation (deprecated)</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </span></code></pre></div>
 <p><code>keyword</code>, <code>keywords</code> and <code>pattern</code> are independent criteria combined with AND: set more
 than one and an event must satisfy all of them. In practice, callers set exactly one.</p>
@@ -1455,11 +1451,6 @@ than one and an event must satisfy all of them. In practice, callers set exactly
 <td><code>pageSize</code></td>
 <td><code>Integer</code></td>
 <td>Results per page (default 10; must be &gt; 0 if set)</td>
-</tr>
-<tr>
-<td><code>branch</code></td>
-<td><code>String</code></td>
-<td>Restricts to events visible to this agent branch (own + ancestors only). Deprecated since 0.9.0, see <a href="../multi-agent/">Multi-Agent</a></td>
 </tr>
 <tr>
 <td><code>excludeArchived</code></td>
