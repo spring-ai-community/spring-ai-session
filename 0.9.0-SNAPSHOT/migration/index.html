@@ -1944,6 +1944,12 @@ Redis repository) should:</p>
   round 2 on and the whole history was sent twice; it no longer does. <code>SessionMemoryAdvisor</code>
   also drops a system message whose text exactly matches an earlier one in the prompt,
   e.g. a stored system message that is also sent on the request.</li>
+<li><strong>The tool-loop history check works with JDBC.</strong> It compared messages with <code>equals</code>, but
+  <code>JdbcSessionRepository</code> stores neither message metadata (such as the finish reason) nor
+  media, so reloaded messages never matched and the whole history was sent twice from
+  round 2 on. Messages are now compared by type, text, tool calls and tool responses.
+  The workaround of ordering <code>SessionMemoryAdvisor</code> ahead of <code>ToolCallingAdvisor</code> is no
+  longer needed.</li>
 <li><strong><code>IdempotentSessionEventIdGenerator</code> id format.</strong> Ids are now
   <code>&lt;messageType&gt;-&lt;sha256&gt;</code> (at most 74 characters, which fits the <code>VARCHAR(255)</code> column).
   Blank tool-call ids (e.g. from Ollama) fall back to a content hash instead of all
