@@ -165,6 +165,12 @@ The built-in PostgreSQL, MySQL/MariaDB and H2 dialects already follow these rule
   round 2 on and the whole history was sent twice; it no longer does. `SessionMemoryAdvisor`
   also drops a system message whose text exactly matches an earlier one in the prompt,
   e.g. a stored system message that is also sent on the request.
+- **The tool-loop history check works with JDBC.** It compared messages with `equals`, but
+  `JdbcSessionRepository` stores neither message metadata (such as the finish reason) nor
+  media, so reloaded messages never matched and the whole history was sent twice from
+  round 2 on. Messages are now compared by type, text, tool calls and tool responses.
+  The workaround of ordering `SessionMemoryAdvisor` ahead of `ToolCallingAdvisor` is no
+  longer needed.
 - **`IdempotentSessionEventIdGenerator` id format.** Ids are now
   `<messageType>-<sha256>` (at most 74 characters, which fits the `VARCHAR(255)` column).
   Blank tool-call ids (e.g. from Ollama) fall back to a content hash instead of all

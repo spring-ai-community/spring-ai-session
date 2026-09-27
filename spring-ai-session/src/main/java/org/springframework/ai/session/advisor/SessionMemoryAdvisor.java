@@ -38,9 +38,12 @@ import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
 import org.springframework.ai.chat.client.advisor.api.MemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.content.MediaContent;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.MessageFilter;
@@ -444,9 +447,40 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			return false;
 		}
 		for (int i = 0; i < prefix.size(); i++) {
-			if (!messages.get(i + offset).equals(prefix.get(i))) {
+			if (!sameContent(messages.get(i + offset), prefix.get(i))) {
 				return false;
 			}
+		}
+		return true;
+	}
+
+	/**
+	 * Compares two messages by what the model sees rather than by {@code equals}: the
+	 * type, the text, the tool calls and the tool responses. A repository may not
+	 * round-trip everything else (e.g. {@code JdbcSessionRepository} stores neither
+	 * metadata such as the finish reason nor media), so a message reloaded from the
+	 * session would otherwise never equal the one the tool-calling loop re-sends. Media
+	 * is compared only when both messages carry it.
+	 */
+	private static boolean sameContent(Message a, Message b) {
+		if (a == b) {
+			return true;
+		}
+		if (a.getMessageType() != b.getMessageType()
+				|| !Objects.requireNonNullElse(a.getText(), "").equals(Objects.requireNonNullElse(b.getText(), ""))) {
+			return false;
+		}
+		if (a instanceof AssistantMessage assistantA && b instanceof AssistantMessage assistantB
+				&& !assistantA.getToolCalls().equals(assistantB.getToolCalls())) {
+			return false;
+		}
+		if (a instanceof ToolResponseMessage toolA && b instanceof ToolResponseMessage toolB
+				&& !toolA.getResponses().equals(toolB.getResponses())) {
+			return false;
+		}
+		if (a instanceof MediaContent mediaA && b instanceof MediaContent mediaB && !mediaA.getMedia().isEmpty()
+				&& !mediaB.getMedia().isEmpty() && !mediaA.getMedia().equals(mediaB.getMedia())) {
+			return false;
 		}
 		return true;
 	}

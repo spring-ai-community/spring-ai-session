@@ -77,7 +77,9 @@ ChatClient client = ChatClient.builder(chatModel)
     tool-call loop.
 
     This is deliberate and safe. From round 2 on, `before()` finds its loaded history
-    already present as a contiguous run in the prompt and doesn't prepend it again. System
+    already present as a contiguous run in the prompt and doesn't prepend it again. Messages
+    are compared by content (type, text, tool calls and tool responses), not `equals`, so the
+    check also works when the repository doesn't store message metadata, as with JDBC. System
     messages are left out of this check, because they are always moved to the front; the
     exact-text duplicate of a stored one is dropped. Only each round's trailing
     user/tool-response message and the model's reply are persisted, so nothing is stored

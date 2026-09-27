@@ -226,6 +226,39 @@ class SessionMemoryAdvisorIT {
 	}
 
 	@Test
+	void beforePrependsHistoryWhenPromptOnlyMatchesItsText() {
+		// The loop check compares messages by content, not equals(): a prompt message with
+		// the same text but a different tool call is not the stored history.
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("What is the weather?"));
+		this.sessionService.appendMessage(this.sessionId, AssistantMessage.builder()
+			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"city\":\"Paris\"}")))
+			.build());
+		AssistantMessage otherToolCall = AssistantMessage.builder()
+			.toolCalls(List.of(new AssistantMessage.ToolCall("call-2", "function", "get_weather", "{\"city\":\"Rome\"}")))
+			.build();
+
+		List<Message> instructions = beforeWithPrompt(new UserMessage("What is the weather?"), otherToolCall,
+				new UserMessage("And tomorrow?"));
+
+		assertThat(instructions).hasSize(5);
+		assertThat(((AssistantMessage) instructions.get(1)).getToolCalls()).extracting(AssistantMessage.ToolCall::id)
+			.containsExactly("call-1");
+	}
+
+	@Test
+	void beforePrependsHistoryWhenPromptHasSameTextButDifferentMedia() {
+		Media stored = Media.builder().mimeType(MimeTypeUtils.IMAGE_PNG).data(new byte[] { 1 }).build();
+		Media other = Media.builder().mimeType(MimeTypeUtils.IMAGE_PNG).data(new byte[] { 2 }).build();
+		this.sessionService.appendMessage(this.sessionId, UserMessage.builder().text("Describe").media(stored).build());
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("A cat."));
+
+		List<Message> instructions = beforeWithPrompt(UserMessage.builder().text("Describe").media(other).build(),
+				new AssistantMessage("A cat."), new UserMessage("And this one?"));
+
+		assertThat(instructions).hasSize(5);
+	}
+
+	@Test
 	void beforeAddsAStoredSystemMessageWhenTheSessionHasNoConversationYet() {
 		// Only a system message is stored: the loop check sees no conversation to skip,
 		// but the stored system message must still reach the prompt.
