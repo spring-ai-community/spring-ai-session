@@ -107,8 +107,9 @@ Strategies implement `CompactionStrategy` (a `@FunctionalInterface`). Each recei
 
 - keeps the latest stored system message of each branch and the synthetic summary events,
   places them first, and archives earlier stored system messages;
-- counts only root-level (`branch == null`) real events against its limit; sub-agent
-  events stay with the root turn that contains them;
+- keeps sub-agent (branched) events with the root turn that contains them. The
+  event-count strategies count only root-level (`branch == null`) events against their
+  limit; the token-based strategy counts every non-system event's tokens;
 - starts the kept window at a root-level `USER` message and always keeps the most recent
   turn (see [Turn-boundary Safety](#turn-boundary-safety));
 - returns `[system messages] + [synthetics] + [kept events]`.
@@ -309,7 +310,9 @@ most recent turn instead. This happens when the newest turn alone exceeds the bu
 example a long tool-calling loop or a very large tool result. That turn stays active even
 though it goes over `maxEvents` / `maxTokens` / `maxEventsToKeep`, so compaction never
 archives the turn in progress. When the whole history is a single oversize turn, nothing
-is archived (and `RecursiveSummarizationCompactionStrategy` makes no LLM call).
+is archived (and `RecursiveSummarizationCompactionStrategy` makes no LLM call). The same
+holds when the active window has no root-level `USER` message at all: there is no turn
+boundary to cut at, so nothing is archived.
 
 ```
 Budget: 2 events   [u1, a1, u2, a2, a3, a4]
@@ -318,6 +321,10 @@ Kept instead:      [u1, a1, | u2, a2, a3, a4]   ← last turn kept, over budget
 ```
 
 ### Branch-awareness in multi-agent sessions
+
+!!! warning "Branches are deprecated"
+    Branch support is deprecated since 0.9.0 and will be removed in 0.10.0. Give each
+    sub-agent its own session instead; see [Multi-Agent](multi-agent.md).
 
 In multi-agent sessions, `UserMessage` events also appear on named branches (e.g.
 `branch="orch.researcher"`). A branched `UserMessage` is the prompt sent *to* a sub-agent:

@@ -34,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Tests for {@link TurnWindowCompactionStrategy}.
  */
+@SuppressWarnings("removal") // exercises the deprecated branch support
 class TurnWindowCompactionStrategyTests {
 
 	private static final String SESSION_ID = "test-session";
@@ -392,6 +393,30 @@ class TurnWindowCompactionStrategyTests {
 	private List<SessionEvent> turn(String userText, String assistantText) {
 		return List.of(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage(userText)).build(),
 				SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage(assistantText)).build());
+	}
+
+	@Test
+	void compactionWithoutRootUserMessageArchivesNothing() {
+		// Every event is on a sub-agent branch (e.g. a top-level agent whose advisor has a
+		// branch), so there is no root turn to cut at: nothing may be archived.
+		List<SessionEvent> events = new ArrayList<>();
+		for (int i = 1; i <= 6; i++) {
+			events.add(SessionEvent.builder()
+				.sessionId(SESSION_ID)
+				.message(new UserMessage("question " + i))
+				.branch("orch")
+				.build());
+			events.add(SessionEvent.builder()
+				.sessionId(SESSION_ID)
+				.message(new AssistantMessage("answer " + i))
+				.branch("orch")
+				.build());
+		}
+
+		CompactionResult result = TurnWindowCompactionStrategy.builder().maxTurns(1).build().compact(requestWith(events));
+
+		assertThat(result.archivedEvents()).isEmpty();
+		assertThat(result.compactedEvents()).containsExactlyElementsOf(events);
 	}
 
 	@SafeVarargs

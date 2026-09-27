@@ -66,6 +66,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @TestPropertySource(properties = { "spring.datasource.url=jdbc:h2:mem:sessiontest;DB_CLOSE_DELAY=-1" })
 @Sql(scripts = "classpath:org/springframework/ai/session/jdbc/schema-h2.sql",
 		executionPhase = ExecutionPhase.BEFORE_TEST_CLASS)
+@SuppressWarnings("removal") // exercises the deprecated branch support
 @ContextConfiguration(classes = JdbcSessionRepositoryTests.TestConfig.class)
 class JdbcSessionRepositoryTests {
 

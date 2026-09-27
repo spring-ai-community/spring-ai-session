@@ -77,6 +77,7 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 		this.tokenCountEstimator = tokenCountEstimator;
 	}
 
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public CompactionResult compact(CompactionRequest request) {
 		Assert.notNull(request, "request must not be null");
@@ -135,6 +136,7 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 	 * grouped with the enclosing root turn. Assumes {@code events} begins with a root user
 	 * message (preamble has already been stripped).
 	 */
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	private static List<List<SessionEvent>> groupIntoTurns(List<SessionEvent> events) {
 		List<List<SessionEvent>> turns = new ArrayList<>();
 		List<SessionEvent> currentTurn = null;

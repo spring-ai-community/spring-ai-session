@@ -43,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * @author Christian Tzolov
  */
+@SuppressWarnings("removal") // exercises the deprecated branch support
 @SpringBootTest(classes = SessionMemoryIT.TestConfig.class)
 class SessionMemoryIT {
 

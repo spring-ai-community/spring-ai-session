@@ -438,4 +438,4 @@ summary turn.
 - [System Messages](system-messages.md): why stored system messages are treated as
   configuration, and the "latest wins per branch" rule
 - [Session JDBC](../session-jdbc/index.md): the JDBC repository, schema and design notes
-- [Multi-Agent Branch Isolation](multi-agent.md): branches and sub-agent events
+- [Multi-Agent](multi-agent.md): sessions per sub-agent, and the deprecated branches

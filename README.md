@@ -12,7 +12,7 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 
 **Spring AI Session** solves this with:
 
-- **Structured events** — every message is a `SessionEvent` with identity, timestamp, session ownership, and an optional branch label for multi-agent hierarchies
+- **Structured events** — every message is a `SessionEvent` with identity, timestamp, session ownership, and metadata
 - **Turn-aware compaction** — configurable triggers fire when history grows too large; pluggable strategies decide what to keep, always respecting turn boundaries
 - **Persistent repositories** — a clean SPI (`SessionRepository`) makes it trivial to swap the in-memory store for JDBC, Redis, or any other backend
 

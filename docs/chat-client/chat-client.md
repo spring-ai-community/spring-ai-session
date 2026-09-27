@@ -24,8 +24,8 @@ On every request the advisor:
 4. Appends the prompt's last user message to the session, if the configured
    `MessageFilter` accepts it. Inside a tool-calling loop this is the trailing
    tool-response message instead (`Prompt.getLastUserOrToolResponseMessage()`). The event
-   is recorded on the filter's branch (`null`, a root event, by default; see
-   [Multi-Agent Branch Isolation](../session-management/multi-agent.md#filtering-by-branch)).
+   is recorded on the filter's branch (`null`, a root event, by default). Branches are
+   deprecated; see [Multi-Agent](../session-management/multi-agent.md#filtering-by-branch).
 5. After the model responds, appends the assistant message(s), on the same branch, through
    the configured `MessageFilter` (default: `MessageFilter.skipEmptyMessages()`). By default,
    empty assistant messages (blank text, no tool calls, and no media) are skipped — some

@@ -43,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * database: {@code LIKE}-based filters treat {@code %}, {@code _} and the {@code !} escape
  * character literally, and timestamps are stored as UTC independent of the JVM time zone.
  */
+@SuppressWarnings("removal") // exercises the deprecated branch support
 final class DialectScenarios {
 
 	private DialectScenarios() {

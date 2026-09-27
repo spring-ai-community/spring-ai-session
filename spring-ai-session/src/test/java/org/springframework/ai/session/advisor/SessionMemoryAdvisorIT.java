@@ -67,6 +67,7 @@ import static org.mockito.Mockito.mock;
  *
  * @author Christian Tzolov
  */
+@SuppressWarnings("removal") // exercises the deprecated branch support
 @SpringBootTest(classes = SessionMemoryAdvisorIT.TestConfig.class)
 class SessionMemoryAdvisorIT {
 

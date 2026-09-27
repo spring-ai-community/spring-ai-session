@@ -337,6 +337,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 		return result.isEmpty() ? 0L : (result.get(0) != null ? result.get(0) : 0L);
 	}
 
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public List<SessionEvent> findEvents(String sessionId, EventFilter filter) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
@@ -476,6 +477,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 		return "%" + escaped + "%";
 	}
 
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	private void insertEvent(SessionEvent event) {
 		Message msg = event.getMessage();
 		this.jdbcTemplate.update(INSERT_EVENT, event.getId(), event.getSessionId(), toUtc(event.getTimestamp()),
@@ -486,6 +488,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 	/**
 	 * Inserts the supplied events using a JDBC batch operation.
 	 */
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	private void batchInsertEvents(List<SessionEvent> events) {
 		this.jdbcTemplate.batchUpdate(INSERT_EVENT, events, events.size(), (ps, event) -> {
 			Message msg = event.getMessage();
@@ -640,6 +643,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 	private class SessionEventRowMapper implements RowMapper<SessionEvent> {
 
+		@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 		@Override
 		public SessionEvent mapRow(ResultSet rs, int rowNum) throws SQLException {
 			MessageType messageType = MessageType.valueOf(rs.getString("message_type"));

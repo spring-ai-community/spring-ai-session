@@ -126,7 +126,11 @@ public final class SessionEvent {
 	 * {@code "orchestrator.researcher"}). {@code null} for root-level events that predate
 	 * any delegation. Used by {@link EventFilter#forBranch(String)} to isolate peer
 	 * sub-agents' histories from each other.
+	 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
+	 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
+	 * reference page).
 	 */
+	@Deprecated(since = "0.9.0", forRemoval = true)
 	@Nullable public String getBranch() {
 		return this.branch;
 	}
@@ -136,7 +140,11 @@ public final class SessionEvent {
 	 * was not produced inside any delegated sub-agent branch. Root events have a
 	 * {@code null} branch.
 	 * @return {@code true} if this event is a root-level event, {@code false} otherwise
+	 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
+	 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
+	 * reference page).
 	 */
+	@Deprecated(since = "0.9.0", forRemoval = true)
 	public boolean isRootEvent() {
 		return (this.branch == null);
 	}
@@ -281,7 +289,11 @@ public final class SessionEvent {
 		/**
 		 * The dot-separated agent path that produced this event. Pass {@code null} (the
 		 * default) for root-level events.
+		 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
+		 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
+		 * reference page).
 		 */
+		@Deprecated(since = "0.9.0", forRemoval = true)
 		public Builder branch(@Nullable String branch) {
 			this.branch = branch;
 			return this;

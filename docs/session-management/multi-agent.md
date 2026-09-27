@@ -1,181 +1,216 @@
-# Multi-Agent Branch Isolation
+# Multi-Agent
 
-When an orchestrator delegates work to several sub-agents running in parallel, all agents
-can share the same `Session` — but each sub-agent must see only its own history plus its
-ancestors'. Peer agents on sibling branches must be invisible to each other.
+Agents work together in one of two ways, and each maps to a different use of sessions:
 
-This design mirrors the [Google ADK Java `Event.branch`](https://github.com/google/adk-java/blob/main/core/src/main/java/com/google/adk/events/Event.java)
-field and the isolation semantics it defines.
+| How the agents work together | Use | Why |
+|---|---|---|
+| **Delegation**: an orchestrator hands a sub-agent a task and gets a result back (agent-as-tool) | [A session per sub-agent](#session-per-sub-agent) | The sub-agent sees only its task and its own history. It compacts on its own, sized to its own model, and only its result goes back to the parent |
+| **Handoff**: several agents take turns in one conversation | One shared session | Every agent should see the whole conversation, so no filtering is needed |
 
----
+A session per sub-agent is how most agent frameworks isolate sub-agents, for example
+Claude Code subagents, Microsoft Agent Framework's agent-as-tool, Google ADK's
+`AgentTool` and the OpenAI Agents SDK's `as_tool`. It also follows the common context
+engineering advice to give every sub-agent the minimum context it needs.
 
-## Branch format
-
-`SessionEvent.branch` is a dot-separated path that records the agent hierarchy that
-produced the event:
-
-```
-orchestrator                        branch = "orch"
-├── researcher                      branch = "orch.researcher"
-│   └── summarizer                  branch = "orch.researcher.summarizer"
-└── writer                          branch = "orch.writer"
-```
-
-Events produced before any delegation (e.g. the initial user message) have
-`branch = null` and are visible to every agent in the session.
+!!! warning "Branches are deprecated"
+    Earlier versions isolated sub-agents inside **one** session with ADK-style
+    `SessionEvent.branch` labels. That support is deprecated since 0.9.0 and will be
+    removed in 0.10.0. See [Branches (deprecated)](#branches-deprecated).
 
 ---
 
-## Tagging events
+## Session per sub-agent
 
-Each agent tags its own events with its branch when appending to the session:
+The orchestrator exposes the sub-agent as a tool. When it is called, the tool:
+
+1. derives the sub-agent's session id from the orchestrator's session id;
+2. creates that session on first use, linked to the parent through metadata;
+3. calls the sub-agent's own `ChatClient`, which has its own `SessionMemoryAdvisor` and
+   compaction settings;
+4. returns only the sub-agent's final answer to the orchestrator.
 
 ```java
-// Root event (no branch) — visible to all agents
-service.appendEvent(SessionEvent.builder()
-    .sessionId(sessionId)
-    .message(new UserMessage("Summarise the news today"))
-    .build());
+public class ResearcherTool {
 
-// Orchestrator tags its own planning events
-service.appendEvent(SessionEvent.builder()
-    .sessionId(sessionId)
-    .message(new AssistantMessage("Delegating to researcher and writer"))
-    .branch("orch")
-    .build());
+    // Metadata convention linking a sub-agent session to its parent
+    public static final String PARENT_SESSION_ID = "parentSessionId";
 
-// Each sub-agent tags its events with its own branch
-service.appendEvent(SessionEvent.builder()
-    .sessionId(sessionId)
-    .message(new AssistantMessage("Research findings..."))
-    .branch("orch.researcher")
-    .build());
+    public static final String AGENT = "agent";
 
-service.appendEvent(SessionEvent.builder()
-    .sessionId(sessionId)
-    .message(new AssistantMessage("Draft article..."))
-    .branch("orch.writer")
-    .build());
+    private final SessionService sessionService;
+
+    private final ChatClient researcher;
+
+    public ResearcherTool(SessionService sessionService, ChatClient.Builder chatClientBuilder) {
+        this.sessionService = sessionService;
+        // The sub-agent has its own memory advisor, with compaction sized for its own model
+        this.researcher = chatClientBuilder.defaultSystem("You are a researcher. Cite every source.")
+            .defaultAdvisors(SessionMemoryAdvisor.builder(sessionService)
+                .compactionTrigger(new TurnCountTrigger(10))
+                .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(20).build())
+                .build())
+            .build();
+    }
+
+    @Tool(description = "Delegate a research task to the researcher agent and return its findings")
+    public String research(@ToolParam(description = "The research task, with all needed context") String task,
+            ToolContext toolContext) {
+
+        String parentId = (String) toolContext.getContext().get(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY);
+
+        // Stable id: the researcher remembers earlier tasks of this conversation.
+        // Use parentId + ":researcher:" + UUID.randomUUID() for a fresh context per task.
+        String childId = parentId + ":researcher";
+
+        if (this.sessionService.findById(childId) == null) {
+            Session parent = this.sessionService.findById(parentId);
+            try {
+                this.sessionService.create(CreateSessionRequest.builder()
+                    .id(childId)
+                    .userId(parent.userId())
+                    .metadata(PARENT_SESSION_ID, parentId)
+                    .metadata(AGENT, "researcher")
+                    .build());
+            }
+            catch (IllegalStateException alreadyCreated) {
+                // a concurrent delegation created it first
+            }
+        }
+
+        // Only the task goes in and only the final answer comes back to the orchestrator
+        return this.researcher.prompt()
+            .user(task)
+            .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, childId))
+            .call()
+            .content();
+    }
+
+}
 ```
+
+The orchestrator is an ordinary `ChatClient` call. It passes its session id to its own
+advisor and, through the tool context, to the tool:
+
+```java
+orchestrator.prompt()
+    .user(question)
+    .tools(researcherTool)
+    .toolContext(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
+    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
+    .call()
+    .content();
+```
+
+To find a conversation's sub-agent sessions, filter the user's sessions on the metadata
+key:
+
+```java
+List<Session> children = sessionService.findByUserId(userId)
+    .stream()
+    .filter(s -> parentId.equals(s.metadata().get(ResearcherTool.PARENT_SESSION_ID)))
+    .toList();
+```
+
+**Stable or per-task session ids.**
+- **Stable id** (`parentId + ":researcher"`): the sub-agent remembers its earlier tasks in
+  the same conversation, and you can resume it later.
+- **Per-task id** (add a random suffix): every delegation starts with a fresh context.
+  The orchestrator must then put everything the sub-agent needs into the task.
+
+**What you get:**
+- the sub-agent's prompt holds only its task and its own history, not the orchestrator's
+  conversation or other sub-agents' work;
+- [compaction](compaction.md) runs per session, with triggers and budgets sized to each
+  agent's model;
+- each sub-agent has its own audit trail, searchable with
+  [Recall Storage](../recall-memory/recall-storage.md);
+- parallel sub-agents never contend for the same session's
+  [optimistic-concurrency version](concepts.md#optimistic-concurrency).
+
+**Things to know:**
+- **Parent link.** The link between parent and child sessions is only the metadata
+  convention above, not a library API. Finding a parent's children means scanning
+  `findByUserId`.
+- **Lifecycle.** Sub-agent sessions are not deleted with the parent. Give them the same
+  time to live as the parent (`CreateSessionRequest.builder().timeToLive(...)`), or delete
+  them yourself.
+- **Recall.** [Cross-Session Recall](../recall-memory/cross-session-recall.md) searches
+  every session of a user, including sub-agent sessions.
+- **Timeline.** There is no single merged timeline of a multi-agent run. Merge the sessions'
+  events by timestamp if you need one.
 
 ---
 
-## Filtering by branch
+## Branches (deprecated)
 
-Pass `EventFilter.forBranch(agentBranch)` when loading history for a sub-agent:
+!!! warning "Deprecated since 0.9.0, removed in 0.10.0"
+    The following APIs are deprecated for removal: `SessionEvent.Builder.branch(...)`,
+    `SessionEvent.getBranch()` and `isRootEvent()`, `EventFilter.forBranch(...)`,
+    `EventFilter.Builder.branch(...)` and `EventFilter.branch()`, and
+    `SessionEventTools.Builder.branch(...)`. Use a
+    [session per sub-agent](#session-per-sub-agent) instead.
 
-```java
-// Researcher sees: null-branch events + "orch" events + own "orch.researcher" events
-// Hidden from researcher: "orch.writer" (sibling), "orch.researcher.summarizer" (child)
-List<SessionEvent> researcherHistory = service.getEvents(sessionId,
-    EventFilter.forBranch("orch.researcher"));
-```
+Branches follow the [Google ADK `Event.branch`](https://github.com/google/adk-java/blob/main/core/src/main/java/com/google/adk/events/Event.java)
+model: all agents share **one** session, and each event carries a dot-separated path of the
+agent that produced it (`"orch"`, `"orch.researcher"`, `"orch.writer"`). A `null` branch
+marks a root event, such as the end user's message.
 
-To apply branch isolation automatically inside `SessionMemoryAdvisor`, configure the
-`eventFilter` on the builder. The filter's branch scopes both sides: the advisor reads the
-agent's view of the session and records the agent's user and assistant messages on that
-branch, so you don't tag them yourself:
+### Filtering by branch
+
+`EventFilter.forBranch("orch.researcher")` returns the root events, the ancestors' events
+(`"orch"`) and the agent's own events (`"orch.researcher"`). It hides siblings
+(`"orch.writer"`) and children (`"orch.researcher.summarizer"`). The dot-separator check
+means that `"orch"` is never confused with `"orchestra"`.
+
+`SessionMemoryAdvisor` applies the branch of its `eventFilter` to both sides: it reads the
+agent's view of the session, and it records the agent's user and assistant messages on
+that branch.
 
 ```java
 SessionMemoryAdvisor researcherAdvisor = SessionMemoryAdvisor.builder(sessionService)
     .eventFilter(EventFilter.forBranch("orch.researcher"))
     .build();
-
-// Pass the shared session ID on every request
-chatClient.prompt()
-    .user(userMessage)
-    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sharedSessionId))
-    .call()
-    .content();
 ```
-
----
-
-## Visibility rules
-
-`EventFilter.matches()` applies the following rule per event:
-
-| Event branch | Visible to `orch.researcher`? | Reason |
-|---|---|---|
-| `null` | **yes** | Root event — visible to all |
-| `"orch"` | **yes** | Direct ancestor |
-| `"orch.researcher"` | **yes** | Own branch |
-| `"orch.writer"` | no | Sibling branch |
-| `"orch.researcher.summarizer"` | no | Child branch |
-
-The dot-separator check (`filterBranch.startsWith(eventBranch + ".")`) ensures that a
-branch named `"orch"` is never confused with one named `"orchestra"`.
 
 ### Visibility flows down, not up
 
-An agent sees its ancestors' events, never its descendants'. An orchestrator reading
-with `EventFilter.forBranch("orch")` sees the root events and its own `"orch"` events,
-but none of the work its sub-agents record on `"orch.researcher"` or `"orch.writer"`. It
-learns their results the way it delegated, typically as the tool response it stores on
-its own branch.
+An agent sees its ancestors' events, never its descendants'. The exception is a reader
+**without** a branch filter: `EventFilter.all()`, the advisor's default, sees every event
+of every branch. There is no "root events only" filter.
 
-The exception is a reader **without** a branch filter. `EventFilter.all()`, the default of
-`SessionMemoryAdvisor`, applies no branch restriction at all, so it sees **every** event
-of **every** branch. There is no "root events only" filter: `forBranch(null)` is the same
-as no filter.
-
-| Reader's filter | Sees root (`null`) events | Sees ancestor branches | Sees own branch | Sees sub-agent and sibling branches |
+| Reader's filter | Root events | Ancestor branches | Own branch | Sub-agent and sibling branches |
 |---|---|---|---|---|
 | `EventFilter.all()` (no branch) | yes | — | — | **yes, all of them** |
 | `EventFilter.forBranch("orch")` | yes | — | yes | no |
 | `EventFilter.forBranch("orch.researcher")` | yes | yes (`"orch"`) | yes | no |
 
-So if the top-level agent keeps the default filter while sub-agents write to the same
-session, its prompt history includes the sub-agents' internal messages. To avoid that,
-give the top-level agent a branch too (as `"orch"` above), so that it becomes an ordinary
-node of the tree. Its advisor then records the end user's messages on `"orch"` as well,
-and compaction counts turns only at root `USER` events (see
-[Compaction and branches](#compaction-and-branches)). A turn-based trigger or strategy
-would then find no turns, so either append the end user's messages yourself without a
-branch, or keep the top-level agent on the root and let it see every branch. System messages are the one exception: an agent without a
-branch uses only root-level system messages (see
-[System messages and branches](#system-messages-and-branches)).
+### Compaction and branches
 
----
+Compaction runs over the whole session, all branches at once:
 
-## Compaction and branches
+- **Turns are root turns.** Compaction cuts only at root-level `USER` events, and a
+  sub-agent's events are archived or kept together with the root turn that contains them
+  (see [Turn-boundary Safety](compaction.md#turn-boundary-safety)). A sub-agent that grows
+  inside the newest turn is never compacted.
+- **Budgets measure all branches.** The token-based trigger and strategy count every
+  branch's events, even though each agent sends only its own view. The event-count
+  strategies count only root events.
+- **Summaries are visible to every agent.** Synthetic summary events have no branch, so an
+  agent can read a summary of a sibling's work.
+- **No root turn, no compaction.** If the top-level agent is on a branch too, its advisor
+  records the user's messages on that branch, so the session has no root turns. Since
+  0.9.0 compaction then archives nothing (before, `TokenCountCompactionStrategy` archived
+  the whole active window).
 
-Synthetic summary events always have `branch = null`, so summaries stay visible to every
-agent. Compaction only cuts at root-level (`branch == null`) `USER` events: a branched
-`UserMessage` is a prompt sent *to* a sub-agent inside a root turn (see
-[Turn-boundary Safety](compaction.md#turn-boundary-safety)).
+### System messages and branches
 
----
-
-## System messages and branches
-
-If your application stores system messages (an opt-in), they are scoped by branch: an
-agent's system prompt is the latest one stored on the branch of its advisor's
-`EventFilter` (`null` for the root agent, whose default `EventFilter.all()` has no
-branch). `SessionMemoryAdvisor` never sends another branch's system message, and
-compaction keeps the latest one of every branch, but only the root agent's counts toward
-the token budget. See
+When system messages are stored (an opt-in), each agent's system prompt is the latest one
+on its own branch, and compaction keeps the latest one of every branch. Only the root
+agent's system message counts toward the token budget. See
 [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins).
 
-```java
-// The researcher's own instructions, stored on its branch
-service.appendEvent(SessionEvent.builder()
-    .sessionId(sessionId)
-    .branch("orch.researcher")
-    .message(new SystemMessage("You are a researcher. Cite every source."))
-    .build());
-```
+### Recall search and branches
 
----
-
-## Recall search and branches
-
-`conversation_search` (see [Recall Storage](../recall-memory/recall-storage.md)) searches the whole session
-by default, including peer sub-agents' events. To keep a sub-agent's recall inside its
-own view of the session, build its tool instance with the agent's branch:
-
-```java
-SessionEventTools researcherTools = SessionEventTools.builder(sessionService)
-    .branch("orch.researcher")
-    .build();
-```
+`conversation_search` searches the whole session by default, including sibling agents'
+events. `SessionEventTools.builder(sessionService).branch("orch.researcher")` limits it to
+what that branch can see.

@@ -10,7 +10,7 @@ sequences and discards coherent turns mid-conversation.
 Spring AI Session solves this with three ideas working together:
 
 1. **Structured events** — every message is a `SessionEvent` with a unique id, timestamp,
-   session ownership, and optional branch label for multi-agent hierarchies.
+   session ownership, and metadata.
 2. **Turn-aware compaction** — configurable triggers fire when the history grows too large,
    and pluggable strategies decide what to keep, always respecting turn boundaries so the
    model never sees an orphaned tool result or a half-finished exchange.
@@ -40,7 +40,7 @@ how the main types fit together.
 - **Append-only history** — compaction only flips an event's `archived` flag, so the full
   history stays searchable
 - **Composable event filtering** — by message type, time range, single or multi-term
-  keyword (`ANY`/`ALL`), regular expression, branch, last-N, or pagination
+  keyword (`ANY`/`ALL`), regular expression, last-N, or pagination
 - **Four compaction strategies** out of the box:
     - `SlidingWindowCompactionStrategy` — keep the last N real events
     - `TurnWindowCompactionStrategy` — keep the last N complete turns
@@ -49,13 +49,13 @@ how the main types fit together.
 - **Two compaction triggers** — turn count and token count (composable with OR semantics)
 - **Optimistic concurrency** — compare-and-swap `compactEvents` makes compaction safe under
   concurrent requests without locking
-- **Multi-agent branch isolation** — dot-separated branch labels let peer sub-agents share
-  one session while hiding each other's events
+- **Multi-agent** — give each sub-agent its own session, with its own memory and
+  compaction; see [Multi-Agent](session-management/multi-agent.md)
 - **Recall storage tools** — `conversation_search` keyword-searches the current session's
   full verbatim history even after compaction; `cross_session_search` lets a
   background agent mine *every* session a user has
 - **System messages as configuration** — supplied per request by default; storing them is
-  opt-in, and then the latest one per agent branch is kept first and never summarized
+  opt-in, and then the latest one is kept first and never summarized
   (see [System Messages](session-management/system-messages.md))
 - **Spring Boot auto-configuration** — schema init, dialect detection, and the
   `JdbcSessionRepository` and `SessionService` beans

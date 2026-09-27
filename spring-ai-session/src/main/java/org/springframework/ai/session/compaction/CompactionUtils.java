@@ -114,6 +114,7 @@ final class CompactionUtils {
 	 * @param events the session events, oldest first
 	 * @return the latest stored system event of each branch, in log order
 	 */
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	static List<SessionEvent> pinnedSystemEvents(List<SessionEvent> events) {
 		Map<String, SessionEvent> latestByBranch = new HashMap<>();
 		for (SessionEvent event : events) {
@@ -156,6 +157,7 @@ final class CompactionUtils {
 	 * {@link TokenCountCompactionStrategy} and {@link TokenCountTrigger} both use this, so
 	 * the trigger's threshold and the strategy's budget measure the same thing.
 	 */
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	static List<SessionEvent> budgetedEvents(List<SessionEvent> events) {
 		List<SessionEvent> pinned = pinnedSystemEvents(events);
 		return events.stream()
@@ -207,6 +209,7 @@ final class CompactionUtils {
 	 * @return the adjusted index pointing to the first root-level USER event at or after
 	 * {@code rawCutIndex}, or {@code real.size()} if none exists
 	 */
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	static int snapToTurnStart(List<SessionEvent> real, int rawCutIndex) {
 		int idx = rawCutIndex;
 		while (idx < real.size()
@@ -222,12 +225,16 @@ final class CompactionUtils {
 	 * the strategy's budget, so {@link #snapToTurnStart} found no later turn start — the
 	 * cut is moved back to the last root-level {@link MessageType#USER} event so that the
 	 * current turn is always kept in the active window, even if it exceeds the budget.
-	 * Returns {@code cutIndex} unchanged when it already keeps at least one event or when
-	 * there is no root-level {@code USER} event to fall back to.
+	 * When there is no root-level {@code USER} event at all (no turn boundary to cut at,
+	 * e.g. every event is on a sub-agent branch), returns {@code 0}, so nothing is
+	 * archived. Returns {@code cutIndex} unchanged when it already keeps at least one
+	 * event.
 	 * @param real the list of non-synthetic session events
 	 * @param cutIndex the snapped cut point; must be in {@code [0, real.size()]}
-	 * @return an index that keeps at least the last complete root turn, if one exists
+	 * @return an index that keeps at least the last complete root turn, or {@code 0} when
+	 * there is no root turn
 	 */
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	static int retainLastTurn(List<SessionEvent> real, int cutIndex) {
 		if (cutIndex < real.size()) {
 			return cutIndex;
@@ -237,7 +244,8 @@ final class CompactionUtils {
 				return i;
 			}
 		}
-		return cutIndex;
+		// No turn boundary to cut at: archive nothing rather than the whole window
+		return 0;
 	}
 
 }

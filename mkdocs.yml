@@ -46,7 +46,7 @@ nav:
       - Context Compaction: session-management/compaction.md
       - Compaction Internals: session-management/compaction-internals.md
       - System Messages: session-management/system-messages.md
-      - Multi-Agent Branch Isolation: session-management/multi-agent.md
+      - Multi-Agent: session-management/multi-agent.md
   - Recall Memory:
       - Recall Storage: recall-memory/recall-storage.md
       - Cross-Session Recall: recall-memory/cross-session-recall.md

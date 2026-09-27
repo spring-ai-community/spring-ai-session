@@ -41,6 +41,7 @@ public record CompactionRequest(Session session, List<SessionEvent> events, int 
 	/**
 	 * Creates a {@code CompactionRequest} from the given session and its event list.
 	 */
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	public static CompactionRequest of(Session session, List<SessionEvent> events) {
 		Assert.notNull(session, "session must not be null");
 		Assert.notNull(events, "events must not be null");

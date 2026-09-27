@@ -76,7 +76,8 @@ import org.springframework.ai.chat.messages.MessageType;
 public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullable Set<MessageType> messageTypes,
 		boolean excludeSynthetic, @Nullable Integer lastN, @Nullable String keyword,
 		@Nullable List<String> keywords, @Nullable MatchMode matchMode, @Nullable Pattern pattern,
-		@Nullable Integer page, @Nullable Integer pageSize, @Nullable String branch, boolean excludeArchived) {
+		@Nullable Integer page, @Nullable Integer pageSize,
+		@Deprecated(since = "0.9.0", forRemoval = true) @Nullable String branch, boolean excludeArchived) {
 
 	/**
 	 * How multiple {@link #keywords()} combine when matching an event's text.
@@ -240,7 +241,11 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	 * each other's events.
 	 * @param agentBranch the dot-separated branch path of the querying agent (e.g.
 	 * {@code "orchestrator.researcher"})
+	 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
+	 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
+	 * reference page).
 	 */
+	@Deprecated(since = "0.9.0", forRemoval = true)
 	public static EventFilter forBranch(String agentBranch) {
 		return builder().branch(agentBranch).build();
 	}
@@ -257,6 +262,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	 * filter. Note: {@link #lastN}, {@link #page}, and {@link #pageSize} are applied at
 	 * the collection level by the repository, not here.
 	 */
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	public boolean matches(SessionEvent event) {
 		if (this.excludeSynthetic && event.isSynthetic()) {
 			return false;
@@ -457,7 +463,11 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		/**
 		 * Restricts results to events visible to the agent at this dot-separated branch
 		 * path. See {@link EventFilter#forBranch(String)} for the full visibility rule.
+		 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
+		 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
+		 * reference page).
 		 */
+		@Deprecated(since = "0.9.0", forRemoval = true)
 		public Builder branch(@Nullable String branch) {
 			this.branch = branch;
 			return this;

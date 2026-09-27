@@ -35,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 /**
  * Tests for {@link TokenCountTrigger}.
  */
+@SuppressWarnings("removal") // exercises the deprecated branch support
 class TokenCountTriggerTests {
 
 	private static final String SESSION_ID = "test-session";

@@ -192,6 +192,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		return this.scheduler;
 	}
 
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public ChatClientRequest before(ChatClientRequest request, AdvisorChain advisorChain) {
 
@@ -308,6 +309,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		return request.mutate().prompt(request.prompt().mutate().messages(combined).build()).build();
 	}
 
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public ChatClientResponse after(ChatClientResponse response, AdvisorChain advisorChain) {
 		String sessionId = getSessionId(response.context());

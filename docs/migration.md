@@ -87,6 +87,23 @@ as wildcards, so JDBC results differed from the in-memory repository. They now m
 `%`, `_` and `!` literally on every repository. If you relied on them as JDBC wildcards,
 use `EventFilter.pattern(...)` instead.
 
+#### Deprecated: branch-based multi-agent isolation
+
+ADK-style branches in one shared session are deprecated for removal in 0.10.0. The
+deprecated APIs are:
+
+- `SessionEvent.Builder.branch(...)`, `SessionEvent.getBranch()` and
+  `SessionEvent.isRootEvent()`;
+- `EventFilter.forBranch(...)`, `EventFilter.Builder.branch(...)` and
+  `EventFilter.branch()`;
+- `SessionEventTools.Builder.branch(...)`.
+
+They still work in 0.9.0. Give each sub-agent its own session instead, with its own
+`SessionMemoryAdvisor` and compaction settings, and pass only the task in and the result
+back. See [Multi-Agent](session-management/multi-agent.md#session-per-sub-agent) for an
+example, and [the limits of branches](session-management/multi-agent.md#compaction-and-branches)
+for why they are being removed.
+
 ### Custom implementers
 
 #### Breaking: checklist for custom `SessionRepository` implementations
@@ -154,7 +171,9 @@ The built-in PostgreSQL, MySQL/MariaDB and H2 dialects already follow these rule
   colliding. A retry that spans the upgrade is not recognized as a replay.
 - **Compaction keeps the newest turn.** When the most recent turn alone exceeds the budget,
   the sliding-window, token-count and recursive-summarization strategies keep that turn
-  instead of archiving the whole active window.
+  instead of archiving the whole active window. When the active window has no root-level
+  user message at all (for example, every event is on a sub-agent branch), compaction
+  archives nothing; `TokenCountCompactionStrategy` used to archive the whole window.
 - **Compaction failures no longer fail the chat call.** An exception from compaction in
   `SessionMemoryAdvisor.after()` is logged, and the reply is returned as normal.
 - **`EventFilter.merge`** treats `lastN` / `page`+`pageSize` as one unit, so a per-request

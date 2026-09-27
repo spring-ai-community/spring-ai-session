@@ -70,6 +70,7 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 		this.tokenCountEstimator = tokenCountEstimator;
 	}
 
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public CompactionResult compact(CompactionRequest context) {
 

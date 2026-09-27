@@ -146,6 +146,7 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		this.eventFormatter = eventFormatter;
 	}
 
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
 	@Override
 	public CompactionResult compact(CompactionRequest context) {
 

@@ -49,6 +49,7 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
  * <p>
  * The LLM call is mocked so tests run without a real AI model.
  */
+@SuppressWarnings("removal") // exercises the deprecated branch support
 class RecursiveSummarizationCompactionStrategyTests {
 
 	private static final String SESSION_ID = "test-session";
@@ -666,6 +667,31 @@ class RecursiveSummarizationCompactionStrategyTests {
 			events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("msg-" + i)).build());
 		}
 		return events;
+	}
+
+	@Test
+	void compactionWithoutRootUserMessageArchivesNothing() {
+		// Every event is on a sub-agent branch (e.g. a top-level agent whose advisor has a
+		// branch), so there is no root turn to cut at: nothing may be archived.
+		List<SessionEvent> events = new ArrayList<>();
+		for (int i = 1; i <= 6; i++) {
+			events.add(SessionEvent.builder()
+				.sessionId(SESSION_ID)
+				.message(new UserMessage("question " + i))
+				.branch("orch")
+				.build());
+			events.add(SessionEvent.builder()
+				.sessionId(SESSION_ID)
+				.message(new AssistantMessage("answer " + i))
+				.branch("orch")
+				.build());
+		}
+
+		CompactionResult result = RecursiveSummarizationCompactionStrategy.builder(this.chatClient).maxEventsToKeep(4).build().compact(contextFor(events));
+
+		assertThat(result.archivedEvents()).isEmpty();
+		assertThat(result.compactedEvents()).containsExactlyElementsOf(events);
+		verifyNoMoreInteractions(this.chatClient);
 	}
 
 	private CompactionRequest contextFor(List<SessionEvent> events) {

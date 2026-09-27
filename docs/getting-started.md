@@ -186,6 +186,6 @@ To use a `-SNAPSHOT` version, add the Central Portal snapshot repository:
 - [Session Concepts](session-management/concepts.md) — understand `Session`, `SessionEvent`, and turns
 - [Context Compaction](session-management/compaction.md) — configure triggers and strategies
 - [System Messages](session-management/system-messages.md) — supply system prompts per request, and the opt-in to store them
-- [Multi-Agent Branch Isolation](session-management/multi-agent.md) — share sessions across agents safely
+- [Multi-Agent](session-management/multi-agent.md) — give each sub-agent its own session
 - [Session JDBC](session-jdbc/index.md) — persistent JDBC-backed repository
 - [Migration Guide](migration.md) — upgrade notes between versions

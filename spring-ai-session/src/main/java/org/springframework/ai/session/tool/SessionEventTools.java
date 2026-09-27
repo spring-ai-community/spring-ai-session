@@ -148,7 +148,11 @@ public class SessionEventTools {
 		 * {@code null} (search every event in the session).
 		 * @param branch the agent's branch path, e.g. {@code "orch.researcher"}
 		 * @return this builder
+		 * @deprecated since 0.9.0, for removal in 0.10.0: branch-based multi-agent isolation is
+		 * being removed. Give each sub-agent its own session instead (see the "Multi-Agent"
+		 * reference page).
 		 */
+		@Deprecated(since = "0.9.0", forRemoval = true)
 		public Builder branch(@Nullable String branch) {
 			this.branch = branch;
 			return this;
@@ -208,7 +212,7 @@ public class SessionEventTools {
 
 		EventFilter filter = EventFilter.keywordSearch(query, pageNumber, this.pageSize);
 		if (this.branch != null) {
-			filter = filter.merge(EventFilter.forBranch(this.branch));
+			filter = filter.merge(branchFilter(this.branch));
 		}
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, filter);
 
@@ -223,6 +227,11 @@ public class SessionEventTools {
 		}
 
 		return JsonParser.toJson(results);
+	}
+
+	@SuppressWarnings("removal") // branch support is deprecated, see SessionEvent#getBranch()
+	private static EventFilter branchFilter(String branch) {
+		return EventFilter.forBranch(branch);
 	}
 
 }

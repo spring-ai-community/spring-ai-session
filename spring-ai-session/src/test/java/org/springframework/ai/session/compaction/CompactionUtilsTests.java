@@ -33,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * @author Christian Tzolov
  */
+@SuppressWarnings("removal") // exercises the deprecated branch support
 class CompactionUtilsTests {
 
 	private static final String SESSION_ID = "test-session";
@@ -239,10 +240,13 @@ class CompactionUtilsTests {
 	}
 
 	@Test
-	void retainLastTurnWithoutRootUserReturnsCutUnchanged() {
+	void retainLastTurnWithoutRootUserArchivesNothing() {
 		List<SessionEvent> events = List.of(assistant("a1"), assistant("a2"));
+		List<SessionEvent> branched = List.of(user("u1", "orch"), assistant("a1"), user("u2", "orch"));
 
-		assertThat(CompactionUtils.retainLastTurn(events, 2)).isEqualTo(2);
+		// No turn boundary to cut at: keep every event rather than archiving the window
+		assertThat(CompactionUtils.retainLastTurn(events, 2)).isEqualTo(0);
+		assertThat(CompactionUtils.retainLastTurn(branched, 3)).isEqualTo(0);
 		assertThat(CompactionUtils.retainLastTurn(List.of(), 0)).isEqualTo(0);
 	}
 

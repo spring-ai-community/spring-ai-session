@@ -35,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Contract: fields from {@code other} win when non-null/non-default;
  * {@code excludeSynthetic} is OR-ed so either side can opt in.
  */
+@SuppressWarnings("removal") // exercises the deprecated branch support
 class EventFilterMergeTests {
 
 	// --- other fields win when set ---

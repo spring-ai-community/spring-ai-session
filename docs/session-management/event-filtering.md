@@ -35,7 +35,7 @@ service.getEvents(id, EventFilter.keywordsSearch(List.of("we decided", "going fo
 // Regular-expression search — first page (default page size 10)
 service.getEvents(id, EventFilter.patternSearch(Pattern.compile("\\bwe decided\\b")));
 
-// Events visible to a specific agent branch (own + ancestor events only)
+// Events visible to a specific agent branch (own + ancestor events only). Deprecated since 0.9.0
 service.getEvents(id, EventFilter.forBranch("orch.researcher"));
 ```
 
@@ -66,7 +66,7 @@ EventFilter filter = EventFilter.builder()
     .keywords(List.of("no,", "actually"))                  // multi-term substring match
     .matchMode(MatchMode.ANY)                               // ANY (default) or ALL of keywords
     .pattern(Pattern.compile("\\bwe decided\\b"))          // compiled regex — developer-authored only
-    .branch("orch.researcher")                             // branch isolation
+    .branch("orch.researcher")                             // branch isolation (deprecated)
     .build();
 ```
 
@@ -90,7 +90,7 @@ than one and an event must satisfy all of them. In practice, callers set exactly
 | `pattern` | `Pattern` | Compiled regular expression matched against `message.getText()` via `Matcher.find()`. **Only ever pass a developer-authored `Pattern`** — see the ReDoS warning above |
 | `page` | `Integer` | Zero-indexed page in chronological order (oldest first, page 0 = oldest) |
 | `pageSize` | `Integer` | Results per page (default 10; must be > 0 if set) |
-| `branch` | `String` | Restricts to events visible to this agent branch (own + ancestors only) |
+| `branch` | `String` | Restricts to events visible to this agent branch (own + ancestors only). Deprecated since 0.9.0, see [Multi-Agent](multi-agent.md) |
 | `excludeArchived` | `boolean` | When `true`, archived (compacted-out) events are excluded — used by `EventFilter.active()` |
 
 ---

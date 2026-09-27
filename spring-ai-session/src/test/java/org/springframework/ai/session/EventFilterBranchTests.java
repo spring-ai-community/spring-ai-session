@@ -35,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * agent at branch {@code Y} if {@code X} is null (root), equals {@code Y}, or is a
  * dot-prefix ancestor of {@code Y}. Sibling branches and child branches are hidden.
  */
+@SuppressWarnings("removal") // exercises the deprecated branch support
 class EventFilterBranchTests {
 
 	private static final String SESSION_ID = "test-session";

@@ -36,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Tests for {@link SessionEventTools#conversationSearch}.
  */
+@SuppressWarnings("removal") // exercises the deprecated branch support
 class SessionEventToolsTests {
 
 	private SessionService sessionService;

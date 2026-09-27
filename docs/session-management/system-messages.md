@@ -137,8 +137,10 @@ combining several instructions into it is the integration's responsibility. Ever
 At most one stored system message per branch is ever active, so an integration that
 stores one per turn cannot grow the active window.
 
-**Sub-agents.** In a [multi-agent session](multi-agent.md), system messages are scoped by
-branch: each agent's system prompt is the latest system message stored on **its own**
+**Sub-agents.** With a [session per sub-agent](multi-agent.md#session-per-sub-agent), each
+sub-agent's system messages live in its own session, so these rules apply to each session
+as usual. With the deprecated [branches](multi-agent.md#branches-deprecated), system
+messages are scoped by branch: each agent's system prompt is the latest system message stored on **its own**
 branch, and a sub-agent's system messages configure only that sub-agent. Compaction keeps
 the latest one of every branch, so a sub-agent that is delegated to again in a later turn
 still has its system prompt, even after the turn it was stored in has been archived. Like

@@ -26,7 +26,8 @@ SessionEventTools tools = SessionEventTools.builder(sessionService)
     .pageSize(20)
     .build();
 
-// Sub-agent in a multi-agent session: only search events visible to this branch
+// Sub-agent in a shared multi-agent session: only search events visible to this branch.
+// Deprecated since 0.9.0: prefer a session per sub-agent
 SessionEventTools researcherTools = SessionEventTools.builder(sessionService)
     .branch("orch.researcher")
     .build();
@@ -84,12 +85,12 @@ a case-insensitive substring match on each event's `message.getText()`, applied 
 pagination. Synthetic summary events produced by `RecursiveSummarizationCompactionStrategy`
 are searched too.
 
-!!! note "Branch isolation"
-    By default `conversation_search` searches every event in the session, including events
-    from every sub-agent branch. In a multi-agent session, give each sub-agent a tool
-    instance built with `.branch("orch.researcher")`. It then applies the same visibility
-    rule as `EventFilter.forBranch(...)`: root events, the agent's own events and its
-    ancestors' events are searchable, but peer sub-agents' events are not.
+!!! note "Multi-agent sessions"
+    With a [session per sub-agent](../session-management/multi-agent.md#session-per-sub-agent),
+    each sub-agent's `conversation_search` searches only its own session. With the
+    deprecated branches, where agents share one session, it searches every branch unless the
+    tool instance is built with `.branch("orch.researcher")`, which applies the same
+    visibility rule as `EventFilter.forBranch(...)`.
 
 ---
 

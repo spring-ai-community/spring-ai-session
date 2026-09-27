@@ -56,7 +56,7 @@ what `Message` intentionally omits: identity, ownership, ordering, and framework
 | `timestamp` | Chronological ordering (`Instant.now()` by default) |
 | `message` | The Spring AI message — no duplication of content |
 | `metadata` | Framework flags such as `METADATA_SYNTHETIC` and `METADATA_COMPACTION_SOURCE` |
-| `branch` | Dot-separated agent path (e.g. `"orch.researcher"`); `null` for root-level events |
+| `branch` | Dot-separated agent path (e.g. `"orch.researcher"`); `null` for root-level events. Deprecated since 0.9.0, see [Multi-Agent](multi-agent.md) |
 | `archived` | `true` once compaction has moved the event out of the active window; it stays in the log and remains searchable (see [Event lifecycle](#event-lifecycle)) |
 
 ### Message types
@@ -84,7 +84,7 @@ SessionEvent event = SessionEvent.builder()
     .message(new UserMessage("Hello"))
     .build();
 
-// Branched event — attributed to a specific sub-agent
+// Branched event — attributed to a specific sub-agent (deprecated since 0.9.0)
 SessionEvent branched = SessionEvent.builder()
     .sessionId(sessionId)
     .message(new AssistantMessage("Research result..."))

@@ -32,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Tests for {@link CompactionRequest}.
  */
+@SuppressWarnings("removal") // exercises the deprecated branch support
 class CompactionRequestTests {
 
 	private static final String SESSION_ID = "test-session";
