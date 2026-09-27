@@ -71,7 +71,7 @@ repository and `SessionService` (schema auto-initialised with an embedded databa
 <dependency>
     <groupId>org.springaicommunity</groupId>
     <artifactId>spring-ai-starter-session-jdbc</artifactId>
-    <version>${spring-ai-session.version}</version>
+    <version>${spring-ai-session.version}</version> <!-- e.g. 0.9.0 -->
 </dependency>
 ```
 
@@ -93,8 +93,8 @@ String answer = chatClient.prompt()
     .content();
 ```
 
-See [Getting Started](getting-started.md) for the full setup, including persistent
-databases and a no-Boot programmatic option.
+See [Getting Started](getting-started.md) for the full setup, including manual JDBC and
+in-memory setups.
 
 **Requirements:** Java 17+, Spring AI `2.0.1+`, Spring Boot `4.1.1+`.
 

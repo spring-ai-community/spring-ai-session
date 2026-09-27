@@ -165,7 +165,8 @@ All four share the helpers in `CompactionUtils`:
 
 - **Split the events:** `pinnedSystemEvents` (the latest stored system message),
   `supersededSystemEvents` and `compactableEvents`.
-- **Choose the cut:** `snapToTurnStart` and `retainLastTurn`.
+- **Choose the cut:** `snapToTurnStart` and `retainLastTurn`. `TurnWindowCompactionStrategy`
+  only uses `isTurnStart`: it groups events into whole turns, so it needs no snapping.
 - **Build the result:** `unchangedExceptSuperseded` and `archiving`.
 
 How these fit together is shown in [section 3](#3-activity-how-a-strategy-chooses-what-to-archive).
@@ -233,8 +234,13 @@ that are newer than the version it checks.
 
 ## 3. Activity: how a strategy chooses what to archive
 
-All four strategies share this pipeline. They differ only in step 3: how the raw cut is
-computed.
+All four strategies share this pipeline. They differ in step 3, how the raw cut is
+computed, and in two more places:
+
+- `TokenCountCompactionStrategy` has no step 2 shortcut: it always walks the events and
+  computes a cut.
+- `TurnWindowCompactionStrategy` cuts whole turns, so it skips steps 4 and 5. Events
+  before its first `USER` event form a preamble that is always kept.
 
 ```mermaid
 flowchart TB
@@ -266,8 +272,9 @@ flowchart TB
 
 **Invariants the pipeline guarantees:**
 
-- **The kept window always starts at a `USER` event.** No kept assistant reply
-  or tool result loses the user message that started its turn.
+- **The kept window always starts at a `USER` event,** apart from
+  `TurnWindowCompactionStrategy`'s preamble. No kept assistant reply or tool result loses
+  the user message that started its turn.
 - **The newest turn is never archived.** Step 5 keeps it even when it alone exceeds the
   budget.
 - **At most one stored system message stays active,** and it is never
@@ -333,11 +340,12 @@ sequenceDiagram
 **What makes it "recursive".** Each pass feeds the previous summary's text back to the
 LLM as `=== PRIOR SUMMARY ===`. The new summary therefore builds on the old one, and the
 old synthetic events are dropped rather than archived. The resulting active window is
-always `[system prompt(s)] + [one summary turn] + [recent real events]`.
+always `[latest stored system message, if any] + [one summary turn] + [recent real events]`.
 
 **Why the summary is a user + assistant pair.** Many providers require the messages after
-the system prompt to alternate user and assistant. A lone assistant summary followed by
-the kept window, which starts with a user message, keeps that alternation valid.
+the system prompt to alternate user and assistant. The shadow-prompt user message plus
+the assistant summary, followed by a kept window that starts with a user message, keep
+that alternation valid; a lone assistant summary would not.
 
 ---
 

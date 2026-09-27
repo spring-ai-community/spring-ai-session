@@ -21,11 +21,12 @@ them, so the full history stays searchable.
 
 ## Dependency
 
+With the [BOM](../getting-started.md#add-the-bom-recommended) imported, no version is needed:
+
 ```xml
 <dependency>
     <groupId>org.springaicommunity</groupId>
     <artifactId>spring-ai-session-jdbc</artifactId>
-    <version>${spring-ai-session.version}</version>
 </dependency>
 ```
 

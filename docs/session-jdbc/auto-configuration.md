@@ -13,13 +13,13 @@ API use `org.springframework.ai.session`.
 
 ## Dependency
 
-The recommended way to pull in the full auto-configured stack is via the starter:
+The recommended way to pull in the full auto-configured stack is via the starter (the
+version comes from the [BOM](../getting-started.md#add-the-bom-recommended)):
 
 ```xml
 <dependency>
     <groupId>org.springaicommunity</groupId>
     <artifactId>spring-ai-starter-session-jdbc</artifactId>
-    <version>${spring-ai-session.version}</version>
 </dependency>
 ```
 

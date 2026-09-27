@@ -219,15 +219,20 @@ SystemMessage systemPrompt = new SystemMessage(
 //    choosing the stored system message needs each event's synthetic flag.
 List<SessionEvent> events = sessionService.getEvents(sessionId, EventFilter.active());
 
-// 3 + 4. The latest stored system message, if any, and the request's, first. Exact
-//        duplicates are dropped.
+// 3 + 4. System messages first: the latest stored one, if any, synthetic SYSTEM
+//        summaries written by older versions, and the request's. Exact duplicates
+//        are dropped.
 Optional<Message> storedPrompt = events.stream()
     .filter(e -> !e.isSynthetic() && e.getMessageType() == MessageType.SYSTEM)
     .map(SessionEvent::getMessage)
     .reduce((earlier, later) -> later);
+Stream<Message> legacySummaries = events.stream()
+    .filter(e -> e.isSynthetic() && e.getMessageType() == MessageType.SYSTEM)
+    .map(SessionEvent::getMessage);
 Set<String> seen = new HashSet<>();
 List<Message> input = new ArrayList<>();
-Stream.concat(storedPrompt.stream(), Stream.of(systemPrompt))
+Stream.of(storedPrompt.stream(), legacySummaries, Stream.<Message>of(systemPrompt))
+    .flatMap(Function.identity())
     .filter(m -> seen.add(m.getText()))
     .forEach(input::add);
 events.stream()

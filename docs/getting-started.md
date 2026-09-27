@@ -10,7 +10,10 @@
 
 ## Add the BOM (recommended)
 
-Import the BOM so all module versions stay in sync:
+Import the BOM so all module versions stay in sync. Set `spring-ai-session.version` to the
+latest release on
+[Maven Central](https://central.sonatype.com/artifact/org.springaicommunity/spring-ai-session-bom),
+or to a snapshot version (see [Maven Repositories](#maven-repositories)):
 
 ```xml
 <dependencyManagement>

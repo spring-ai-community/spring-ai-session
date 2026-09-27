@@ -37,7 +37,7 @@ Most AI frameworks store conversation history as a flat list of messages. That w
         <dependency>
             <groupId>org.springaicommunity</groupId>
             <artifactId>spring-ai-session-bom</artifactId>
-            <version>0.10.0</version>
+            <version>0.9.0</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -88,11 +88,11 @@ String answer = client.prompt()
 
 Full reference documentation: **[spring-ai-community.github.io/spring-ai-session](https://spring-ai-community.github.io/spring-ai-session/)**. Good places to start:
 
-- [Getting Started](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/getting-started/) — setup options (Spring Boot starter, JDBC manual, in-memory)
-- [Session Concepts](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/concepts/) — `Session`, `SessionEvent`, turns, and architecture
-- [Context Compaction](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/compaction/) — triggers, strategies, turn-boundary safety
-- [ChatClient Integration](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/chat-client/chat-client/) — `SessionMemoryAdvisor` setup and options
-- [Migration Guide](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/migration/) — upgrade notes and breaking changes
+- [Getting Started](https://spring-ai-community.github.io/spring-ai-session/latest/getting-started/) — setup options (Spring Boot starter, JDBC manual, in-memory)
+- [Session Concepts](https://spring-ai-community.github.io/spring-ai-session/latest/session-management/concepts/) — `Session`, `SessionEvent`, turns, and architecture
+- [Context Compaction](https://spring-ai-community.github.io/spring-ai-session/latest/session-management/compaction/) — triggers, strategies, turn-boundary safety
+- [ChatClient Integration](https://spring-ai-community.github.io/spring-ai-session/latest/chat-client/chat-client/) — `SessionMemoryAdvisor` setup and options
+- [Migration Guide](https://spring-ai-community.github.io/spring-ai-session/latest/migration/) — upgrade notes and breaking changes
 
 ## Requirements
 

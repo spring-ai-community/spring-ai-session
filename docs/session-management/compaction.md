@@ -55,8 +55,8 @@ compaction should run based on the current `CompactionRequest`.
 
 ### TurnCountTrigger
 
-Fires when the session has more than `n` complete turns. Every non-synthetic `USER` event
-counts toward the turn total.
+Fires when the session has more than `n` turns. Every non-synthetic `USER` event counts
+toward the turn total, including the turn in progress.
 
 ```java
 new TurnCountTrigger(20);  // compact when > 20 turns
@@ -109,8 +109,11 @@ Strategies implement `CompactionStrategy` (a `@FunctionalInterface`). Each recei
   first, and archives earlier stored system messages;
 - applies its limit only to the real conversation events;
 - starts the kept window at a `USER` message and always keeps the most recent turn (see
-  [Turn-boundary Safety](#turn-boundary-safety));
-- returns `[system messages] + [synthetics] + [kept events]`.
+  [Turn-boundary Safety](#turn-boundary-safety)). The exception is
+  `TurnWindowCompactionStrategy`'s preamble: events before the first `USER` message, kept
+  verbatim;
+- returns `[latest stored system message] + [synthetics] + [kept events]`
+  (`TurnWindowCompactionStrategy` puts its preamble before the kept turns).
 
 ### Token accounting
 
@@ -178,8 +181,10 @@ TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEst
 
 It walks real events from newest to oldest and stops at the first event that would exceed
 the remaining budget. The result is a **contiguous suffix**: skipping individual oversize
-events would leave gaps that break conversation coherence. Leading kept events that are
-not `USER` messages are then dropped.
+events would leave gaps that break conversation coherence. The cut then snaps forward to
+the next `USER` message, so leading events that are not `USER` messages are archived with
+the older ones. Unlike the other strategies it has no "everything fits" shortcut: it
+always walks the events.
 
 #### How the budget is spent
 
@@ -284,15 +289,15 @@ RecursiveSummarizationCompactionStrategy strategy =
 ## Turn-boundary Safety
 
 All four strategies share a common safety rule: the kept window always starts at a
-`USER` message. The sliding-window, token-count and recursive-summarization strategies snap
+`USER` message (apart from `TurnWindowCompactionStrategy`'s preamble, see above). The sliding-window, token-count and recursive-summarization strategies snap
 their cut point forward to the next such message (package-private `CompactionUtils.snapToTurnStart`);
 `TurnWindowCompactionStrategy` gets the same result by grouping events into turns. This
 prevents keeping a tool result or assistant reply without the user message that started
 its turn.
 
 ```
-Before snap:  [u1, a1, u2, a2, | a3, u3, a3]   ← cut lands on a3 (middle of turn 2)
-After snap:   [u1, a1, u2, a2, a3, | u3, a3]   ← cut moved to u3 (turn start)
+Before snap:  [u1, a1, u2, a2a, | a2b, u3, a3]   ← cut lands on a2b (middle of turn 2)
+After snap:   [u1, a1, u2, a2a, a2b, | u3, a3]   ← cut moved to u3 (turn start)
 ```
 
 The full cut-point pipeline and seven worked examples are in

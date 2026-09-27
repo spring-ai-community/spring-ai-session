@@ -46,7 +46,7 @@ Session session = service.create(
 
 ## SessionEvent
 
-`SessionEvent` is an immutable record that wraps a Spring AI `Message` type. It adds only
+`SessionEvent` is an immutable value object that wraps a Spring AI `Message` type. It adds only
 what `Message` intentionally omits: identity, ownership, ordering, and framework flags.
 
 | Field | Description |
@@ -286,14 +286,15 @@ can surface any prior exchange after it has been compacted out of context. Only 
 superseded synthetic summary is deleted instead, because its content is carried into the
 new summary.
 
-In the JDBC repository, newly archived events are updated in place (their row is never
-rewritten); only the active window is replaced with the retained events on each pass, so
+In the JDBC repository, newly archived events are flagged with an in-place `UPDATE`
+(their row is never deleted and re-inserted); only the active window is replaced with the retained events on each pass, so
 the growing archived history is never re-read or re-written.
 
 ### Optimistic concurrency
 
 `SessionRepository.getEventVersion(sessionId)` is a monotonically increasing counter,
-incremented on every `appendEvent` and `compactEvents` call. Callers read it before
+incremented on every `appendEvent` that appends a new event and on every successful
+`compactEvents` call. Callers read it before
 fetching events and pass it to `compactEvents(sessionId, archivedEvents, retainedEvents,
 expectedVersion)`. If another writer changed the log in between, this compare-and-swap
 (CAS) returns `false`, and the caller treats it as a no-op rather than retrying. Durable

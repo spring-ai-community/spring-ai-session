@@ -50,6 +50,12 @@ compiles because of its `@Override`; delete the method.
 
 ## Upgrading to 0.9.0
 
+!!! note "Branches were removed in 0.10.0"
+    The branch-related items below (branch filters, `getBranchFilterFragment()`,
+    `SessionEventTools.builder().branch(...)`, per-branch system messages and root-level
+    turns) are superseded by [Upgrading to 0.10.0](#upgrading-to-0100). If you upgrade from
+    0.8 straight to 0.10, skip them.
+
 ### Application changes
 
 #### Breaking: `conversation_search` needs the session ID in the tool context

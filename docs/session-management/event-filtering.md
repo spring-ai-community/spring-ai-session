@@ -85,7 +85,7 @@ than one and an event must satisfy all of them. In practice, callers set exactly
 | `matchMode` | `EventFilter.MatchMode` | `ANY` (at least one term present) or `ALL` (every term present) — only meaningful when `keywords` is set. Import `org.springframework.ai.session.EventFilter.MatchMode` |
 | `pattern` | `Pattern` | Compiled regular expression matched against `message.getText()` via `Matcher.find()`. **Only ever pass a developer-authored `Pattern`** — see the ReDoS warning above |
 | `page` | `Integer` | Zero-indexed page in chronological order (oldest first, page 0 = oldest) |
-| `pageSize` | `Integer` | Results per page (default 10; must be > 0 if set) |
+| `pageSize` | `Integer` | Results per page. Unset means no pagination; the `*Search` factories use 10. Must be > 0 if set |
 | `excludeArchived` | `boolean` | When `true`, archived (compacted-out) events are excluded — used by `EventFilter.active()` |
 
 ---
