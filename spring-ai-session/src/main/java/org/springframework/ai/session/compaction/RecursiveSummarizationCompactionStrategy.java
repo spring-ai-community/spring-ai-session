@@ -207,12 +207,14 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		if (summary == null || summary.isBlank()) {
 			logger.warn(
 					"RecursiveSummarizationCompactionStrategy: LLM returned a null or blank summary for session '{}'. "
-							+ "Compaction skipped — event history is unchanged.",
+							+ "Summarization skipped — the conversation is unchanged.",
 					context.session().id());
 			if (this.onSummarizationFailure != null) {
 				this.onSummarizationFailure.accept(context);
 			}
-			return new CompactionResult(events, List.of(), 0);
+			// Nothing is summarized, but superseded system messages are still archived,
+			// as on every other pass that makes no cut
+			return CompactionUtils.unchangedExceptSuperseded(events, supersededSystem, tokens);
 		}
 
 		// Build the compacted event list: synthetic summary turn (user + assistant) +
@@ -250,7 +252,12 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		List<SessionEvent> compacted = new ArrayList<>(
 				archiving.compactedEvents().stream().filter(e -> !e.isSynthetic()).toList());
 		compacted.addAll(compacted.indexOf(activeWindow.get(0)), summaryTurn);
-		return new CompactionResult(compacted, archiving.archivedEvents(), archiving.tokensEstimatedSaved());
+
+		// Net saving: the archived events and the replaced prior summary leave the active
+		// window, the new summary turn enters it
+		int saved = archiving.tokensEstimatedSaved() + syntheticEvents.stream().mapToInt(tokens).sum()
+				- summaryTurn.stream().mapToInt(tokens).sum();
+		return new CompactionResult(compacted, archiving.archivedEvents(), Math.max(0, saved));
 	}
 
 	/**

@@ -187,6 +187,10 @@ public final class InMemorySessionRepository implements SessionRepository {
 				}
 			}
 			else {
+				if (!sessionId.equals(event.getSessionId())) {
+					throw new IllegalArgumentException("retainedEvents contains a new event of session '"
+							+ event.getSessionId() + "', not of session " + sessionId);
+				}
 				pending.add(event);
 			}
 		}
@@ -238,12 +242,13 @@ public final class InMemorySessionRepository implements SessionRepository {
 		if (filter.pageSize() != null) {
 			int pageNum = (filter.page() != null) ? filter.page() : 0;
 			int size = filter.pageSize();
-			int fromIdx = pageNum * size;
+			// long arithmetic: a large page number must not overflow into a negative index
+			long fromIdx = (long) pageNum * size;
 			if (fromIdx >= matched.size()) {
 				matched = new ArrayList<>();
 			}
 			else {
-				matched = matched.subList(fromIdx, Math.min(fromIdx + size, matched.size()));
+				matched = matched.subList((int) fromIdx, (int) Math.min(fromIdx + size, matched.size()));
 			}
 		}
 

@@ -31,7 +31,16 @@ compaction settings, and pass only the task in and the result back. See
   the next compaction. The kept system message counts fully toward the
   `TokenCountCompactionStrategy` budget and the `TokenCountTrigger` threshold.
 - **`SessionMemoryAdvisor`** no longer reads or writes by branch: it records every user and
-  assistant event as an ordinary event and uses the latest stored system message.
+  assistant event as an ordinary event and uses the latest stored system message. It also
+  compacts only once a turn is complete: inside a tool-calling loop it no longer compacts
+  after a reply that requests tool calls. Compacting in the middle of a turn with a
+  summarizing strategy made the next round re-send the whole history.
+- **`RecursiveSummarizationCompactionStrategy`:** when the summarizer returns a blank
+  summary, superseded stored system messages are still archived, and
+  `tokensEstimatedSaved` is now net of the new summary turn's tokens.
+- **`compactEvents` validates new events:** a new event in `retainedEvents` that belongs to
+  another session is rejected with `IllegalArgumentException` (in-memory and JDBC), and
+  `InMemorySessionRepository` now also rejects archived events that are not in the log.
 - **Compaction never reorders the log.** A kept system message stays where it was stored
   instead of moving to the front of the active window, and archived events stay where they
   were. `getEvents(...)` therefore returns events in the order they were appended, plus

@@ -251,7 +251,8 @@ predecessors without starting from scratch.
 **LLM failure handling**
 
 If the LLM returns a null or blank summary, the strategy logs a `WARN` and skips
-compaction, leaving the history unchanged. If the LLM call throws, the exception propagates
+summarization, leaving the conversation unchanged (superseded stored system messages are
+still archived). If the LLM call throws, the exception propagates
 out of `SessionService.compact(...)`. `SessionMemoryAdvisor` catches and logs it, so the
 user's chat call still succeeds; if you call `compact(...)` yourself, handle it there.
 Register a callback to react to a blank summary:

@@ -380,6 +380,10 @@ public final class JdbcSessionRepository implements SessionRepository {
 				}
 			}
 			else {
+				if (!sessionId.equals(event.getSessionId())) {
+					throw new IllegalArgumentException("retainedEvents contains a new event of session '"
+							+ event.getSessionId() + "', not of session " + sessionId);
+				}
 				pending.add(event);
 			}
 		}

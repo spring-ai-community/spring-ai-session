@@ -136,7 +136,9 @@ public interface SessionRepository {
 	 * implementations may reject the whole call with {@link IllegalArgumentException}
 	 * otherwise)
 	 * @param retainedEvents the new active window, in log order, including any new events
-	 * at the position they should take
+	 * at the position they should take (new events must belong to {@code sessionId};
+	 * implementations reject the whole call with {@link IllegalArgumentException}
+	 * otherwise)
 	 * @param expectedVersion the event-log version the caller observed
 	 * @return {@code true} when the swap succeeded, {@code false} on a version mismatch
 	 * @throws IllegalArgumentException if the session does not exist

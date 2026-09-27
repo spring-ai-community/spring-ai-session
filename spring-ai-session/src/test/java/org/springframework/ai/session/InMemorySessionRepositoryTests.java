@@ -301,6 +301,19 @@ class InMemorySessionRepositoryTests {
 			.containsExactly("s2", "e3");
 	}
 
+	@Test
+	void findEventsWithAHugePageNumberReturnsAnEmptyPage() {
+		Session session = buildSession("user-page");
+		this.repository.save(session);
+		this.repository
+			.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage("hello")).build());
+
+		// page * pageSize overflows an int
+		EventFilter filter = EventFilter.builder().page(Integer.MAX_VALUE).pageSize(10).build();
+
+		assertThat(this.repository.findEvents(session.id(), filter)).isEmpty();
+	}
+
 	private Session buildSession(String userId) {
 		return Session.builder().id(UUID.randomUUID().toString()).userId(userId).build();
 	}

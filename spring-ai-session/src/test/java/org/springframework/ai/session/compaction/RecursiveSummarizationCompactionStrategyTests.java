@@ -336,6 +336,50 @@ class RecursiveSummarizationCompactionStrategyTests {
 	}
 
 	@Test
+	void blankSummaryStillArchivesSupersededSystemMessages() {
+		given(this.chatClient.prompt().system(anyString()).user(anyString()).call().content()).willReturn(" ");
+		clearInvocations(this.chatClient);
+		RecursiveSummarizationCompactionStrategy strategy = RecursiveSummarizationCompactionStrategy
+			.builder(this.chatClient)
+			.maxEventsToKeep(2)
+			.overlapSize(0)
+			.build();
+		List<SessionEvent> events = List.of(system("v1"), user("u1"), assistant("a1"), user("u2"), system("v2"),
+				assistant("a2"), user("u3"), assistant("a3"));
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		// Nothing is summarized, but the superseded system message is archived as on any
+		// other pass that makes no cut
+		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("v1");
+		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
+			.containsExactly("u1", "a1", "u2", "v2", "a2", "u3", "a3");
+	}
+
+	@Test
+	void tokensEstimatedSavedIsNetOfTheNewSummaryTurn() {
+		RecursiveSummarizationCompactionStrategy strategy = RecursiveSummarizationCompactionStrategy
+			.builder(this.chatClient)
+			.maxEventsToKeep(2)
+			.overlapSize(0)
+			.tokenCountEstimator(capturingEstimator(new ArrayList<>()))
+			.build();
+		List<SessionEvent> events = List.of(user("u1 " + "x".repeat(200)), assistant("a1 " + "y".repeat(200)),
+				user("u2"), assistant("a2"));
+
+		CompactionResult result = strategy.compact(contextFor(events));
+
+		int archived = result.archivedEvents().stream().mapToInt(e -> CompactionUtils.formatEvent(e).length()).sum();
+		int summaryTurn = result.compactedEvents()
+			.stream()
+			.filter(SessionEvent::isSynthetic)
+			.mapToInt(e -> CompactionUtils.formatEvent(e).length())
+			.sum();
+		assertThat(summaryTurn).isPositive();
+		assertThat(result.tokensEstimatedSaved()).isEqualTo(archived - summaryTurn);
+	}
+
+	@Test
 	void llmReturningBlankSummarySkipsCompactionAndReturnsUnchangedEvents() {
 		given(this.chatClient.prompt().system(anyString()).user(anyString()).call().content()).willReturn("   ");
 		clearInvocations(this.chatClient);

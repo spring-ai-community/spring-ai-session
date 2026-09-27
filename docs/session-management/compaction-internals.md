@@ -278,8 +278,8 @@ flowchart TB
 - **The newest turn is never archived.** Step 5 keeps it even when it alone exceeds the
   budget.
 - **At most one stored system message stays active,** and it is never
-  summarized. Superseded ones are archived on every pass, even when no cut is needed,
-  except a recursive pass skipped because the summarizer returned a blank summary.
+  summarized. Superseded ones are archived on every pass, even when no cut is needed or
+  the summarizer returned a blank summary.
 - **Synthetic summaries survive** the sliding-window, turn-window and token-count
   strategies. The recursive strategy replaces them (see section 4).
 
@@ -320,7 +320,7 @@ sequenceDiagram
             alt blank or null summary
                 LLM-->>R: "" or null
                 R->>R: log WARN, then onSummarizationFailure(request) if set
-                R-->>Caller: CompactionResult(events, [], 0)
+                R-->>Caller: unchangedExceptSuperseded(events, superseded)
             else summary text
                 LLM-->>R: summary
                 R->>R: summaryTurn = [USER shadowPrompt, ASSISTANT summary]<br/>(both synthetic, same timestamp)

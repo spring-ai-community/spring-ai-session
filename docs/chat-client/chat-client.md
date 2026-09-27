@@ -29,9 +29,11 @@ On every request the advisor:
    assistant messages (blank text, no tool calls, and no media) are skipped — some
    models (e.g. Bedrock Converse) emit an empty `end_turn` frame after tool use that
    would otherwise be replayed and rejected on the next request.
-6. If a trigger fires, runs compaction **synchronously** before returning — the full turn
-   (user + assistant) is already written at this point, so there is no race between
-   compaction and message appending.
+6. If a trigger fires, runs compaction **synchronously** before returning, once the turn
+   is complete: a reply that still requests tool calls means the turn is in progress, so
+   inside a tool-calling loop compaction waits for the final reply. The full turn is
+   already written at that point, so there is no race between compaction and message
+   appending.
 
 The diagram below shows the round-trip: the **before** phase loads history and builds the
 expanded prompt, the **after** phase appends the assistant message and compacts on trigger.

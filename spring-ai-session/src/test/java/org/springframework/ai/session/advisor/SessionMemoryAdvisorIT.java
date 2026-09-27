@@ -20,10 +20,13 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Answers;
 
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
@@ -46,6 +49,7 @@ import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.compaction.TurnCountTrigger;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -56,6 +60,8 @@ import org.springframework.util.MimeTypeUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -334,6 +340,67 @@ class SessionMemoryAdvisorIT {
 		// (The compacted events are archived, not deleted, so the full log is larger.)
 		List<SessionEvent> active = this.sessionService.getEvents(this.sessionId, EventFilter.active());
 		assertThat(active.size()).isLessThanOrEqualTo(2);
+	}
+
+	@Test
+	void compactionWaitsUntilTheTurnIsComplete() {
+		AtomicInteger triggerCalls = new AtomicInteger();
+		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.compactionTrigger(request -> triggerCalls.incrementAndGet() > 0)
+			.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(2).build())
+			.build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+		AssistantMessage toolCall = AssistantMessage.builder()
+			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{}")))
+			.build();
+
+		compactingAdvisor.before(buildRequest(this.sessionId, "What is the weather?"), chain);
+		compactingAdvisor.after(buildResponseFromMessages(this.sessionId, toolCall), chain);
+		assertThat(triggerCalls).hasValue(0);
+
+		compactingAdvisor.after(buildResponse(this.sessionId, "Sunny."), chain);
+		assertThat(triggerCalls).hasValue(1);
+	}
+
+	@Test
+	void summarizingCompactionInsideAToolLoopDoesNotResendHistory() {
+		// A summarizing strategy that always fires: if it ran in the middle of the turn,
+		// round 2's history would start with a summary the prompt doesn't carry and the
+		// whole conversation would be sent twice.
+		ChatClient summarizer = mock(ChatClient.class, Answers.RETURNS_DEEP_STUBS);
+		given(summarizer.prompt().system(anyString()).user(anyString()).call().content()).willReturn("summary");
+		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.compactionTrigger(request -> true)
+			.compactionStrategy(RecursiveSummarizationCompactionStrategy.builder(summarizer).maxEventsToKeep(4).build())
+			.build();
+		for (int i = 1; i <= 3; i++) {
+			this.sessionService.appendMessage(this.sessionId, new UserMessage("question " + i));
+			this.sessionService.appendMessage(this.sessionId, new AssistantMessage("answer " + i));
+		}
+		AdvisorChain chain = mock(AdvisorChain.class);
+		AssistantMessage toolCall = AssistantMessage.builder()
+			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{}")))
+			.build();
+		ToolResponseMessage toolResponse = ToolResponseMessage.builder()
+			.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "Sunny")))
+			.build();
+
+		// Round 1
+		List<Message> round1 = compactingAdvisor.before(buildRequest(this.sessionId, "Weather?"), chain)
+			.prompt()
+			.getInstructions();
+		compactingAdvisor.after(buildResponseFromMessages(this.sessionId, toolCall), chain);
+
+		// Round 2: the looping advisor re-sends round 1's prompt plus the tool exchange
+		List<Message> round2Input = new ArrayList<>(round1);
+		round2Input.add(toolCall);
+		round2Input.add(toolResponse);
+		List<Message> round2 = compactingAdvisor.before(ChatClientRequest.builder()
+			.prompt(new Prompt(round2Input))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build(), chain).prompt().getInstructions();
+
+		assertThat(round2).containsExactlyElementsOf(round2Input);
 	}
 
 	@Test

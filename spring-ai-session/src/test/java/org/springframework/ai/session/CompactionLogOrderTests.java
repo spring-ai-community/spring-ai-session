@@ -138,6 +138,22 @@ class CompactionLogOrderTests {
 	}
 
 	@Test
+	void compactEventsRejectsANewEventOfAnotherSession() {
+		String id = this.service.create(CreateSessionRequest.builder().userId("user-order").build()).id();
+		append(id, user("u1"));
+		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
+		SessionEvent foreign = SessionEvent.builder()
+			.sessionId("another-session")
+			.message(new UserMessage("foreign"))
+			.build();
+
+		assertThatThrownBy(() -> this.repository.compactEvents(id, List.of(), List.of(foreign, log.get(0)),
+				this.repository.getEventVersion(id)))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThat(labels(this.repository.findEvents(id, EventFilter.all()))).containsExactly("u1");
+	}
+
+	@Test
 	void compactEventsRejectsAnArchivedEventThatIsNotInTheLog() {
 		String id = this.service.create(CreateSessionRequest.builder().userId("user-order").build()).id();
 		append(id, user("u1"));

@@ -836,6 +836,27 @@ class JdbcSessionRepositoryTests {
 		assertThat(log).extracting(SessionEvent::isArchived).containsExactly(true, true, false, false);
 	}
 
+	@Test
+	void compactEventsRejectsANewEventOfAnotherSession() {
+		Session session = buildSession("user-foreign-new");
+		this.repository.save(session);
+		SessionEvent e1 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("e1")).build();
+		this.repository.appendEvent(e1);
+		SessionEvent foreign = SessionEvent.builder()
+			.sessionId("another-session")
+			.message(new UserMessage("foreign"))
+			.build();
+		long version = this.repository.getEventVersion(session.id());
+
+		assertThatThrownBy(() -> this.repository.compactEvents(session.id(), List.of(), List.of(foreign, e1), version))
+			.isInstanceOf(IllegalArgumentException.class);
+		// The whole call is rolled back
+		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(version);
+		assertThat(this.repository.findEvents(session.id(), EventFilter.all()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("e1");
+	}
+
 	// -------------------------------------------------------------------------
 	// Helpers
 	// -------------------------------------------------------------------------

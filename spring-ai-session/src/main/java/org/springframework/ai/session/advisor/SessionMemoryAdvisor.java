@@ -71,7 +71,8 @@ import org.springframework.util.Assert;
  * <li>After the model responds, appends the assistant message(s) to the session; messages
  * rejected by the configured {@link MessageFilter} are skipped. By default, empty
  * assistant messages (blank text, no tool calls, and no media) are filtered out.</li>
- * <li>Optionally triggers context compaction if the configured trigger fires.</li>
+ * <li>Optionally triggers context compaction if the configured trigger fires, once the
+ * turn is complete (not after a reply that requests tool calls).</li>
  * </ol>
  *
  * <p>
@@ -317,12 +318,15 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 					.build()));
 		}
 
-		// 2. Compact synchronously if configured — the full turn (user + assistant) is
-		// already written at this point so there is no race. Compaction is best-effort:
+		// 2. Compact synchronously if configured, once the turn is complete. Inside a
+		// tool-calling loop this advisor's after() runs once per round; a reply that
+		// still requests tool calls means the turn is in progress. Compacting then could
+		// insert a summary the looping advisor's next prompt doesn't carry, so the next
+		// round's before() would re-send the whole history. Compaction is best-effort:
 		// the model's reply is already produced and persisted, so a compaction failure
 		// (e.g. the summarization LLM call failing) must not fail the user's request. The
 		// log is left untouched and compaction is retried after the next turn.
-		if (this.compactionTrigger != null && this.compactionStrategy != null) {
+		if (this.compactionTrigger != null && this.compactionStrategy != null && !requestsToolCalls(response)) {
 			try {
 				this.sessionService.compact(sessionId, this.compactionTrigger, this.compactionStrategy);
 			}
@@ -333,6 +337,17 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		}
 
 		return response;
+	}
+
+	/**
+	 * Returns {@code true} if the model's reply asks for tool calls, i.e. the turn is
+	 * still in progress inside a tool-calling loop.
+	 */
+	private static boolean requestsToolCalls(ChatClientResponse response) {
+		return response.chatResponse() != null && response.chatResponse()
+			.getResults()
+			.stream()
+			.anyMatch(generation -> generation.getOutput() != null && generation.getOutput().hasToolCalls());
 	}
 
 	@Override
