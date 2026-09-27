@@ -1,8 +1,9 @@
 # How Conversation-Memory Frameworks Handle System Messages
 
-*A comparison of 15 frameworks with spring-ai-session. Research date: 2026-09-25; the
-spring-ai-session sections were updated on 2026-09-26 to reflect the changes on the
-`system-message-handling` branch.*
+*A comparison of 15 frameworks with spring-ai-session. Research date: 2026-09-25. The
+spring-ai-session sections describe release 0.10.0 (updated 2026-09-28); the history of how
+the rules evolved in 0.9.0 is kept, and [Update for 0.10.0](#update-for-0100) lists what
+changed since.*
 
 ## Summary
 
@@ -25,18 +26,18 @@ spring-ai-session sections were updated on 2026-09-26 to reflect the changes on 
   forms and out-of-band records are all used.
 - **For spring-ai-session:** sending the system prompt per request and moving *all*
   system messages to the front are sound choices. The review found two gaps, and fixing
-  them uncovered two more issues; all four are **addressed** on the
-  `system-message-handling` branch:
+  them uncovered two more issues; all four were **addressed** in 0.9.0:
   1. System messages stored in the session could be archived by compaction. Now the
-     **latest stored system message of each branch wins**: it is kept and placed first,
-     and earlier ones are superseded and archived, so per-turn system messages stay
-     bounded.
+     **latest stored system message wins**: compaction keeps it where it was stored and
+     never summarizes it, earlier ones are superseded and archived, so per-turn system
+     messages stay bounded.
   2. Duplicate system messages were not removed. Exact-text duplicates are now sent once.
   3. Inside a tool-calling loop, a stored system message made the advisor send the whole
      history twice. System messages are now left out of the loop's "already sent" check.
   4. In multi-agent sessions, a sub-agent's system message could leak into the
-     orchestrator's prompt and was summarized with its turn. Each agent now uses only its
-     own branch's system message, and no system message is ever summarized.
+     orchestrator's prompt and was summarized with its turn. 0.9.0 scoped system messages
+     per branch; 0.10.0 removed branches, so each sub-agent now has its own session and
+     its own system message. No system message is ever summarized.
 
   On top of that, **storing system messages is now opt-in** (`allowSystemMessages` /
   `spring.ai.session.allow-system-messages`), and the guidance is in a new "System
@@ -63,7 +64,7 @@ approximate.
 
 | Framework | System prompt stored in history? | Placement / multiple system messages | During trimming / compaction | Summary stored as |
 |---|---|---|---|---|
-| **spring-ai-session** | No, sent per request | **All** system messages moved to the front; exact-text duplicates sent once | **Latest stored one per branch wins**: kept and first in every strategy, never summarized; earlier ones superseded and archived | Synthetic **user + assistant** pair |
+| **spring-ai-session** | No, sent per request | **All** system messages moved to the front; exact-text duplicates sent once | **Latest stored one wins**: kept in place by every strategy, never summarized; earlier ones superseded and archived | Synthetic **user + assistant** pair |
 | Spring AI (upstream) | No, sent per request | Moves only the **first** one to the front; the window keeps one set and **replaces it when a new one arrives** | Never evicted, but counts toward the limit | No summarization |
 | LangChain4j | **Yes**, added to memory on every call | **Only one kept**, replaced when it changes; goes first only with `alwaysKeepSystemMessageFirst(true)` (off by default) | Never evicted, counts toward the budget | No summarization in core |
 | Koog (JetBrains) | **Yes**, a `Message.System` in the stored prompt; the configured prompt is used only when the history is empty | Anywhere, several allowed; memory context goes into the first one | Compression keeps **all** system messages plus the first user message; ChatMemory `windowSize` / `filterMessages` **can drop it**\* | **Assistant** (TL;DR or `[CONTEXT RESTORATION]` facts) |
@@ -102,15 +103,13 @@ approximate.
   - They don't count as turns.
   - The **latest** stored one is the session's system prompt ("latest wins", as in Spring
     AI's `MessageWindowChatMemory` and LangChain4j). Every compaction strategy keeps it
-    in the active window, places it first and never summarizes it; it doesn't use
+    in the active window, where it was stored, and never summarizes it; it doesn't use
     `maxEvents` / `maxTurns` / `maxEventsToKeep` slots, but counts toward the token-count
     strategy's budget. The advisor sends only that one.
   - Earlier stored ones are superseded and archived when compaction runs.
-  - The rule is **per branch** in multi-agent sessions: each agent uses the latest system
-    message stored on its own branch, so a sub-agent's instructions never leak into the
-    orchestrator's prompt. Compaction keeps the latest system message of every branch, so a
-    sub-agent delegated to again later still has its prompt. No system message, of any
-    branch, is ever summarized.
+  - **Multi-agent:** each sub-agent has its own session, so its system message never
+    reaches another agent's prompt. (0.9.0 scoped the rule per branch; branches were
+    removed in 0.10.0.)
 - **Summary:** a synthetic user "shadow prompt" followed by an assistant summary.
 
 How a request is assembled, and what gets persisted:
@@ -333,8 +332,8 @@ flowchart TB
 | System prompt stranded mid-history | AgentCore via LangGraph (`OTHER`), Spring AI #873 |
 | Summarizer call without a system prompt breaks providers | Google ADK #5318 |
 | Prompt rewritten mid-session breaks caching | Goose #11839, #4610 |
-| Moving system messages to the front defeats position-based checks (history re-sent in a tool loop) | spring-ai-session (0.8.0 loop check; fixed on the `system-message-handling` branch) |
-| One agent's system message leaks into another agent's prompt (multi-agent) | spring-ai-session (found in review; fixed on the `system-message-handling` branch) |
+| Moving system messages to the front defeats position-based checks (history re-sent in a tool loop) | spring-ai-session (0.8.0 loop check; fixed in 0.9.0) |
+| One agent's system message leaks into another agent's prompt (multi-agent) | spring-ai-session (found in review; fixed in 0.9.0, and a session per sub-agent since 0.10.0) |
 
 ## Is the system message part of the conversation, or configuration?
 
@@ -432,7 +431,7 @@ happened.
 
 - **The per-request design treats the system prompt as agent configuration.** That is
   the right default.
-- **There is a tension in the current behavior.** A `SYSTEM` event stored in the session
+- **There was a tension in the 0.8 behavior.** A `SYSTEM` event stored in the session
   has a position in the log, but the advisor moves every system message to the front,
   which throws that position away. So the advisor already treats stored system messages
   as **configuration**, not as temporal events.
@@ -452,8 +451,10 @@ happened.
   prompt text in the conversation.
 
 **Outcome:** option 1 was implemented. Storing system messages is opt-in, and a stored
-system message is treated as configuration: the latest one of each branch is the agent's
-system prompt, it is moved to the front, protected from compaction and never summarized.
+system message is treated as configuration: the latest one is the system prompt, protected
+from compaction and never summarized, and the advisor moves it to the front of the prompt.
+Since 0.10.0 compaction also keeps it at its position in the log, so the log itself is
+never reordered.
 Time-bound instructions are best sent per request (see the "System Messages" reference
 page).
 
@@ -467,26 +468,28 @@ page).
   AI, which moves only the first one.
 - The advisor re-sends the system prompt unchanged, which keeps prompt caching intact.
 
-**Gaps** (all addressed, following option 1 above, where stored system messages are
-session configuration):
+**Gaps** (all addressed in 0.9.0, following option 1 above, where stored system messages
+are session configuration; the per-branch details were superseded in 0.10.0):
 
 1. **Stored system messages could be compacted away.** The sliding-window, token-count and
    recursive-summarization strategies archived a stored `SYSTEM` event like any other
    event. The turn-window strategy kept one only if it came before the first user
    message.
-   - *Fix:* the **latest** stored `SYSTEM` event of each branch is that agent's system
-     prompt. Every strategy keeps it (placed first, never summarized, no count-based
-     slots, tokens deducted from the token budget), and archives earlier ones of the same
-     branch as superseded. `SessionMemoryAdvisor` sends only the latest one of its own
-     branch.
+   - *Fix:* the **latest** stored `SYSTEM` event is the system prompt. Every strategy
+     keeps it (never summarized, no count-based slots, tokens deducted from the token
+     budget) and archives earlier ones as superseded. `SessionMemoryAdvisor` sends only
+     the latest one. In 0.9.0 the rule applied per branch and strategies placed the kept
+     message first in the active window; since 0.10.0 there are no branches and it stays
+     where it was stored.
    - *How the rule evolved:* a first version pinned every stored system message; a code
      review showed that an app storing one per turn would grow the prompt without limit.
      A second version pinned only those stored before the first user message, but that
      made the session's prompt impossible to update. "Latest wins" is bounded (at most one
-     active per branch), lets an integrator update the prompt by storing a new complete
-     one, and matches the replace-on-change behaviour of Spring AI and LangChain4j. Putting
-     the right content in it is the integrator's responsibility. The rule was first applied
-     to root-level messages only; a later review extended it to every branch (item 4).
+     active), lets an integrator update the prompt by storing a new complete one, and
+     matches the replace-on-change behaviour of Spring AI and LangChain4j. Putting the
+     right content in it is the integrator's responsibility. In 0.9.0 the rule was first
+     applied to root-level messages only, then extended to every branch (item 4); 0.10.0
+     removed branches.
 
    A sliding window with `maxEvents = 2`, before and after the fix:
 
@@ -500,9 +503,9 @@ flowchart TB
         direction LR
         ta["Archived<br/>SYSTEM, User 1, Assistant 1"]:::archived ~~~ t3["User 2"] --> t4["Assistant 2"]
     end
-    subgraph proposed["Now: the system event is kept and first"]
+    subgraph proposed["Now: the system event is kept in place"]
         direction LR
-        pa["Archived<br/>User 1, Assistant 1"]:::archived ~~~ p0["SYSTEM<br/>Answer in French"] --> p3["User 2"] --> p4["Assistant 2"]
+        p0["SYSTEM<br/>Answer in French"] ~~~ pa["Archived<br/>User 1, Assistant 1"]:::archived ~~~ p3["User 2"] --> p4["Assistant 2"]
     end
     before --> today
     before --> proposed
@@ -535,11 +538,11 @@ flowchart TB
    it loaded, so an orchestrator, which loads every branch, could use a sub-agent's
    instructions as its own prompt. Compaction treated sub-agent system messages as part of
    their turn: archived with it, and summarized by the recursive strategy.
-   - *Fix:* system messages are configuration at every level, scoped by branch. Each agent
-     uses the latest system message stored on its own branch and never another branch's.
-     Compaction keeps the latest one of every branch, so a sub-agent delegated to again in
-     a later turn still has its prompt, and no system message of any branch is ever
-     summarized.
+   - *Fix (0.9.0):* system messages are configuration at every level, scoped by branch.
+     Each agent used the latest system message stored on its own branch, compaction kept
+     the latest one of every branch, and no system message was ever summarized.
+   - *Superseded (0.10.0):* branch support was removed. Each sub-agent gets its own
+     session, so its system message is simply that session's latest one.
 
 **Additional changes:**
 
@@ -550,13 +553,31 @@ flowchart TB
   unaffected.
 - **Library vs. integration responsibilities** are documented separately: the library
   stores and compacts events (the same for every integration), while whatever builds the
-  prompt must supply the system prompt, use the latest stored one of its branch, put system
-  messages first, drop duplicates and avoid re-sending history in loops.
+  prompt must supply the system prompt, use the latest stored one, put system messages
+  first, drop duplicates and avoid re-sending history in loops.
 
 **Documented:** the recommended pattern is to supply system prompts per request (with
 `ChatClient` `defaultSystem` / `.system`, or from your own prompt builder) and keep the
 session for conversation only. Per-session instructions belong in `Session.metadata`,
 rendered into the system prompt on each request. Storing a system message is an opt-in
-fallback: the latest stored one of each branch is that agent's system prompt, and storing a
-new complete one replaces it. This guidance is in the reference docs as the "System
+fallback: the latest stored one is the system prompt, and storing a new complete one
+replaces it. This guidance is in the reference docs as the "System
 Messages" page (`docs/session-management/system-messages.md`).
+
+## Update for 0.10.0
+
+What changed in spring-ai-session after the 0.9.0 release, as it affects system messages:
+
+- **Branches removed** (#51, #54). There is one latest stored system message per session,
+  not one per branch, and it counts fully toward the token-count budget. Multi-agent
+  applications give each sub-agent its own session, and with it its own system message.
+  The reasoning is in `design/reports/multi-agent-branch-report.md`.
+- **Compaction never reorders the log** (#56). The kept system message stays where it was
+  stored instead of moving to the front of the active window. Only the prompt builder
+  (`SessionMemoryAdvisor`, or a custom loop) puts system messages first, which matches the
+  "configuration, not conversation" position above: its place in the log is kept for the
+  record, and it has no position in the prompt.
+- **The tool-loop check compares messages by content** (#52, in 0.9.0). The fix for gap 3
+  relied on `Message.equals`, which failed with the JDBC repository because it doesn't
+  store message metadata; messages are now compared by type, text, tool calls and tool
+  responses.

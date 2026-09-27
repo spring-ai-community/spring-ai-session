@@ -1,6 +1,6 @@
 # Multi-agent history in spring-ai-session: branches or a session per sub-agent?
 
-*Maintainer decision record. Status: proposed. Date: 2026-09-27.*
+*Maintainer decision record. Status: accepted; implemented in 0.9.0 (deprecation, #50) and 0.10.0 (removal, #54). Date: 2026-09-27.*
 
 ## 1. Summary
 
