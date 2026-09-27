@@ -113,8 +113,8 @@ every turn, which duplicates the system prompt in every request and grows the lo
 `getActiveMessages(sessionId)` and `getEvents(sessionId, EventFilter.active())` return
 the active window (archived events excluded) in the order the events were stored.
 **Reads don't move system messages to the front or deduplicate them**; that is left to
-the integration. (Compaction does place the kept system messages first in the active
-window.) `EventFilter.messageTypes(...)` can include or exclude `SYSTEM` events when
+the integration. Compaction doesn't move them either: the kept system message stays where
+it was stored. `EventFilter.messageTypes(...)` can include or exclude `SYSTEM` events when
 you load history.
 
 ### Compaction: the latest stored system message wins

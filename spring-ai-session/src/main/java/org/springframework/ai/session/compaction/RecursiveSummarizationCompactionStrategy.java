@@ -43,7 +43,7 @@ import org.springframework.util.Assert;
  * <h3>Algorithm</h3>
  * <ol>
  * <li>Separate the latest stored system message (the system prompt — always kept
- * verbatim and first, never summarized; earlier ones are superseded and archived; see
+ * verbatim where it was stored, never summarized; earlier ones are superseded and archived; see
  * {@code CompactionUtils#pinnedSystemEvents}) and synthetic summary events from real
  * conversation events.</li>
  * <li>Keep the last {@code maxEventsToKeep} real events intact (the <em>active
@@ -154,8 +154,8 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 		List<SessionEvent> events = context.events();
 
-		// The latest stored system message is the system prompt: kept verbatim and first,
-		// never counted against maxEventsToKeep and never summarized. Earlier ones are
+		// The latest stored system message is the system prompt: kept verbatim where it was
+		// stored, never counted against maxEventsToKeep and never summarized. Earlier ones are
 		// superseded: archived, never summarized.
 		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
 		List<SessionEvent> supersededSystem = CompactionUtils.supersededSystemEvents(events, pinnedSystem);

@@ -378,6 +378,7 @@ sequenceDiagram
         opt new events (a summary turn)
             C->>DB: DELETE FROM AI_SESSION_EVENT<br/>WHERE session_id = ? AND seq >= seq(first kept event after the summary)
             C->>DB: INSERT summary turn + that tail (batch, new seq values)
+            Note over C,DB: new events with no existing event after them<br/>are simply appended, with no DELETE
         end
         C->>DB: COMMIT, releasing the row lock
         Note over C: returns true

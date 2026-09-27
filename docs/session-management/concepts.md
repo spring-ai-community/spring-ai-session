@@ -145,8 +145,8 @@ models always see a valid user↔assistant alternation.
 All compaction strategies set synthetic events and stored system messages aside before
 processing real events (for system messages, see
 [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins)).
-The sliding-window, turn-window and token-count strategies keep synthetic events unchanged
-and place them first. `RecursiveSummarizationCompactionStrategy` instead folds the previous
+The sliding-window, turn-window and token-count strategies keep synthetic events unchanged,
+where they are in the log. `RecursiveSummarizationCompactionStrategy` instead folds the previous
 summary into the new one and **replaces** it: the superseded synthetic events are removed
 from the log (they are not archived).
 
@@ -286,10 +286,10 @@ can surface any prior exchange after it has been compacted out of context. Only 
 superseded synthetic summary is deleted instead, because its content is carried into the
 new summary.
 
-In the JDBC repository, newly archived events are flagged with an in-place `UPDATE`
-(their row is never deleted and re-inserted). Compaction never reorders the log: only when
-a summary is inserted is the part of the log after it re-inserted, so
-the growing archived history is never re-read or re-written.
+In the JDBC repository, newly archived events are flagged with an in-place `UPDATE`.
+Compaction never reorders the log: only when a summary is inserted is the part of the log
+after it re-inserted, so the archived history before that point (normally all of it) is
+never re-read or re-written.
 
 ### Optimistic concurrency
 

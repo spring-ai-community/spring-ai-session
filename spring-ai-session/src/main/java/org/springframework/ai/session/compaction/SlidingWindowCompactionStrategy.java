@@ -75,8 +75,8 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 
 		List<SessionEvent> events = context.events();
 
-		// Separate the latest stored system message (the system prompt — kept and placed
-		// first), superseded earlier ones (archived), and synthetic summary events (always
+		// Separate the latest stored system message (the system prompt — kept where it was
+		// stored), superseded earlier ones (archived), and synthetic summary events (always
 		// preserved) from the real conversation events the window applies to.
 		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
 		List<SessionEvent> supersededSystem = CompactionUtils.supersededSystemEvents(events, pinnedSystem);

@@ -167,7 +167,7 @@ TurnWindowCompactionStrategy.builder().maxTurns(10).tokenCountEstimator(myEstima
 
 It groups events into turns (each starting at a `USER` message) and archives the oldest
 until `maxTurns` remain. Events before the first `USER` message form a **preamble** that is
-always kept, placed after the synthetics and before the turns.
+always kept, where it was stored.
 
 ### TokenCountCompactionStrategy
 

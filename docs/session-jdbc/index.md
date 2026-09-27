@@ -10,7 +10,7 @@ and H2 out of the box.
 
 ```
 AI_SESSION          — session metadata (id, user_id, TTL, metadata JSON, event_version)
-AI_SESSION_EVENT    — append-only event log (FK → AI_SESSION, ON DELETE CASCADE)
+AI_SESSION_EVENT    — event log (FK → AI_SESSION, ON DELETE CASCADE)
 ```
 
 `AI_SESSION_EVENT` rows are ordered by a monotonic `seq` column (insertion order) and carry

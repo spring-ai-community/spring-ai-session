@@ -65,6 +65,16 @@ The built-in in-memory and JDBC repositories do this. With JDBC-style ordering b
 insert sequence, only the part of the log from the insertion point onward needs to be
 re-inserted.
 
+### Custom implementers: `CompactionStrategy` results must be in log order
+
+`CompactionResult.compactedEvents()` is the new active window **in log order**: every
+event that is not archived keeps its position, and a new event (such as a summary turn)
+goes right before the existing event it should precede. The repositories use only the
+position of new events. Existing events are kept as they are stored, so returning a
+modified copy of an existing event (same id, e.g. with a truncated tool result) or a
+different order for existing events no longer has any effect. To change an event's
+content, archive it and add a new event instead.
+
 ### Custom implementers: `JdbcSessionRepositoryDialect.getBranchFilterFragment()` removed
 
 The method is gone from the dialect contract. A custom dialect that overrides it no longer

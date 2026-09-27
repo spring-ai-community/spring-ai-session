@@ -1,5 +1,5 @@
 -- MySQL has no CREATE INDEX IF NOT EXISTS, so indexes are declared inline to keep the
--- script safe to re-run (spring.ai.session.jdbc.initialize-schema=always).
+-- script safe to re-run (spring.ai.session.repository.jdbc.initialize-schema=always).
 CREATE TABLE IF NOT EXISTS AI_SESSION (
     id            VARCHAR(255)  NOT NULL PRIMARY KEY,
     user_id       VARCHAR(255)  NOT NULL,
