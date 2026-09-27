@@ -24,6 +24,14 @@ import org.springframework.util.Assert;
 /**
  * The outcome of a compaction operation.
  *
+ * @param compactedEvents the new active window in log order: every event that is not
+ * archived keeps its original position, and new events (such as a summary turn) appear
+ * where they belong, before the next existing event.
+ * {@link org.springframework.ai.session.SessionRepository#compactEvents} inserts each new
+ * event immediately before the existing event that follows it here.
+ * @param archivedEvents the events archived by this pass, in log order
+ * @param tokensEstimatedSaved the estimated number of tokens removed from the active
+ * window
  * @author Christian Tzolov
  * @since 2.0.0
  */

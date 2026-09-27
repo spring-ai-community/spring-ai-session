@@ -16,7 +16,6 @@
 
 package org.springframework.ai.session.compaction;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ToIntFunction;
 
@@ -34,13 +33,13 @@ import org.springframework.util.Assert;
  * <li>Separate the latest stored system message (the system prompt — earlier stored
  * system messages are superseded and archived; see
  * {@code CompactionUtils#pinnedSystemEvents}) and synthetic summary events — they are
- * always preserved, placed first in the result, and do not consume slots from the
+ * always preserved, in place, and do not consume slots from the
  * {@code maxEvents} budget.</li>
  * <li>Compute a raw cut index that keeps the last {@code maxEvents} real events.</li>
  * <li>Snap the raw cut index forward to the nearest
  * {@link org.springframework.ai.chat.messages.MessageType#USER} event so the kept window
  * always starts at a turn boundary.</li>
- * <li>Return: {@code [system messages] + [synthetic summaries] + [kept real events]}.</li>
+ * <li>Return every event that is not archived, in its original log order.</li>
  * </ol>
  *
  * <h3>No-op condition</h3>
@@ -89,8 +88,7 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 		// events are always preserved on top and do not consume slots from the budget.
 		// No-op if the real events fit within the available slots.
 		if (real.size() <= this.maxEvents) {
-			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, synthetic, real, supersededSystem,
-					tokens);
+			return CompactionUtils.unchangedExceptSuperseded(events, supersededSystem, tokens);
 		}
 
 		// Raw cut: keep the last maxEvents real events
@@ -102,18 +100,13 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 		// that last turn rather than archiving the whole active window.
 		int cutIndex = CompactionUtils.retainLastTurn(real, CompactionUtils.snapToTurnStart(real, rawCutIndex));
 
-		List<SessionEvent> keptReal = new ArrayList<>(real.subList(cutIndex, real.size()));
 		List<SessionEvent> removedReal = real.subList(0, cutIndex);
 		if (removedReal.isEmpty()) {
-			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, synthetic, real, supersededSystem,
-					tokens);
+			return CompactionUtils.unchangedExceptSuperseded(events, supersededSystem, tokens);
 		}
 
-		List<SessionEvent> compacted = new ArrayList<>(pinnedSystem);
-		compacted.addAll(synthetic);
-		compacted.addAll(keptReal);
-
-		return CompactionUtils.archiving(events, compacted, removedReal, supersededSystem, tokens);
+		// Everything else stays in the active window, in its original log order
+		return CompactionUtils.archiving(events, removedReal, supersededSystem, tokens);
 	}
 
 	public int getMaxEvents() {

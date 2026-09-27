@@ -81,6 +81,11 @@ class JdbcSessionRepositoryPostgresqlIT {
 	}
 
 	@Test
+	void repeatedRecursiveSummarizationNeverReordersTheLog() {
+		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
+	}
+
+	@Test
 	void keywordWildcardCharactersMatchLiterally() {
 		DialectScenarios.keywordWildcardCharactersMatchLiterally(this.repository);
 	}

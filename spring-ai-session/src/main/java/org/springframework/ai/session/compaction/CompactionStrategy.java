@@ -19,6 +19,11 @@ package org.springframework.ai.session.compaction;
 /**
  * Strategy for compacting a session's event history to manage context window size.
  *
+ * <p>
+ * Compaction never reorders events: a strategy returns the new active window in log order
+ * (see {@link CompactionResult#compactedEvents()}), placing any new event, such as a
+ * summary turn, right before the existing event it should precede.
+ *
  * @author Christian Tzolov
  * @since 2.0.0
  */

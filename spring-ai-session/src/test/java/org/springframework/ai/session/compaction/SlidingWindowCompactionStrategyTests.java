@@ -278,8 +278,9 @@ class SlidingWindowCompactionStrategyTests {
 
 		CompactionResult result = strategy.compact(contextFor(events));
 
+		// Compaction never reorders events: the kept system message stays where it was stored
 		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
-			.containsExactly("time 5", "u5", "a5");
+			.containsExactly("u5", "time 5", "a5");
 		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText())
 			.contains("Answer in French", "time 1", "time 4")
 			.doesNotContain("time 5");
@@ -295,8 +296,9 @@ class SlidingWindowCompactionStrategyTests {
 
 		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText())
 			.containsExactly("Answer in French");
+		// Compaction never reorders events: the kept system message stays where it was stored
 		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
-			.containsExactly("Answer in German", "u1", "a1");
+			.containsExactly("u1", "a1", "Answer in German");
 	}
 
 	@Test

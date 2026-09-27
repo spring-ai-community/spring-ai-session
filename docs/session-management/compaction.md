@@ -42,7 +42,7 @@ service.compact(sessionId, req -> true, SlidingWindowCompactionStrategy.builder(
   write entirely. See the [compaction pass sequence](compaction-internals.md#2-sequence-a-compaction-pass-end-to-end)
   and the [JDBC concurrency diagram](compaction-internals.md#5-sequence-jdbc-compactevents-and-a-concurrent-append).
 - **Stored system messages are configuration.** If you store them (opt-in), the latest one
-  is always kept, placed first, never summarized and not counted against `maxEvents` /
+  is always kept where it was stored, never summarized and not counted against `maxEvents` /
   `maxTurns` / `maxEventsToKeep`; earlier ones are archived on every pass. See
   [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins).
 
@@ -105,15 +105,18 @@ Strategies implement `CompactionStrategy` (a `@FunctionalInterface`). Each recei
 
 **Common behaviour.** Every strategy:
 
-- keeps the latest stored system message and the synthetic summary events, places them
-  first, and archives earlier stored system messages;
+- keeps the latest stored system message and the synthetic summary events, and archives
+  earlier stored system messages;
+- **never reorders events**: archived events are flagged in place, and every kept event,
+  including the system message, stays where it was stored. A new summary goes right
+  before the kept conversation. `SessionMemoryAdvisor` still puts system messages first
+  in the prompt;
 - applies its limit only to the real conversation events;
 - starts the kept window at a `USER` message and always keeps the most recent turn (see
   [Turn-boundary Safety](#turn-boundary-safety)). The exception is
   `TurnWindowCompactionStrategy`'s preamble: events before the first `USER` message, kept
   verbatim;
-- returns `[latest stored system message] + [synthetics] + [kept events]`
-  (`TurnWindowCompactionStrategy` puts its preamble before the kept turns).
+- returns the new active window: every event that is not archived, in log order.
 
 ### Token accounting
 

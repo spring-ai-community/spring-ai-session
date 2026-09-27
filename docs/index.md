@@ -55,7 +55,7 @@ how the main types fit together.
   full verbatim history even after compaction; `cross_session_search` lets a
   background agent mine *every* session a user has
 - **System messages as configuration** — supplied per request by default; storing them is
-  opt-in, and then the latest one is kept first and never summarized
+  opt-in, and then the latest one is always kept and never summarized
   (see [System Messages](session-management/system-messages.md))
 - **Spring Boot auto-configuration** — schema init, dialect detection, and the
   `JdbcSessionRepository` and `SessionService` beans

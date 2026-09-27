@@ -18,8 +18,11 @@ package org.springframework.ai.session;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -149,16 +152,61 @@ public final class InMemorySessionRepository implements SessionRepository {
 				return existing;
 			}
 			success[0] = true;
-			// Preserve previously-archived events (always the oldest prefix), then the
-			// newly-archived events (marked archived), then the new active window. Any other
-			// previously-active event (e.g. a superseded synthetic summary) is dropped.
-			List<SessionEvent> newEvents = new ArrayList<>();
-			existing.events().stream().filter(SessionEvent::isArchived).forEach(newEvents::add);
-			archivedEvents.forEach(e -> newEvents.add(e.asArchived()));
-			newEvents.addAll(retainedEvents);
-			return existing.withEvents(List.copyOf(newEvents));
+			return existing.withEvents(compactedLog(sessionId, existing.events(), archivedEvents, retainedEvents));
 		});
 		return success[0];
+	}
+
+	/**
+	 * Applies a compaction without reordering existing events: {@code archivedEvents}
+	 * are flagged archived in place, previously-active events in neither list are dropped,
+	 * and each new event in {@code retainedEvents} is inserted immediately before the next
+	 * existing event that follows it there (or appended when none follows).
+	 */
+	private static List<SessionEvent> compactedLog(String sessionId, List<SessionEvent> log,
+			List<SessionEvent> archivedEvents, List<SessionEvent> retainedEvents) {
+		Set<String> logIds = log.stream().map(SessionEvent::getId).collect(Collectors.toSet());
+		Set<String> archivedIds = new HashSet<>();
+		for (SessionEvent event : archivedEvents) {
+			if (!logIds.contains(event.getId())) {
+				throw new IllegalArgumentException(
+						"archivedEvents contains an event that is not in the log of session " + sessionId);
+			}
+			archivedIds.add(event.getId());
+		}
+		Set<String> retainedIds = retainedEvents.stream().map(SessionEvent::getId).collect(Collectors.toSet());
+
+		// Group the new events by the existing event they must precede
+		Map<String, List<SessionEvent>> insertBefore = new HashMap<>();
+		List<SessionEvent> pending = new ArrayList<>();
+		for (SessionEvent event : retainedEvents) {
+			if (logIds.contains(event.getId())) {
+				if (!pending.isEmpty()) {
+					insertBefore.computeIfAbsent(event.getId(), id -> new ArrayList<>()).addAll(pending);
+					pending.clear();
+				}
+			}
+			else {
+				pending.add(event);
+			}
+		}
+
+		List<SessionEvent> result = new ArrayList<>();
+		for (SessionEvent event : log) {
+			result.addAll(insertBefore.getOrDefault(event.getId(), List.of()));
+			if (event.isArchived()) {
+				result.add(event);
+			}
+			else if (archivedIds.contains(event.getId())) {
+				result.add(event.asArchived());
+			}
+			else if (retainedIds.contains(event.getId())) {
+				result.add(event);
+			}
+			// else: a previously-active event in neither list (e.g. a superseded summary)
+		}
+		result.addAll(pending);
+		return List.copyOf(result);
 	}
 
 	@Override

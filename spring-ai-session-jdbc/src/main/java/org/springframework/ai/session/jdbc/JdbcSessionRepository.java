@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import javax.sql.DataSource;
@@ -50,6 +51,7 @@ import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -101,7 +103,8 @@ import org.springframework.util.Assert;
  * insertion order (the logical conversation order) rather than wall-clock
  * {@code timestamp}. This keeps a synthetic compaction summary — whose timestamp is the
  * compaction time — correctly positioned ahead of the older active-window events it
- * precedes.
+ * precedes. Compaction never reorders existing events: archived events are flagged in
+ * place, and only the part of the log after an inserted summary is re-inserted.
  *
  * <h2>Thread safety</h2>
  * <p>
@@ -157,9 +160,20 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private static final String SELECT_EVENT_SESSION_ID =
 		"SELECT session_id FROM AI_SESSION_EVENT WHERE id = ?";
 
-	// Removes the active window before inserting the retained events produced by compaction.
-	private static final String DELETE_ACTIVE_EVENTS =
-		"DELETE FROM AI_SESSION_EVENT WHERE session_id = ? AND archived = false";
+	// The active events in log order; compaction uses them to find dropped events and
+	// where new events go.
+	private static final String SELECT_ACTIVE_EVENT_IDS =
+		"SELECT id, seq FROM AI_SESSION_EVENT WHERE session_id = ? AND archived = false ORDER BY seq";
+
+	private static final String SELECT_EVENT_SEQ =
+		"SELECT seq FROM AI_SESSION_EVENT WHERE id = ? AND session_id = ?";
+
+	private static final String DELETE_EVENT_BY_ID =
+		"DELETE FROM AI_SESSION_EVENT WHERE id = ? AND session_id = ?";
+
+	// Removes the tail of the log that compaction re-inserts with new events in between.
+	private static final String DELETE_EVENTS_FROM_SEQ =
+		"DELETE FROM AI_SESSION_EVENT WHERE session_id = ? AND seq >= ?";
 
 	private static final String SELECT_EVENTS_BASE =
 		"SELECT e.id, e.session_id, e.timestamp, e.message_type, e.message_content,"
@@ -250,7 +264,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 				// Bump the version BEFORE inserting: the UPDATE locks the session row, so the
 				// event's seq is only assigned once any in-flight compactEvents on this
 				// session has committed. Inserting first would let a concurrent compaction
-				// miss the uncommitted row and re-insert its retained window with higher
+				// miss the uncommitted row and re-insert the tail of the log with higher
 				// seq values, ordering this (newer) event before them without the CAS
 				// noticing. Zero updated rows also means the session does not exist.
 				int updated = this.jdbcTemplate.update(INCREMENT_EVENT_VERSION, sessionId);
@@ -295,9 +309,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 			if (updated == 0) {
 				return false;
 			}
-			// Archive newly compacted events in place. This avoids deleting and
-			// reinserting the complete session history while preserving the
-			// logical event ordering defined by the seq column.
+			// Archive newly compacted events in place: compaction never moves an event,
+			// so the logical order defined by the seq column is preserved.
 			if (!archivedEvents.isEmpty()) {
 				int[][] counts = this.jdbcTemplate.batchUpdate(ARCHIVE_EVENT_BY_ID, archivedEvents,
 						archivedEvents.size(), (ps, event) -> {
@@ -305,7 +318,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 							ps.setString(2, sessionId);
 						});
 				// Every archived event must already exist in this session's log; otherwise
-				// DELETE_ACTIVE_EVENTS below would silently lose it. Negative counts
+				// it would silently be lost. Negative counts
 				// (Statement.SUCCESS_NO_INFO) are driver-specific and treated as success.
 				for (int[] batch : counts) {
 					for (int count : batch) {
@@ -317,17 +330,75 @@ public final class JdbcSessionRepository implements SessionRepository {
 				}
 			}
 
-			// Replace the active window with the retained events. Archived events
-			// remain untouched and preserve their original ordering.
-			this.jdbcTemplate.update(DELETE_ACTIVE_EVENTS, sessionId);
-
-			if (!retainedEvents.isEmpty()) {
-				batchInsertEvents(retainedEvents);
-			}
-
+			applyRetainedEvents(sessionId, retainedEvents);
 			return true;
 		});
 		return Boolean.TRUE.equals(success);
+	}
+
+	/**
+	 * Applies the retained events of a compaction without reordering existing events.
+	 * Active events in neither list were dropped by the strategy (e.g. a superseded
+	 * summary) and are deleted. New events are inserted immediately before the next
+	 * existing event that follows them in {@code retainedEvents}: because {@code seq} is
+	 * assigned on insert, the log is re-inserted from the first such event onward, so only
+	 * that tail (typically the kept window) is rewritten. When no event is new, as with
+	 * every strategy except summarization, no row is re-inserted at all.
+	 */
+	private void applyRetainedEvents(String sessionId, List<SessionEvent> retainedEvents) {
+		Map<String, Long> activeSeqs = new HashMap<>();
+		this.jdbcTemplate.query(SELECT_ACTIVE_EVENT_IDS,
+				(RowCallbackHandler) rs -> activeSeqs.put(rs.getString("id"), rs.getLong("seq")), sessionId);
+		Set<String> retainedIds = retainedEvents.stream().map(SessionEvent::getId).collect(Collectors.toSet());
+
+		List<String> dropped = activeSeqs.keySet().stream().filter(id -> !retainedIds.contains(id)).toList();
+		if (!dropped.isEmpty()) {
+			this.jdbcTemplate.batchUpdate(DELETE_EVENT_BY_ID, dropped, dropped.size(), (ps, id) -> {
+				ps.setString(1, id);
+				ps.setString(2, sessionId);
+			});
+		}
+
+		// A retained event that is not active may still exist in the log (archived); it
+		// then stays where it is, like any existing event. Only the others are new.
+		Map<String, Long> existingSeqs = new HashMap<>(activeSeqs);
+		for (SessionEvent event : retainedEvents) {
+			if (!existingSeqs.containsKey(event.getId())) {
+				this.jdbcTemplate.query(SELECT_EVENT_SEQ, (RowCallbackHandler) rs -> existingSeqs.put(event.getId(),
+						rs.getLong("seq")), event.getId(), sessionId);
+			}
+		}
+
+		// Group the new events by the existing event they must precede
+		Map<String, List<SessionEvent>> insertBefore = new HashMap<>();
+		List<SessionEvent> pending = new ArrayList<>();
+		for (SessionEvent event : retainedEvents) {
+			if (existingSeqs.containsKey(event.getId())) {
+				if (!pending.isEmpty()) {
+					insertBefore.computeIfAbsent(event.getId(), id -> new ArrayList<>()).addAll(pending);
+					pending.clear();
+				}
+			}
+			else {
+				pending.add(event);
+			}
+		}
+
+		List<SessionEvent> toInsert = new ArrayList<>();
+		if (!insertBefore.isEmpty()) {
+			long fromSeq = insertBefore.keySet().stream().mapToLong(existingSeqs::get).min().orElseThrow();
+			List<SessionEvent> tail = this.jdbcTemplate.query(SELECT_EVENTS_BASE + "AND e.seq >= ? ORDER BY e.seq ASC",
+					new SessionEventRowMapper(), sessionId, fromSeq);
+			this.jdbcTemplate.update(DELETE_EVENTS_FROM_SEQ, sessionId, fromSeq);
+			for (SessionEvent event : tail) {
+				toInsert.addAll(insertBefore.getOrDefault(event.getId(), List.of()));
+				toInsert.add(event);
+			}
+		}
+		toInsert.addAll(pending);
+		if (!toInsert.isEmpty()) {
+			batchInsertEvents(toInsert);
+		}
 	}
 
 	@Override

@@ -124,8 +124,8 @@ a new one replaces the previous one, so it must carry the complete intended cont
 combining several instructions into it is the integration's responsibility. Every
 [compaction strategy](compaction.md) handles stored system messages the same way:
 
-- the latest one stays in the active window, is placed first, and is never archived or
-  summarized;
+- the latest one stays in the active window, where it was stored, and is never archived
+  or summarized. Integrations put it first in the prompt (`SessionMemoryAdvisor` does);
 - it doesn't use `maxEvents` / `maxTurns` / `maxEventsToKeep` slots.
   `TokenCountCompactionStrategy` subtracts its tokens from the budget, because it is sent
   with the conversation;

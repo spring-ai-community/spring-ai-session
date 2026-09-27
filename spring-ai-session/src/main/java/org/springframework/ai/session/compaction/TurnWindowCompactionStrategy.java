@@ -42,14 +42,13 @@ import org.springframework.util.Assert;
  * <li>Strip out the latest stored system message (the system prompt — earlier stored
  * system messages are superseded and archived; see
  * {@code CompactionUtils#pinnedSystemEvents}) and synthetic summary events — they are
- * always preserved and placed first in the result.</li>
+ * always preserved, in place.</li>
  * <li>Collect any events that appear before the first user message (rare, but possible
  * for pre-seeded tool state) — these are preserved as preamble.</li>
  * <li>Group the remaining events into turns (each turn starts at a user message).</li>
  * <li>If the turn count is within {@code maxTurns}, return unchanged.</li>
  * <li>Archive the oldest turns until only {@code maxTurns} remain.</li>
- * <li>Return: {@code [system messages] + [synthetic summaries] + [preamble] + [kept
- * turns]}.</li>
+ * <li>Return every event that is not archived, in its original log order.</li>
  * </ol>
  *
  * <h3>No-op condition</h3>
@@ -92,12 +91,10 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 		List<SessionEvent> real = CompactionUtils.compactableEvents(events);
 		ToIntFunction<SessionEvent> tokens = e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e));
 
-		// 2. Collect any preamble events that appear before the first user message
-		// (e.g., pre-seeded tool context). These are kept verbatim.
-		List<SessionEvent> preamble = new ArrayList<>();
+		// 2. Skip any preamble events that appear before the first user message (e.g.,
+		// pre-seeded tool context). They are kept verbatim, in place.
 		int firstUserIdx = 0;
 		while (firstUserIdx < real.size() && !CompactionUtils.isTurnStart(real.get(firstUserIdx))) {
-			preamble.add(real.get(firstUserIdx));
 			firstUserIdx++;
 		}
 		List<SessionEvent> afterPreamble = real.subList(firstUserIdx, real.size());
@@ -107,25 +104,17 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 
 		// 4. No-op if within budget
 		if (turns.size() <= this.maxTurns) {
-			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, synthetic, real, supersededSystem,
-					tokens);
+			return CompactionUtils.unchangedExceptSuperseded(events, supersededSystem, tokens);
 		}
 
 		// 5. Archive oldest turns
 		int toArchiveCount = turns.size() - this.maxTurns;
 		List<List<SessionEvent>> archivedTurns = turns.subList(0, toArchiveCount);
-		List<List<SessionEvent>> keptTurns = turns.subList(toArchiveCount, turns.size());
-
 		List<SessionEvent> archived = archivedTurns.stream().flatMap(List::stream).toList();
-		List<SessionEvent> kept = keptTurns.stream().flatMap(List::stream).toList();
 
-		// 6. Assemble result: [synthetics] + [preamble] + [kept turns]
-		List<SessionEvent> compacted = new ArrayList<>(pinnedSystem);
-		compacted.addAll(synthetic);
-		compacted.addAll(preamble);
-		compacted.addAll(kept);
-
-		return CompactionUtils.archiving(events, compacted, archived, supersededSystem, tokens);
+		// 6. Everything else (system message, synthetics, preamble, kept turns) stays in
+		// the active window, in its original log order
+		return CompactionUtils.archiving(events, archived, supersededSystem, tokens);
 	}
 
 	/**

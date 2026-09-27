@@ -111,15 +111,20 @@ public interface SessionRepository {
 	 * <p>
 	 * Archived events are <em>retained</em> in the log (soft-deleted via
 	 * {@link SessionEvent#isArchived()}) so they remain searchable by the Recall Storage
-	 * tools. On success the resulting active log is, in order:
-	 * <ol>
-	 * <li>all events that were already archived (preserved as-is),</li>
-	 * <li>the events in {@code archivedEvents}, now marked archived,</li>
-	 * <li>the events in {@code retainedEvents} (the new active window, typically a
-	 * synthetic summary turn followed by the most recent events), marked active.</li>
-	 * </ol>
-	 * Any previously-active event that appears in neither list (e.g. a superseded
-	 * synthetic summary) is removed.
+	 * tools. Compaction never reorders existing events. On success:
+	 * <ul>
+	 * <li>the events in {@code archivedEvents} are marked archived <em>in place</em>;</li>
+	 * <li>events that were already archived, and the existing events in
+	 * {@code retainedEvents}, stay where they are;</li>
+	 * <li>any previously-active event that appears in neither list (e.g. a superseded
+	 * synthetic summary) is removed;</li>
+	 * <li>each <em>new</em> event in {@code retainedEvents} (one not yet in the log, such
+	 * as a synthetic summary turn) is inserted immediately before the next existing event
+	 * that follows it in {@code retainedEvents}, or appended at the end of the log when
+	 * none follows.</li>
+	 * </ul>
+	 * The order of the existing events within {@code retainedEvents} is not used, except
+	 * to position the new events.
 	 *
 	 * <p>
 	 * Callers should read {@link #getEventVersion} <em>before</em> reading events via
@@ -130,7 +135,8 @@ public interface SessionRepository {
 	 * @param archivedEvents events to mark archived (must already exist in the log;
 	 * implementations may reject the whole call with {@link IllegalArgumentException}
 	 * otherwise)
-	 * @param retainedEvents the new active event set, in chronological order
+	 * @param retainedEvents the new active window, in log order, including any new events
+	 * at the position they should take
 	 * @param expectedVersion the event-log version the caller observed
 	 * @return {@code true} when the swap succeeded, {@code false} on a version mismatch
 	 * @throws IllegalArgumentException if the session does not exist

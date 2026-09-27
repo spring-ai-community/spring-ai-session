@@ -79,6 +79,11 @@ class JdbcSessionRepositoryMysqlIT {
 	}
 
 	@Test
+	void repeatedRecursiveSummarizationNeverReordersTheLog() {
+		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
+	}
+
+	@Test
 	void upsertKeepsCreatedAtAndEvents() {
 		DialectScenarios.upsertKeepsCreatedAtAndEvents(this.repository);
 	}

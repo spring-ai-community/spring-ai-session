@@ -287,7 +287,8 @@ superseded synthetic summary is deleted instead, because its content is carried 
 new summary.
 
 In the JDBC repository, newly archived events are flagged with an in-place `UPDATE`
-(their row is never deleted and re-inserted); only the active window is replaced with the retained events on each pass, so
+(their row is never deleted and re-inserted). Compaction never reorders the log: only when
+a summary is inserted is the part of the log after it re-inserted, so
 the growing archived history is never re-read or re-written.
 
 ### Optimistic concurrency

@@ -32,6 +32,13 @@ compaction settings, and pass only the task in and the result back. See
   `TokenCountCompactionStrategy` budget and the `TokenCountTrigger` threshold.
 - **`SessionMemoryAdvisor`** no longer reads or writes by branch: it records every user and
   assistant event as an ordinary event and uses the latest stored system message.
+- **Compaction never reorders the log.** A kept system message stays where it was stored
+  instead of moving to the front of the active window, and archived events stay where they
+  were. `getEvents(...)` therefore returns events in the order they were appended, plus
+  each summary turn right before the conversation it precedes. `SessionMemoryAdvisor`
+  still puts system messages first in the prompt. A custom loop that reads the active
+  window must put the system message first itself (see
+  [System Messages](session-management/system-messages.md)).
 
 ### JDBC: the `branch` column is unused
 
@@ -42,6 +49,21 @@ removed from them in a later release. You can drop it yourself:
 ```sql
 ALTER TABLE AI_SESSION_EVENT DROP COLUMN branch;
 ```
+
+### Custom implementers: `SessionRepository.compactEvents` keeps the log order
+
+`compactEvents(sessionId, archivedEvents, retainedEvents, expectedVersion)` must no longer
+rebuild the log as "archived events, then retained events". Instead:
+
+- mark `archivedEvents` archived **in place**;
+- keep every other existing event where it is, and remove active events that appear in
+  neither list (e.g. a superseded summary);
+- insert each **new** event of `retainedEvents` immediately before the next existing event
+  that follows it in `retainedEvents`, or append it when none follows.
+
+The built-in in-memory and JDBC repositories do this. With JDBC-style ordering by an
+insert sequence, only the part of the log from the insertion point onward needs to be
+re-inserted.
 
 ### Custom implementers: `JdbcSessionRepositoryDialect.getBranchFilterFragment()` removed
 

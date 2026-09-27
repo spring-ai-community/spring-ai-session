@@ -544,6 +544,11 @@ class JdbcSessionRepositoryTests {
 	}
 
 	@Test
+	void repeatedRecursiveSummarizationNeverReordersTheLog() {
+		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
+	}
+
+	@Test
 	void upsertKeepsCreatedAtAndEvents() {
 		DialectScenarios.upsertKeepsCreatedAtAndEvents(this.repository);
 	}
@@ -781,6 +786,54 @@ class JdbcSessionRepositoryTests {
 		assertThat(finalEvents).hasSize(3);
 		assertThat(finalEvents).extracting(e -> e.getMessage().getText())
 			.containsExactly("m1", "summary-new", "m2");
+	}
+
+	@Test
+	void compactionWithoutNewEventsDoesNotReinsertKeptRows() {
+		Session session = buildSession("user-seq");
+		this.repository.save(session);
+		for (String text : List.of("u1", "a1", "u2", "a2", "u3", "a3")) {
+			this.repository
+				.appendEvent(SessionEvent.builder().sessionId(session.id()).message(new UserMessage(text)).build());
+		}
+		List<Long> seqsBefore = this.jdbcTemplate.queryForList(
+				"SELECT seq FROM AI_SESSION_EVENT WHERE session_id = ? ORDER BY seq", Long.class, session.id());
+		DefaultSessionService service = DefaultSessionService.builder().sessionRepository(this.repository).build();
+
+		service.compact(session.id(), request -> true, SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
+
+		// Nothing was inserted, so every row keeps its seq: archiving happens in place
+		assertThat(this.jdbcTemplate.queryForList("SELECT seq FROM AI_SESSION_EVENT WHERE session_id = ? ORDER BY seq",
+				Long.class, session.id())).isEqualTo(seqsBefore);
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("u3", "a3");
+	}
+
+	@Test
+	void retainedEventThatIsAlreadyArchivedStaysInPlace() {
+		Session session = buildSession("user-retained-archived");
+		this.repository.save(session);
+		SessionEvent e1 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("e1")).build();
+		SessionEvent e2 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("e2")).build();
+		SessionEvent e3 = SessionEvent.builder().sessionId(session.id()).message(new UserMessage("e3")).build();
+		this.repository.appendEvent(e1);
+		this.repository.appendEvent(e2);
+		this.repository.appendEvent(e3);
+		this.repository.compactEvents(session.id(), List.of(e1), List.of(e2, e3),
+				this.repository.getEventVersion(session.id()));
+		SessionEvent summary = SessionEvent.builder()
+			.sessionId(session.id())
+			.message(new UserMessage("summary"))
+			.build();
+
+		// e1 is already archived but listed as retained: it is an existing event, not a new one
+		this.repository.compactEvents(session.id(), List.of(e2), List.of(e1, summary, e3),
+				this.repository.getEventVersion(session.id()));
+
+		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
+		assertThat(log).extracting(e -> e.getMessage().getText()).containsExactly("e1", "e2", "summary", "e3");
+		assertThat(log).extracting(SessionEvent::isArchived).containsExactly(true, true, false, false);
 	}
 
 	// -------------------------------------------------------------------------

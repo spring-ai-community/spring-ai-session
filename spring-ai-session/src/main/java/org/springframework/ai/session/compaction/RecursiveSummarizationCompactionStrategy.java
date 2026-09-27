@@ -166,8 +166,7 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		if (realEvents.size() <= this.maxEventsToKeep) {
 			// Nothing to summarize — only superseded system messages (if any) are
 			// archived
-			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, syntheticEvents, realEvents,
-					supersededSystem, tokens);
+			return CompactionUtils.unchangedExceptSuperseded(events, supersededSystem, tokens);
 		}
 
 		// Raw cut: keep the last maxEventsToKeep real events
@@ -186,8 +185,7 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 		if (toArchive.isEmpty()) {
 			// The whole history is a single (oversize) turn — nothing to summarize.
-			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, syntheticEvents, realEvents,
-					supersededSystem, tokens);
+			return CompactionUtils.unchangedExceptSuperseded(events, supersededSystem, tokens);
 		}
 
 		// Overlap: the first `overlapSize` events from the active window are also fed
@@ -239,17 +237,20 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 					.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, STRATEGY_NAME)
 					.build());
 
-		List<SessionEvent> compacted = new ArrayList<>(pinnedSystem);
-		compacted.addAll(summaryTurn);
-		compacted.addAll(activeWindow);
+		// Archived = only the real events that were summarized and removed, plus
+		// superseded stored system messages (never summarized). Prior synthetic summaries
+		// are replaced by the new summary turn and are therefore NOT included in
+		// archivedEvents, consistent with the other strategies, which only report the
+		// events they archived.
+		CompactionResult archiving = CompactionUtils.archiving(events, toArchive, supersededSystem, tokens);
 
-		// Archived = only the real events that were summarized and removed.
-		// Prior synthetic summaries are implicitly replaced by the new summaryTurn above
-		// and are therefore NOT included in archivedEvents. This keeps the semantics of
-		// archivedEvents consistent with the other strategies, which only report the real
-		// events they removed from the session.
-		// Superseded stored system messages are archived too, but never summarized.
-		return CompactionUtils.archiving(events, compacted, toArchive, supersededSystem, tokens);
+		// The new active window keeps every remaining event in its original log order
+		// (a kept system message stays where it was stored); prior summaries are dropped,
+		// and the new summary turn goes right before the first kept conversation event.
+		List<SessionEvent> compacted = new ArrayList<>(
+				archiving.compactedEvents().stream().filter(e -> !e.isSynthetic()).toList());
+		compacted.addAll(compacted.indexOf(activeWindow.get(0)), summaryTurn);
+		return new CompactionResult(compacted, archiving.archivedEvents(), archiving.tokensEstimatedSaved());
 	}
 
 	/**

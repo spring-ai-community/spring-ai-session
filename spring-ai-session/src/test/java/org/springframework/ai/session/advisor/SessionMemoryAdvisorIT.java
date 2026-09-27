@@ -434,6 +434,24 @@ class SessionMemoryAdvisorIT {
 	}
 
 	@Test
+	void systemMessageInsideTheActiveWindowIsSentFirst() {
+		// Compaction keeps the system message where it was stored, in the middle of the
+		// active window; the advisor still sends it first.
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("question 1"));
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("answer 1"));
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("question 2"));
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Answer in French."));
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("answer 2"));
+		this.sessionService.compact(this.sessionId, request -> true,
+				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
+
+		List<Message> instructions = beforeWithPrompt(new UserMessage("question 3"));
+
+		assertThat(instructions).extracting(Message::getText)
+			.containsExactly("Answer in French.", "question 2", "answer 2", "question 3");
+	}
+
+	@Test
 	void beforeKeepsDistinctSystemMessagesInOrder() {
 		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Stored rule."));
 

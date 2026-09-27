@@ -16,7 +16,6 @@
 
 package org.springframework.ai.session.compaction;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -103,7 +102,8 @@ final class CompactionUtils {
 	 * The latest stored system message is the agent's system prompt ("latest wins"):
 	 * storing a new one replaces the previous one, and it is the integrator's
 	 * responsibility to put the complete intended content in it. Every strategy keeps this
-	 * event in the active window, places it first and never summarizes it. Earlier stored
+	 * event in the active window, where it was stored, and never summarizes it (readers
+	 * such as {@code SessionMemoryAdvisor} put it first in the prompt). Earlier stored
 	 * system messages are {@linkplain #supersededSystemEvents superseded} and archived, so
 	 * storing one per turn cannot grow the active window.
 	 * @param events the session events, oldest first
@@ -155,27 +155,26 @@ final class CompactionUtils {
 	 * unchanged when there are no superseded system events; otherwise only the superseded
 	 * ones are archived, so "latest wins" is applied whenever compaction runs.
 	 */
-	static CompactionResult unchangedExceptSuperseded(List<SessionEvent> events, List<SessionEvent> pinned,
-			List<SessionEvent> synthetic, List<SessionEvent> real, List<SessionEvent> superseded,
+	static CompactionResult unchangedExceptSuperseded(List<SessionEvent> events, List<SessionEvent> superseded,
 			ToIntFunction<SessionEvent> tokens) {
 		if (superseded.isEmpty()) {
 			return new CompactionResult(events, List.of(), 0);
 		}
-		List<SessionEvent> compacted = new ArrayList<>(pinned);
-		compacted.addAll(synthetic);
-		compacted.addAll(real);
-		return new CompactionResult(compacted, superseded, superseded.stream().mapToInt(tokens).sum());
+		return archiving(events, List.of(), superseded, tokens);
 	}
 
 	/**
 	 * Result for a pass that cut real events: archives the removed real events together
-	 * with the superseded system events, in their original log order.
+	 * with the superseded system events. Compaction never reorders events: both the
+	 * archived events and the new active window (every other event) keep their original
+	 * log order, so a kept system message stays where it was stored.
 	 */
-	static CompactionResult archiving(List<SessionEvent> events, List<SessionEvent> compacted,
-			List<SessionEvent> removedReal, List<SessionEvent> superseded, ToIntFunction<SessionEvent> tokens) {
+	static CompactionResult archiving(List<SessionEvent> events, List<SessionEvent> removedReal,
+			List<SessionEvent> superseded, ToIntFunction<SessionEvent> tokens) {
 		Set<SessionEvent> toArchive = new HashSet<>(removedReal);
 		toArchive.addAll(superseded);
 		List<SessionEvent> archived = events.stream().filter(toArchive::contains).toList();
+		List<SessionEvent> compacted = events.stream().filter(e -> !toArchive.contains(e)).toList();
 		return new CompactionResult(compacted, archived, archived.stream().mapToInt(tokens).sum());
 	}
 

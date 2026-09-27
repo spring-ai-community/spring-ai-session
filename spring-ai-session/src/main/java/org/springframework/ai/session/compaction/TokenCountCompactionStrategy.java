@@ -16,7 +16,6 @@
 
 package org.springframework.ai.session.compaction;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ToIntFunction;
 import java.util.stream.Stream;
@@ -35,7 +34,7 @@ import org.springframework.util.Assert;
  * <li>Separate the latest stored system message (the system prompt; earlier stored
  * system messages are superseded and archived, see
  * {@code CompactionUtils#pinnedSystemEvents}) and the synthetic summary events. They are
- * always preserved and placed first in the result. Their token cost is deducted from the
+ * always preserved, in place. Their token cost is deducted from the
  * budget before real events are considered, so a large system prompt or prior compaction
  * summary reduces the space available for real events.</li>
  * <li>Walk real events from newest to oldest, accumulating cost until the budget is
@@ -44,7 +43,7 @@ import org.springframework.util.Assert;
  * continuing would produce non-contiguous gaps that break conversation coherence.</li>
  * <li>Snap the cut point to the next user message. This guarantees the kept window
  * always starts at a turn boundary.</li>
- * <li>Return: {@code [system messages] + [synthetic events] + [kept events]}.</li>
+ * <li>Return every event that is not archived, in its original log order.</li>
  * </ol>
  *
  * <h3>No-op condition</h3>
@@ -116,20 +115,14 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 		// that last turn rather than archiving the whole active window.
 		int cutIndex = CompactionUtils.retainLastTurn(real, CompactionUtils.snapToTurnStart(real, rawCutIndex));
 
-		// Build kept and archived lists in chronological order
-		List<SessionEvent> kept = new ArrayList<>(real.subList(cutIndex, real.size()));
-		List<SessionEvent> archived = new ArrayList<>(real.subList(0, cutIndex));
+		List<SessionEvent> archived = real.subList(0, cutIndex);
 
 		if (archived.isEmpty()) {
-			return CompactionUtils.unchangedExceptSuperseded(events, pinnedSystem, synthetic, real, supersededSystem,
-					tokens);
+			return CompactionUtils.unchangedExceptSuperseded(events, supersededSystem, tokens);
 		}
 
-		List<SessionEvent> compacted = new ArrayList<>(pinnedSystem);
-		compacted.addAll(synthetic);
-		compacted.addAll(kept);
 
-		return CompactionUtils.archiving(events, compacted, archived, supersededSystem, tokens);
+		return CompactionUtils.archiving(events, archived, supersededSystem, tokens);
 	}
 
 	public int getMaxTokens() {
