@@ -1230,7 +1230,7 @@ and H2 out of the box.</p>
 <hr />
 <h2 id="tables">Tables<a class="headerlink" href="#tables" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>AI_SESSION          — session metadata (id, user_id, TTL, metadata JSON, event_version)
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>AI_SESSION_EVENT    — append-only event log (FK → AI_SESSION, ON DELETE CASCADE)
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>AI_SESSION_EVENT    — event log (FK → AI_SESSION, ON DELETE CASCADE)
 </span></code></pre></div>
 <p><code>AI_SESSION_EVENT</code> rows are ordered by a monotonic <code>seq</code> column (insertion order) and carry
 <code>synthetic</code> and <code>archived</code> flags. Compaction archives events in place rather than deleting

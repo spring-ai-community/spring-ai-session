@@ -1727,7 +1727,7 @@ exchanges.</p>
 </span></code></pre></div>
 <p>It groups events into turns (each starting at a <code>USER</code> message) and archives the oldest
 until <code>maxTurns</code> remain. Events before the first <code>USER</code> message form a <strong>preamble</strong> that is
-always kept, placed after the synthetics and before the turns.</p>
+always kept, where it was stored.</p>
 <h3 id="tokencountcompactionstrategy">TokenCountCompactionStrategy<a class="headerlink" href="#tokencountcompactionstrategy" title="Permanent link">&para;</a></h3>
 <p>Keeps a <strong>contiguous</strong> suffix of events that fits within a token budget (default
 <code>DEFAULT_MAX_TOKENS</code> = 4000), walking from newest to oldest.</p>

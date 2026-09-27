@@ -1183,6 +1183,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#custom-implementers-compactionstrategy-results-must-be-in-log-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom implementers: CompactionStrategy results must be in log order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1600,6 +1611,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#custom-implementers-compactionstrategy-results-must-be-in-log-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom implementers: CompactionStrategy results must be in log order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2009,6 +2031,14 @@ rebuild the log as "archived events, then retained events". Instead:</p>
 <p>The built-in in-memory and JDBC repositories do this. With JDBC-style ordering by an
 insert sequence, only the part of the log from the insertion point onward needs to be
 re-inserted.</p>
+<h3 id="custom-implementers-compactionstrategy-results-must-be-in-log-order">Custom implementers: <code>CompactionStrategy</code> results must be in log order<a class="headerlink" href="#custom-implementers-compactionstrategy-results-must-be-in-log-order" title="Permanent link">&para;</a></h3>
+<p><code>CompactionResult.compactedEvents()</code> is the new active window <strong>in log order</strong>: every
+event that is not archived keeps its position, and a new event (such as a summary turn)
+goes right before the existing event it should precede. The repositories use only the
+position of new events. Existing events are kept as they are stored, so returning a
+modified copy of an existing event (same id, e.g. with a truncated tool result) or a
+different order for existing events no longer has any effect. To change an event's
+content, archive it and add a new event instead.</p>
 <h3 id="custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed">Custom implementers: <code>JdbcSessionRepositoryDialect.getBranchFilterFragment()</code> removed<a class="headerlink" href="#custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed" title="Permanent link">&para;</a></h3>
 <p>The method is gone from the dialect contract. A custom dialect that overrides it no longer
 compiles because of its <code>@Override</code>; delete the method.</p>

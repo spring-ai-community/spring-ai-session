@@ -1809,6 +1809,7 @@ its event could be ordered before the part of the log that compaction re-inserts
         opt new events (a summary turn)
             C-&gt;&gt;DB: DELETE FROM AI_SESSION_EVENT&lt;br/&gt;WHERE session_id = ? AND seq &gt;= seq(first kept event after the summary)
             C-&gt;&gt;DB: INSERT summary turn + that tail (batch, new seq values)
+            Note over C,DB: new events with no existing event after them&lt;br/&gt;are simply appended, with no DELETE
         end
         C-&gt;&gt;DB: COMMIT, releasing the row lock
         Note over C: returns true

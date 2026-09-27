@@ -1706,8 +1706,8 @@ models always see a valid user↔assistant alternation.</p>
 <p>All compaction strategies set synthetic events and stored system messages aside before
 processing real events (for system messages, see
 <a href="../system-messages/#compaction-the-latest-stored-system-message-wins">System Messages</a>).
-The sliding-window, turn-window and token-count strategies keep synthetic events unchanged
-and place them first. <code>RecursiveSummarizationCompactionStrategy</code> instead folds the previous
+The sliding-window, turn-window and token-count strategies keep synthetic events unchanged,
+where they are in the log. <code>RecursiveSummarizationCompactionStrategy</code> instead folds the previous
 summary into the new one and <strong>replaces</strong> it: the superseded synthetic events are removed
 from the log (they are not archived).</p>
 <p>Build a synthetic summary turn explicitly:</p>
@@ -1830,10 +1830,10 @@ whole log, archived events included. This makes the MemGPT recall pattern work: 
 can surface any prior exchange after it has been compacted out of context. Only a
 superseded synthetic summary is deleted instead, because its content is carried into the
 new summary.</p>
-<p>In the JDBC repository, newly archived events are flagged with an in-place <code>UPDATE</code>
-(their row is never deleted and re-inserted). Compaction never reorders the log: only when
-a summary is inserted is the part of the log after it re-inserted, so
-the growing archived history is never re-read or re-written.</p>
+<p>In the JDBC repository, newly archived events are flagged with an in-place <code>UPDATE</code>.
+Compaction never reorders the log: only when a summary is inserted is the part of the log
+after it re-inserted, so the archived history before that point (normally all of it) is
+never re-read or re-written.</p>
 <h3 id="optimistic-concurrency">Optimistic concurrency<a class="headerlink" href="#optimistic-concurrency" title="Permanent link">&para;</a></h3>
 <p><code>SessionRepository.getEventVersion(sessionId)</code> is a monotonically increasing counter,
 incremented on every <code>appendEvent</code> that appends a new event and on every successful

@@ -1627,8 +1627,8 @@ every turn, which duplicates the system prompt in every request and grows the lo
 <p><code>getActiveMessages(sessionId)</code> and <code>getEvents(sessionId, EventFilter.active())</code> return
 the active window (archived events excluded) in the order the events were stored.
 <strong>Reads don't move system messages to the front or deduplicate them</strong>; that is left to
-the integration. (Compaction does place the kept system messages first in the active
-window.) <code>EventFilter.messageTypes(...)</code> can include or exclude <code>SYSTEM</code> events when
+the integration. Compaction doesn't move them either: the kept system message stays where
+it was stored. <code>EventFilter.messageTypes(...)</code> can include or exclude <code>SYSTEM</code> events when
 you load history.</p>
 <h3 id="compaction-the-latest-stored-system-message-wins">Compaction: the latest stored system message wins<a class="headerlink" href="#compaction-the-latest-stored-system-message-wins" title="Permanent link">&para;</a></h3>
 <p>If system messages are stored, the <strong>latest</strong> one is the session's system prompt. Storing

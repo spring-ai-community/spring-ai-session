@@ -1252,8 +1252,8 @@ how the main types fit together.</p>
 <hr />
 <h2 id="key-features">Key Features<a class="headerlink" href="#key-features" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Append-only history</strong> — compaction only flips an event's <code>archived</code> flag, so the full
-  history stays searchable</li>
+<li><strong>Full history kept</strong> — compaction archives events in place instead of deleting them
+  (only superseded summaries are replaced), so the full history stays searchable</li>
 <li><strong>Composable event filtering</strong> — by message type, time range, single or multi-term
   keyword (<code>ANY</code>/<code>ALL</code>), regular expression, last-N, or pagination</li>
 <li><strong>Four compaction strategies</strong> out of the box:<ul>
