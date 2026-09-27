@@ -1,12 +1,8 @@
 # Compaction Internals
 
-This page explains **how** context compaction works inside Spring AI Session, with class,
-sequence and activity diagrams and worked examples. For **using** compaction (choosing
-and configuring triggers and strategies), see [Context Compaction](compaction.md).
-
-The focus is on the complicated cases: the optimistic-concurrency (CAS) write, the
-cut-point algorithm with turn snapping, the recursive summarization strategy, stored
-system messages, and concurrent appends on JDBC.
+This page explains **how** compaction works: the CAS write, turn snapping, recursive
+summarization, stored system messages and concurrent JDBC appends, with diagrams and
+worked examples. For **using** compaction, see [Context Compaction](compaction.md).
 
 !!! note "Implementation details"
     This page describes the current implementation. Package-private helpers such as
@@ -18,9 +14,6 @@ system messages, and concurrent appends on JDBC.
 ---
 
 ## 1. Class diagrams
-
-Three small diagrams, one per question: how a compaction pass is wired, which triggers
-exist, and which strategies exist.
 
 ### 1a. Core contract
 
@@ -118,7 +111,7 @@ classDiagram
 | Trigger | Fires when | Settings |
 |---|---|---|
 | `TurnCountTrigger` | more than `maxTurns` turns (root, non-synthetic `USER` events) | `maxTurns` (constructor) |
-| `TokenCountTrigger` | estimated tokens of all active events `>=` `threshold` | `threshold` (required), `tokenCountEstimator` (default JTokkit) |
+| `TokenCountTrigger` | estimated tokens `>=` `threshold`, counted like the strategy's [budget](compaction.md#how-the-budget-is-spent) | `threshold` (required), `tokenCountEstimator` (default JTokkit) |
 | `CompositeCompactionTrigger` | any of its triggers fires | `anyOf(...)` |
 
 ### 1c. Strategies
@@ -241,7 +234,7 @@ that are newer than the version it checks.
 ## 3. Activity: how a strategy chooses what to archive
 
 All four strategies share this pipeline. They differ only in step 3: how the raw cut is
-computed. The diagram is a UML activity diagram drawn as a flowchart.
+computed.
 
 ```mermaid
 flowchart TB
@@ -278,7 +271,8 @@ flowchart TB
 - **The newest turn is never archived.** Step 5 keeps it even when it alone exceeds the
   budget.
 - **At most one stored system message per branch stays active,** and it is never
-  summarized. Superseded ones are archived on every pass, even when no cut is needed.
+  summarized. Superseded ones are archived on every pass, even when no cut is needed,
+  except a recursive pass skipped because the summarizer returned a blank summary.
 - **Synthetic summaries survive** the sliding-window, turn-window and token-count
   strategies. The recursive strategy replaces them (see section 4).
 
@@ -413,7 +407,7 @@ summary turn.
 | 5 | Sub-agent system prompt in an old turn | `U1 [S:researcher] A1 U2 A2 U3 A3` | SlidingWindow, `maxEvents = 2` | `[S:researcher] U3 A3` | `U1 A1 U2 A2` |
 | 6 | Sub-agent USER is not a turn start | `U1 A1 [U:sub] [A:sub] U2 A2` | TurnWindow, `maxTurns = 1` | `U2 A2` | `U1 A1 [U:sub] [A:sub]` |
 | 7 | Token budget with a system prompt | `S:sys(11) U(8) A(13) U(8) A(13)` | TokenCount, `maxTokens = 45` | `S:sys U A` (newest turn) | the older turn |
-| 8 | Recursive with a prior summary | `Σold U1 A1 U2 A2 U3 A3` | Recursive, `maxEventsToKeep = 2` | `Σnew U3 A3` | `U1 A1 U2 A2` (`Σold` deleted) |
+| 8 | Recursive with a prior summary | `Σold U1 A1 U2 A2 U3 A3` | Recursive, `maxEventsToKeep = 2`, `overlapSize = 1` | `Σnew U3 A3` | `U1 A1 U2 A2` (`Σold` deleted) |
 
 **Notes on the examples:**
 

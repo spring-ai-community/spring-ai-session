@@ -10,25 +10,17 @@ no manual history loading or appending required in application code.
 
 On every request the advisor:
 
-1. Resolves the session ID from `SESSION_ID_CONTEXT_KEY` in the advisor context — this
-   key **must** be present on every request. If the session does not exist, it is created
-   automatically using the `USER_ID_CONTEXT_KEY` value (or `defaultUserId`) and the
-   resolved session ID (`defaultUserId` defaults to `"default-user"`, so set
-   `USER_ID_CONTEXT_KEY` or `.defaultUserId(...)` if you look sessions up by user later,
-   e.g. with `findByUserId` or `CrossSessionRecallTools`). If the session already exists and `USER_ID_CONTEXT_KEY` is set,
-   the advisor validates that the requesting user owns the session and throws
-   `IllegalStateException` on mismatch.
-2. Retrieves the session's event history (filtered by the configured `eventFilter`,
-   default `EventFilter.all()`) and **prepends** it to the prompt messages. If the
-   request context contains an `EVENT_FILTER_CONTEXT_KEY` value, it is merged with the
-   advisor-level filter — request-level fields win over advisor defaults. `EventFilter.active()`
-   is then unconditionally merged in on top, so archived (compacted-out) events never reach
-   the prompt regardless of what the configured or per-request filter allows.
-3. Reorders all `SystemMessage` instances to the front of the combined message list,
-   preserving their relative order. A system message whose text exactly matches an earlier
-   one (e.g. a stored system message that is also sent on the request) is sent only once.
-   Texts are never merged or rewritten, so the system prompt stays stable for prompt
-   caching. See [System Messages](system-messages.md).
+1. Resolves the session ID from `SESSION_ID_CONTEXT_KEY`, which **must** be present on
+   every request, creating the session if it does not exist and checking ownership if it
+   does (see [Passing a session ID per request](#passing-a-session-id-per-request)).
+2. Loads the session's history with the configured `eventFilter` (default
+   `EventFilter.all()`), merged with any per-request `EVENT_FILTER_CONTEXT_KEY` filter, and
+   **prepends** it to the prompt. `EventFilter.active()` is always merged in on top, so
+   archived (compacted-out) events never reach the prompt. Of any stored system messages
+   (an opt-in), only the latest one of the advisor's own branch is kept.
+3. Moves all `SystemMessage`s to the front, in their relative order, and sends a text that
+   exactly matches an earlier one only once. Texts are never merged or rewritten, so the
+   prompt stays stable for prompt caching. See [System Messages](../session-management/system-messages.md).
 4. Appends the prompt's last user message to the session, if the configured
    `MessageFilter` accepts it. Inside a tool-calling loop this is the trailing
    tool-response message instead (`Prompt.getLastUserOrToolResponseMessage()`).
@@ -77,29 +69,21 @@ ChatClient client = ChatClient.builder(chatModel)
     `IllegalArgumentException`. Set both or neither.
 
 !!! note "Default advisor order — nested inside the tool-calling loop"
-    The default order is `Ordered.HIGHEST_PRECEDENCE + 1000` (≈ `Integer.MIN_VALUE + 1000`),
-    numerically higher — i.e. **lower precedence** — than `ToolCallingAdvisor`'s default
-    order (`HIGHEST_PRECEDENCE + 300`). Advisors are sorted ascending by order and the
-    lowest value wraps everything after it, so at default orders `ToolCallingAdvisor` wraps
-    `SessionMemoryAdvisor`, not the other way round: `SessionMemoryAdvisor.before()`/`after()`
-    run once per round of the tool-call loop, not once per outer call.
+    The default order is `Ordered.HIGHEST_PRECEDENCE + 1000`, a lower precedence than
+    `ToolCallingAdvisor`'s `HIGHEST_PRECEDENCE + 300`. The tool-calling advisor therefore
+    wraps `SessionMemoryAdvisor`, whose `before()`/`after()` run once per round of the
+    tool-call loop.
 
-    This is deliberate and safe. From round 2 onward, the prompt handed to `before()`
-    already contains the current turn's messages (persisted by the previous round), and
-    `before()` detects that its retrieved history is already a contiguous run in that
-    prompt and skips prepending it again — so no duplicate messages reach the model. System
-    messages are left out of this check, because they are always moved to the front; a
-    system message stored in the session is added on every round and its exact-text
-    duplicate from the earlier round is dropped.
-    Persisted events aren't duplicated either: only the round's trailing
-    user/tool-response message and the model's own reply are ever appended. This means
-    `SessionMemoryAdvisor` nests correctly under a default-configured `ToolCallingAdvisor`
-    with its internal conversation history left **enabled** — you don't need
-    `.disableInternalConversationHistory()` to avoid duplication.
+    This is deliberate and safe. From round 2 on, `before()` finds its loaded history
+    already present as a contiguous run in the prompt and doesn't prepend it again. System
+    messages are left out of this check, because they are always moved to the front; the
+    exact-text duplicate of a stored one is dropped. Only each round's trailing
+    user/tool-response message and the model's reply are persisted, so nothing is stored
+    twice either. You don't need `.disableInternalConversationHistory()` on the
+    tool-calling advisor.
 
-    Override with `.order(n)` (a value lower than the tool-calling advisor's) if your
-    pipeline instead needs `SessionMemoryAdvisor` to wrap the loop and write to the
-    session only once, after tool results are fully resolved.
+    Set `.order(n)` below the tool-calling advisor's order if `SessionMemoryAdvisor` should
+    instead wrap the loop and write to the session once, after tool results are resolved.
 
 ---
 
@@ -108,7 +92,7 @@ ChatClient client = ChatClient.builder(chatModel)
 By default every persisted event gets a random id, so a retried write always creates a
 new event. Configure `requestEventIdGenerator`/`responseEventIdGenerator` to derive a
 deterministic id instead — a retry with the same id becomes a no-op (see [Idempotent
-`appendEvent`](concepts.md#idempotent-appendevent)):
+`appendEvent`](../session-management/concepts.md#idempotent-appendevent)):
 
 ```java
 IdempotentSessionEventIdGenerator idGenerator = new IdempotentSessionEventIdGenerator();
@@ -162,6 +146,8 @@ String response = client.prompt()
 
 If no session exists for the given ID, the advisor creates one automatically using the
 `USER_ID_CONTEXT_KEY` value from the request context, falling back to `defaultUserId`.
+`defaultUserId` defaults to `"default-user"`, so set one of them if you later look
+sessions up by user, e.g. with `findByUserId` or `CrossSessionRecallTools`.
 
 !!! note "Ownership enforcement"
     When `USER_ID_CONTEXT_KEY` is present and the session already exists, the advisor
@@ -218,7 +204,7 @@ String response = client.prompt()
 the corresponding field from the advisor default; the two boolean flags, `excludeSynthetic`
 and `excludeArchived`, are OR-ed so either side can opt in. A request-level `lastN` or
 `page`/`pageSize` replaces the advisor's retrieval modifier as a whole (see
-[Merging filters](event-filtering.md#merging-filters)). A `null` value for
+[Merging filters](../session-management/event-filtering.md#merging-filters)). A `null` value for
 `EVENT_FILTER_CONTEXT_KEY` is ignored.
 
 ---
@@ -279,13 +265,9 @@ via `and()`, `or()`, and `negate()`:
 
 ## Concurrent compaction safety
 
-If two requests for the same session complete concurrently (e.g. parallel fan-out), both
-`after()` calls may reach the compaction step simultaneously. Compaction uses an optimistic
-compare-and-swap write via `SessionRepository.compactEvents(sessionId, archivedEvents,
-retainedEvents, expectedVersion)`. The event-log version is read before events are fetched;
-if another writer mutates the log between that read and the CAS write, `compactEvents`
-returns `false` and the second writer skips silently — no compacted result is lost or
-corrupted.
+Concurrent `after()` calls on the same session (e.g. parallel fan-out) may both compact;
+the [optimistic compare-and-swap](../session-management/concepts.md#optimistic-concurrency) makes the loser skip
+silently, so no compacted result is lost or corrupted.
 
 ---
 

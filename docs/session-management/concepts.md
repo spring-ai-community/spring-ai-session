@@ -19,9 +19,10 @@ The event log is stored separately in the repository and fetched on demand.
 | `expiresAt` | Expiry instant. Sessions created through `SessionService.create` always get one: the request's `timeToLive`, or the service's default (60 days, configurable). `null` (no expiry) is only possible for a `Session` built directly with `Session.builder().expiresAt(null)`. |
 | `metadata` | Arbitrary key/value pairs (model info, tags, etc.) |
 
-Keeping `Session` metadata-only means it can be passed across boundaries cheaply, and
-compaction strategies receive the event list as an explicit parameter rather than
-extracting it from the session object.
+Keeping `Session` metadata-only means it can be passed across boundaries cheaply and stays
+immutable: every event mutation goes through dedicated repository methods (`appendEvent`,
+`compactEvents`), and compaction strategies receive the event list as an explicit
+parameter.
 
 Sessions are created through `SessionService`, which is the primary API for the entire
 lifecycle:
@@ -56,17 +57,23 @@ what `Message` intentionally omits: identity, ownership, ordering, and framework
 | `message` | The Spring AI message — no duplication of content |
 | `metadata` | Framework flags such as `METADATA_SYNTHETIC` and `METADATA_COMPACTION_SOURCE` |
 | `branch` | Dot-separated agent path (e.g. `"orch.researcher"`); `null` for root-level events |
+| `archived` | `true` once compaction has moved the event out of the active window; it stays in the log and remains searchable (see [Event lifecycle](#event-lifecycle)) |
 
 ### Message types
 
-| Message type | `SessionEvent.isSynthetic()` | Meaning |
-|---|---|---|
-| `UserMessage` | `false` | Real user input |
-| `AssistantMessage` (no tool calls) | `false` | Agent response |
-| `AssistantMessage` (with tool calls) | `false` | Agent tool invocation |
-| `ToolResponseMessage` | `false` | Tool output |
-| `UserMessage` | `true` | Synthetic shadow prompt opening a summary turn |
-| `AssistantMessage` | `true` | Synthetic summary text closing a summary turn |
+| Message type | `SessionEvent.isSynthetic()` | Meaning | Compaction |
+|---|---|---|---|
+| `UserMessage` | `false` | Real user input. A root-level one starts a [turn](#turn) | Archived with its turn |
+| `AssistantMessage` (no tool calls) | `false` | Agent response | Archived with its turn |
+| `AssistantMessage` (with tool calls) | `false` | Agent tool invocation | Archived with its turn, never separated from its tool results |
+| `ToolResponseMessage` | `false` | Tool output | Archived with its turn |
+| `SystemMessage` | `false` | A stored system prompt: configuration, not conversation. Storing one is opt-in | The latest one per branch is kept; earlier ones are archived. Never summarized. See [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins) |
+| `UserMessage` | `true` | Synthetic shadow prompt opening a summary turn | Kept by the sliding-window, turn-window and token-count strategies. Replaced (deleted) by the next recursive summary |
+| `AssistantMessage` | `true` | Synthetic summary text closing a summary turn | As above. Its text is fed to the next recursive summary as the prior summary |
+| `SystemMessage` | `true` | Legacy summary format from earlier versions | As above. Still read as a prior summary by the recursive strategy |
+
+With `RecursiveSummarizationCompactionStrategy`, real events other than system messages
+are summarized before they are archived.
 
 ### Building events
 
@@ -144,13 +151,13 @@ events with two synthetic events that form a coherent conversation turn:
 This mirrors the OpenAI Agents SDK shadow-prompt pattern and ensures that downstream
 models always see a valid user↔assistant alternation.
 
-All compaction strategies separate synthetic events, and the root-level system messages
-stored in the session, from real events before processing. The latest stored system message
-is the session's system prompt: every strategy keeps it unchanged, places it first and never
-archives or summarizes it. Earlier stored system messages are superseded and archived. See [System Messages](system-messages.md). The sliding-window, turn-window and token-count strategies also keep
-synthetic events unchanged and place them first in the compacted output. `RecursiveSummarizationCompactionStrategy` instead
-folds the previous summary into the new one and **replaces** it: the superseded synthetic
-events are removed from the log (they are not archived).
+All compaction strategies set synthetic events and stored system messages aside before
+processing real events (for system messages, see
+[System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins)).
+The sliding-window, turn-window and token-count strategies keep synthetic events unchanged
+and place them first. `RecursiveSummarizationCompactionStrategy` instead folds the previous
+summary into the new one and **replaces** it: the superseded synthetic events are removed
+from the log (they are not archived).
 
 Build a synthetic summary turn explicitly:
 
@@ -181,42 +188,129 @@ unit.
 
 ## Architecture Overview
 
-![Spring AI Session API Classes](../images/spring-ai-session-api-classes.png)
+The core model and API. Compaction types are covered separately in
+[Compaction Internals](compaction-internals.md#1-class-diagrams).
 
-**Why `Session` carries no events**
+```mermaid
+classDiagram
+    direction TB
 
-Storing the event log inside `Session` would force every consumer that needs to mutate the
-list (compaction, archiving) to hold a mutable reference inside what is meant to be an
-immutable value object. By keeping `Session` as pure metadata, all event mutations go
-through dedicated repository methods (`appendEvent`, `compactEvents`) and `SessionService`
-operates on the event list as an explicit parameter.
+    class SessionService {
+        <<interface>>
+        +create(request) Session
+        +findById(id) Session
+        +appendEvent(event)
+        +getEvents(id, filter) List
+        +getActiveMessages(id) List
+        +compact(id, trigger, strategy) CompactionResult
+        +deleteExpiredSessions(before) int
+    }
+    class DefaultSessionService
+    class SessionRepository {
+        <<interface>>
+        +save(session) Session
+        +saveIfAbsent(session) boolean
+        +findById(id) Session
+        +appendEvent(event)
+        +findEvents(id, filter) List
+        +getEventVersion(id) long
+        +compactEvents(id, archived, retained, version) boolean
+    }
+    class InMemorySessionRepository
+    class JdbcSessionRepository
+
+    class Session {
+        id
+        userId
+        createdAt
+        expiresAt
+        metadata
+    }
+    class SessionEvent {
+        id
+        sessionId
+        timestamp
+        message
+        metadata
+        branch
+        archived
+        +isSynthetic() boolean
+        +isRootEvent() boolean
+    }
+    class Message {
+        <<Spring AI>>
+    }
+    class EventFilter {
+        <<record>>
+        +all()$ EventFilter
+        +active()$ EventFilter
+        +forBranch(branch)$ EventFilter
+        +keywordSearch(keyword)$ EventFilter
+    }
+
+    SessionService <|.. DefaultSessionService
+    DefaultSessionService --> SessionRepository : persists through
+    SessionRepository <|.. InMemorySessionRepository
+    SessionRepository <|.. JdbcSessionRepository
+    SessionService ..> Session : manages
+    SessionService ..> SessionEvent : manages
+    SessionService ..> EventFilter : queries with
+    SessionEvent "*" --> "1" Session : belongs to (by sessionId)
+    SessionEvent --> Message : wraps
+```
+
+### Event lifecycle
+
+An event is appended once and never edited. Its content never changes; only its state
+does:
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Active : appendEvent
+    Active --> Archived : compaction archives it
+    Active --> Deleted : superseded summary replaced by a new one
+    Active --> Deleted : session deleted or expired
+    Archived --> Deleted : session deleted or expired
+    Deleted --> [*]
+
+    note right of Active : sent to the model (EventFilter.active)
+    note right of Archived : kept and searchable, not sent to the model
+```
+
+- **Active:** part of the active context window. Appending an event with an id that
+  already exists is an idempotent replay and changes nothing.
+- **Archived:** compaction moved it out of the active window, for example an old turn, or
+  a stored system message superseded by a newer one on the same branch. The latest stored
+  system message of each branch always stays active.
+- **Deleted:** gone from the log. This only happens to a synthetic summary that a new
+  summary replaces, or when its whole session is deleted (`delete`, or
+  `deleteExpiredSessions` for expired sessions).
 
 **Archiving instead of deleting**
 
-Compaction never deletes the real events it removes from the active context window. Instead it
-marks them archived (`SessionEvent.isArchived()`) via `compactEvents`, leaving the full
-verbatim history in the log. The active context window — what an integration such as
-`SessionMemoryAdvisor` sends to the model — is the `EventFilter.active()` view
-(`excludeArchived = true`),
-while Recall Storage searches (`EventFilter.keywordSearch(...)`) deliberately span the
-whole log, archived events included. This is what makes the MemGPT recall pattern work:
-the agent can surface any prior exchange even after it has been summarized out of context.
-The one exception is a superseded synthetic summary: when `RecursiveSummarizationCompactionStrategy`
-writes a new summary, the previous summary events are dropped rather than archived, because
-their content is carried into the new summary.
-In the JDBC repository, events newly marked archived are updated in place (their row is
-never rewritten); only the active window is replaced with the new retained events on each
-compaction pass, so the growing archived history is never re-read or re-written.
+Compaction marks the real events it removes from the active window as archived
+(`SessionEvent.isArchived()`) via `compactEvents`, so the full verbatim history stays in
+the log. What an integration sends to the model is the `EventFilter.active()` view, while
+[Recall Storage](../recall-memory/recall-storage.md) searches (`EventFilter.keywordSearch(...)`) span the
+whole log, archived events included. This makes the MemGPT recall pattern work: the agent
+can surface any prior exchange after it has been compacted out of context. Only a
+superseded synthetic summary is deleted instead, because its content is carried into the
+new summary.
 
-**Optimistic concurrency**
+In the JDBC repository, newly archived events are updated in place (their row is never
+rewritten); only the active window is replaced with the retained events on each pass, so
+the growing archived history is never re-read or re-written.
 
-`SessionRepository` exposes `getEventVersion(sessionId)` — a monotonically increasing
-counter incremented on every `appendEvent` and `compactEvents` call. Callers read this
-version before fetching events, then pass it to `compactEvents(sessionId, archivedEvents,
-retainedEvents, expectedVersion)`. If another writer mutated the log in the interval, the
-CAS returns `false` — the caller treats this as a no-op rather than retrying. Durable
-implementations (JDBC, Redis) should map this to a database-level optimistic-lock column
-or a Redis `WATCH`.
+### Optimistic concurrency
+
+`SessionRepository.getEventVersion(sessionId)` is a monotonically increasing counter,
+incremented on every `appendEvent` and `compactEvents` call. Callers read it before
+fetching events and pass it to `compactEvents(sessionId, archivedEvents, retainedEvents,
+expectedVersion)`. If another writer changed the log in between, this compare-and-swap
+(CAS) returns `false`, and the caller treats it as a no-op rather than retrying. Durable
+implementations should map it to a database-level optimistic-lock column, as the JDBC
+repository does; a Redis implementation, for example, would use `WATCH`.
 
 ### Idempotent appendEvent {#idempotent-appendevent}
 
@@ -231,7 +325,7 @@ of one session. Reusing an id that already belongs to a *different* session thro
 `IllegalStateException` instead of being treated as a replay, so event ids should be
 unique across sessions. The default id is a random UUID, so this only matters when a
 caller supplies its own deterministic ids. See [`SessionMemoryAdvisor`'s pluggable id
-generators](chat-client.md#idempotent-session-event-ids).
+generators](../chat-client/chat-client.md#idempotent-session-event-ids).
 
 **Event ordering**
 
@@ -244,12 +338,47 @@ positioned ahead of the older active-window events it precedes.
 
 ## Session Lifecycle
 
-```java
-SessionService service = DefaultSessionService.builder()
-    .sessionRepository(InMemorySessionRepository.builder().build())
-    .build();
+A session from creation to cleanup, driven by any integration: your own agent loop, or
+`SessionMemoryAdvisor`, which performs the per-turn steps automatically for `ChatClient`
+(see [ChatClient Integration](../chat-client/chat-client.md)).
 
-// 1. Create
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as App / integration
+    participant Svc as SessionService
+    participant Repo as SessionRepository
+    participant LLM as Model
+
+    App->>Svc: create(CreateSessionRequest)
+    Svc->>Repo: saveIfAbsent(session)
+    Repo-->>Svc: inserted (fails if the id exists)
+    Svc-->>App: Session
+
+    loop every turn
+        App->>Svc: getActiveMessages(id)
+        Svc->>Repo: findEvents(id, EventFilter.active())
+        Repo-->>Svc: active events
+        Svc-->>App: active window (archived events excluded)
+        App->>LLM: system prompt (supplied per request) + active window + user message
+        LLM-->>App: reply
+        App->>Svc: appendMessage(id, user message), appendMessage(id, reply)
+        Svc->>Repo: appendEvent(...)
+        opt the compaction trigger fires
+            App->>Svc: compact(id, trigger, strategy)
+            Svc->>Repo: getEventVersion, findEvents, compactEvents (CAS)
+            Note over Repo: old events archived, still searchable
+        end
+    end
+
+    Note over App,Repo: later, from a scheduler
+    App->>Svc: deleteExpiredSessions(now)
+    Svc->>Repo: findExpiredSessionIds(now), then delete(id) for each
+    Note over Repo: the session and all its events are removed
+```
+
+```java
+// 1. Create (service built as in the Session section above)
 Session session = service.create(
     CreateSessionRequest.builder()
         .userId("alice")
@@ -293,10 +422,3 @@ void sweepExpiredSessions() {
 
 `deleteExpiredSessions` finds all sessions whose `expiresAt` is before the supplied
 instant and deletes them one by one. It returns the count of sessions removed.
-
----
-
-The JDBC repository lives in `org.springframework.ai.session.jdbc`
-(`spring-ai-session-jdbc`). The Spring Boot auto-configurations use the
-`org.springaicommunity.session.autoconfigure` and
-`org.springaicommunity.session.jdbc.autoconfigure` packages.

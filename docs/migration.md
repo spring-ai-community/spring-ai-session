@@ -2,7 +2,9 @@
 
 ## Upgrading to 0.9.0
 
-### Breaking: `conversation_search` needs the session ID in the tool context
+### Application changes
+
+#### Breaking: `conversation_search` needs the session ID in the tool context
 
 `SessionEventTools` reads the session ID from the `ToolContext`, and Spring AI does not copy
 advisor parameters into it. Before 0.9.0 the tool then silently searched a shared
@@ -12,20 +14,19 @@ both the advisor and the tool context:
 ```java
 chatClient.prompt()
     .user(question)
-    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
-    .toolContext(Map.of(ChatMemory.CONVERSATION_ID, sessionId))
+    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
+    .toolContext(Map.of(ChatMemory.CONVERSATION_ID, sessionId))   // same key value
     .call()
     .content();
 ```
 
-### Breaking: storing system messages requires opt-in
+#### Breaking: storing system messages requires opt-in
 
 `DefaultSessionService.appendEvent` / `appendMessage` now reject a `SystemMessage` with an
-`IllegalArgumentException`. System prompts are configuration, best supplied on every
-request (for example with `ChatClient` `defaultSystem` / `.system`) and not stored in the
-session. `SessionMemoryAdvisor` never stored them, so `ChatClient` users are unaffected.
-
-If you store system messages on purpose, enable it:
+`IllegalArgumentException`; supply system prompts per request instead (see
+[System Messages](session-management/system-messages.md)). `SessionMemoryAdvisor` never
+stored them, so `ChatClient` users are unaffected. If you store system messages on purpose,
+enable it:
 
 ```java
 DefaultSessionService.builder()
@@ -37,23 +38,18 @@ DefaultSessionService.builder()
 or set `spring.ai.session.allow-system-messages=true` with Spring Boot auto-configuration.
 Existing stored system messages can still be read either way.
 
-### Breaking: `SessionService.create(...)` rejects an existing session ID
+#### Breaking: `SessionService.create(...)` rejects an existing session ID
 
 `create` used to upsert: an existing session with the same ID got a new `userId` and TTL
 but kept its event log. It now throws `IllegalStateException("Session already exists: …")`.
 Use `findById` first if the session may already exist. `SessionMemoryAdvisor` handles this
 itself, including two concurrent first requests for the same new session.
 
-`create` now goes through the new `SessionRepository.saveIfAbsent(Session)`, which inserts
-only if the id is free. The built-in repositories implement it atomically. **Custom
-`SessionRepository` implementations should override it** with an atomic insert, such as a
-primary-key-guarded `INSERT`. The default implementation is a non-atomic `findById` +
-`save`, so two concurrent creates of the same id could still both succeed.
+`create` now goes through the new `SessionRepository.saveIfAbsent(Session)`, and
+`save(...)` on an existing session keeps its original `createdAt` in every implementation.
+Custom repositories: see the [checklist](#breaking-checklist-for-custom-sessionrepository-implementations).
 
-Relatedly, `SessionRepository.save(...)` on an existing session now keeps its original
-`createdAt` in every implementation.
-
-### Breaking: JDBC timestamps are stored as UTC
+#### Breaking: JDBC timestamps are stored as UTC
 
 The `TIMESTAMP` / `DATETIME` columns carry no time zone. They used to be written in the
 JVM's default time zone and are now always written and read as UTC wall-clock time. If
@@ -61,14 +57,14 @@ your application ran in a non-UTC zone, existing rows are off by that zone's off
 fix them, shift `AI_SESSION.created_at`, `AI_SESSION.expires_at` and
 `AI_SESSION_EVENT.timestamp` by the offset, or accept the shift for historical data.
 
-### Breaking: unsupported databases fail fast
+#### Breaking: unsupported databases fail fast
 
 `JdbcSessionRepositoryDialect.from(DataSource)` used to fall back to the PostgreSQL
 dialect for an unknown or undetectable database, which then failed at query time. It now
 throws `IllegalStateException`. For other databases, implement `JdbcSessionRepositoryDialect`
 and pass it via `JdbcSessionRepository.builder().dialect(...)`.
 
-### Breaking: JDBC auto-configuration no longer brings a connection pool
+#### Breaking: JDBC auto-configuration no longer brings a connection pool
 
 `spring-ai-autoconfigure-session-jdbc` now declares `spring-boot-jdbc` as an **optional**
 dependency, and the auto-configuration backs off when it is missing. The
@@ -83,7 +79,7 @@ directly, add the JDBC starter yourself:
 </dependency>
 ```
 
-### Breaking: JDBC keyword and branch filters match `%` and `_` literally
+#### Breaking: JDBC keyword and branch filters match `%` and `_` literally
 
 Keyword searches (`EventFilter.keyword(...)` / `keywords(...)`, `conversation_search`,
 `cross_session_search`) and branch filters used to pass `%` and `_` through to SQL `LIKE`
@@ -91,14 +87,17 @@ as wildcards, so JDBC results differed from the in-memory repository. They now m
 `%`, `_` and `!` literally on every repository. If you relied on them as JDBC wildcards,
 use `EventFilter.pattern(...)` instead.
 
-### Breaking: checklist for custom `SessionRepository` implementations
+### Custom implementers
+
+#### Breaking: checklist for custom `SessionRepository` implementations
 
 The `SessionRepository` contract was tightened. A custom implementation (for example a
 Redis repository) should:
 
-- **Implement `saveIfAbsent(Session)` atomically** (e.g. a key-guarded insert such as Redis
-  `SET … NX`). `SessionService.create` relies on it. The default implementation is a
-  non-atomic `findById` + `save`.
+- **Implement `saveIfAbsent(Session)` atomically** (e.g. a primary-key-guarded `INSERT`, or
+  Redis `SET … NX`). `SessionService.create` relies on it. The default implementation is a
+  non-atomic `findById` + `save`, so two concurrent creates of the same id could both
+  succeed.
 - **Keep the original `createdAt` in `save(...)`** for an existing session, and **return
   the stored session**, not the argument.
 - **In `appendEvent(...)`, reject an event id that belongs to another session** with
@@ -109,10 +108,13 @@ Redis repository) should:
 
 The built-in in-memory and JDBC repositories already do all of this.
 
-### Breaking: checklist for custom `JdbcSessionRepositoryDialect` implementations
+#### Breaking: checklist for custom `JdbcSessionRepositoryDialect` implementations
 
 - **`getKeywordFilterFragment()` / `getKeywordPredicateFragment()` must declare
   `ESCAPE '!'`.** The keyword parameter is now escaped with `!`.
+- **`getBranchFilterFragment()` must escape the stored branch** before using it as a `LIKE`
+  prefix, and declare `ESCAPE '!'`: `REPLACE(REPLACE(REPLACE(e.branch, '!', '!!'), '%', '!%'), '_', '!_')`.
+  Otherwise `%` and `_` in branch names act as wildcards.
 - **`getUpsertSessionSql()` must no longer update `created_at`** on an existing row; only
   `user_id`, `expires_at` and `metadata` are refreshed. The five parameters are unchanged.
 - **New `getInsertSessionIfAbsentSql()`,** used by `saveIfAbsent`. The default is a plain
@@ -126,23 +128,18 @@ The built-in PostgreSQL, MySQL/MariaDB and H2 dialects already follow these rule
 
 ### Behavior changes
 
-- **The latest stored system message wins.** A root-level `SystemMessage` stored in the
-  session used to be archived like any other event by the sliding-window, token-count and
-  recursive-summarization strategies. Now the latest stored system message is the
-  session's system prompt: every strategy keeps it active, places it first and never
-  summarizes it, and `SessionMemoryAdvisor` sends only that one. Earlier stored system
-  messages are superseded and archived when compaction runs. In multi-agent sessions the
-  rule is per branch: each agent uses the latest system message stored on its own branch,
-  compaction keeps the latest one of every branch, and system messages of any branch are
-  never summarized. The root agent's kept system message counts toward
-  `TokenCountCompactionStrategy`'s `maxTokens` and `TokenCountTrigger`'s threshold, so size
-  them with it in mind; sub-agent and superseded system messages are not counted.
-- **Tool-calling loops with a stored system message no longer duplicate history.** When
-  the session held a system message and the request carried its own system prompt, the
-  0.8.0 loop check failed from round 2 on and the whole history was sent twice.
-- **Duplicate system messages are sent once.** `SessionMemoryAdvisor` drops a system
-  message whose text exactly matches an earlier one in the prompt, e.g. a stored system
-  message that is also sent on the request.
+- **The latest stored system message wins.** Stored system messages used to be archived
+  like any other event. Now every strategy keeps the latest one per branch active, places
+  it first and never summarizes it; earlier ones are archived when compaction runs, and
+  `SessionMemoryAdvisor` sends only the latest one of its own branch. The root agent's kept
+  system message counts toward `TokenCountCompactionStrategy`'s `maxTokens` and
+  `TokenCountTrigger`'s threshold, so size them with it in mind. See
+  [the full rules](session-management/system-messages.md#compaction-the-latest-stored-system-message-wins).
+- **Stored system messages no longer cause duplicates.** In a tool-calling loop with a
+  stored system message and a request system prompt, the 0.8.0 loop check failed from
+  round 2 on and the whole history was sent twice; it no longer does. `SessionMemoryAdvisor`
+  also drops a system message whose text exactly matches an earlier one in the prompt,
+  e.g. a stored system message that is also sent on the request.
 - **`IdempotentSessionEventIdGenerator` id format.** Ids are now
   `<messageType>-<sha256>` (at most 74 characters, which fits the `VARCHAR(255)` column).
   Blank tool-call ids (e.g. from Ollama) fall back to a content hash instead of all
@@ -172,6 +169,11 @@ The built-in PostgreSQL, MySQL/MariaDB and H2 dialects already follow these rule
   throws `IllegalArgumentException` with a clear message instead of a `ClassCastException`.
 - **`TokenCountTrigger.builder()` defaults to the JTokkit estimator,** as documented. It
   used to throw unless `tokenCountEstimator(...)` was set.
+- **Stricter builder validation.** `TokenCountTrigger.builder().threshold(...)`,
+  `TokenCountCompactionStrategy.builder().maxTokens(...)` and
+  `SlidingWindowCompactionStrategy.builder().maxEvents(...)` now reject a value `<= 0`, and
+  their `tokenCountEstimator(...)` rejects `null`, when the setter is called rather than
+  at `build()`.
 
 ## Upgrading to 0.8.0
 
@@ -179,22 +181,17 @@ No breaking API or schema changes. Two things to be aware of:
 
 ### Behavior change: `SessionMemoryAdvisor` no longer duplicates history inside a tool-calling loop
 
-At default orders, `ToolCallingAdvisor` (order `HIGHEST_PRECEDENCE + 300`) wraps
-`SessionMemoryAdvisor` (order `HIGHEST_PRECEDENCE + 1000`), so the advisor's
-`before()`/`after()` run once per round of the tool-call loop. Before 0.8.0, from round 2
-onward `before()` prepended the session history again even though the prompt already
-carried this turn's messages, sending duplicate messages to the model.
+At default orders, `ToolCallingAdvisor` (`HIGHEST_PRECEDENCE + 300`) wraps
+`SessionMemoryAdvisor` (`HIGHEST_PRECEDENCE + 1000`), so the advisor runs once per round of
+the tool-call loop. Before 0.8.0, from round 2 on it prepended the session history again,
+sending duplicate messages to the model (persisted events were never duplicated). It now
+skips history that is already in the prompt, the same guard as Spring AI's
+`MessageChatMemoryAdvisor` (spring-ai GH-6211).
 
-`before()` now detects that the retrieved history is already a contiguous run in the
-prompt and skips prepending it (the same guard as Spring AI's
-`MessageChatMemoryAdvisor`, spring-ai GH-6211). Persisted events were never duplicated;
-only the prompt sent to the model was affected.
-
-**Action needed:** none. If you worked around the duplication — e.g. by calling
-`ToolCallingAdvisor`'s `.disableInternalConversationHistory()` or giving
-`SessionMemoryAdvisor` a custom order so it wraps the loop — those setups still work, but
-the workaround is no longer required at default orders. See the "Default advisor order"
-note in [ChatClient Integration](session-management/chat-client.md) for details.
+**Action needed:** none. Workarounds such as `ToolCallingAdvisor`'s
+`.disableInternalConversationHistory()` or a custom advisor order still work but are no
+longer required. See the "Default advisor order" note in
+[ChatClient Integration](chat-client/chat-client.md).
 
 ### Dependency baseline: Spring AI 2.0.1, Spring Boot 4.1.1
 
@@ -207,7 +204,7 @@ No breaking API or schema changes. New features:
 
 - **Cross-session recall.** `CrossSessionRecallTools` provides a `cross_session_search` tool
   that searches every session of one user. See
-  [Cross-Session Recall](session-management/cross-session-recall.md).
+  [Cross-Session Recall](recall-memory/cross-session-recall.md).
 - **Multi-term and pattern search.** `EventFilter` gained `keywords` + `matchMode`
   (`ANY`/`ALL`) and a `pattern` (regex) criterion. See
   [Event Filtering](session-management/event-filtering.md).
@@ -216,7 +213,7 @@ No breaking API or schema changes. New features:
   (`requestEventIdGenerator` / `responseEventIdGenerator`, e.g.
   `IdempotentSessionEventIdGenerator`). Custom `SessionRepository` implementations should
   follow the same replay contract. See
-  [Idempotent session-event ids](session-management/chat-client.md#idempotent-session-event-ids).
+  [Idempotent session-event ids](chat-client/chat-client.md#idempotent-session-event-ids).
 
 ## Upgrading to 0.6.0
 
@@ -225,9 +222,8 @@ searchable through Recall Storage (issue #21). This introduces four breaking cha
 
 ### Breaking: core module artifact renamed from `spring-ai-session-management` to `spring-ai-session`
 
-The `groupId` (`org.springaicommunity`) and Java package
-(`org.springframework.ai.session`) are unchanged — only the Maven artifact/module name
-moved:
+Only the Maven artifact changed; the `groupId` and the `org.springframework.ai.session`
+package are unchanged:
 
 ```xml
 <!-- Before (0.5.x) -->
@@ -243,10 +239,8 @@ moved:
 </dependency>
 ```
 
-No other module (`spring-ai-session-jdbc`, `spring-ai-autoconfigure-session`,
-`spring-ai-autoconfigure-session-jdbc`, `spring-ai-starter-session-jdbc`,
-`spring-ai-session-bom`) changed name. If you depend on the JDBC starter or the BOM rather
-than the core artifact directly, no change is needed.
+No other module was renamed, so if you depend on the JDBC starter or the BOM rather than
+the core artifact, no change is needed.
 
 ### Breaking: `SessionRepository.replaceEvents(...)` replaced by `compactEvents(...)`
 
@@ -298,19 +292,9 @@ See the bundled `schema-{h2,postgresql,mysql}.sql` for the full DDL per dialect.
 
 ### Breaking: `SessionMemoryAdvisor.Builder.defaultSessionId()` removed
 
-**What changed**
-
-`defaultSessionId(String)` has been removed from `SessionMemoryAdvisor.Builder`. The
-advisor no longer falls back to a shared session — `SESSION_ID_CONTEXT_KEY` is now
-**required** on every request. Omitting it throws `IllegalStateException`.
-
-**Why**
-
-A single default session ID was shared across all requests to the same advisor instance,
-silently merging conversation history from different users or threads. This is a
-correctness and security issue in any multi-user deployment.
-
-**How to migrate**
+`defaultSessionId(String)` has been removed: the shared default session silently merged
+the history of different users or threads. `SESSION_ID_CONTEXT_KEY` is now **required** on
+every request; omitting it throws `IllegalStateException`.
 
 Before (0.2.x):
 

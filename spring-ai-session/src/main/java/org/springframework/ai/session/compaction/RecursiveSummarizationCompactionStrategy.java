@@ -52,8 +52,8 @@ import org.springframework.util.Assert;
  * when it exceeds {@code maxEventsToKeep}.</li>
  * <li>Everything before the active window — plus any prior synthetic summaries — forms
  * the <em>events to summarize</em>.</li>
- * <li>An LLM call condenses them into a rolling summary, optionally including the last
- * {@code overlapSize} events from the active window for continuity.</li>
+ * <li>An LLM call condenses them into a rolling summary, optionally including the first
+ * {@code overlapSize} events of the active window for continuity.</li>
  * <li>The result is placed as a <em>synthetic summary turn</em>: a pair of synthetic
  * events [{@code USER} shadow prompt, {@code ASSISTANT} summary] after the system
  * messages and followed by the active window. This mirrors the OpenAI Agents SDK approach
@@ -66,7 +66,9 @@ import org.springframework.util.Assert;
  * starting from scratch, creating a rolling window of compressed context.
  *
  * <h3>No-op condition</h3> If the number of root (non-branch) real events does not exceed
- * {@code maxEventsToKeep} no LLM call is made and the events are returned unchanged.
+ * {@code maxEventsToKeep} no LLM call is made and the events are returned unchanged. If
+ * superseded stored system messages are present, only those are
+ * archived.
  *
  * @author Christian Tzolov
  * @since 2.0.0

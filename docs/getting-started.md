@@ -8,42 +8,6 @@
 
 ---
 
-## Quickstart (Spring Boot)
-
-The fastest way to a running app is the **JDBC starter**. Add one dependency:
-
-```xml
-<dependency>
-    <groupId>org.springaicommunity</groupId>
-    <artifactId>spring-ai-starter-session-jdbc</artifactId>
-    <version>${spring-ai-session.version}</version>
-</dependency>
-```
-
-With an embedded database (e.g. H2) on the classpath, that's it — no beans, no config.
-The starter auto-configures a `JdbcSessionRepository`, a `DefaultSessionService`, detects
-the SQL dialect, and initialises the schema. Wire the advisor into your `ChatClient` and
-pass a session ID per call:
-
-```java
-@Bean
-ChatClient chatClient(ChatModel chatModel, SessionService sessionService) {
-    SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService).build();
-    return ChatClient.builder(chatModel).defaultAdvisors(advisor).build();
-}
-
-String answer = chatClient.prompt()
-    .user("What is Spring AI?")
-    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "session-abc"))
-    .call()
-    .content();
-```
-
-For a persistent database (PostgreSQL, MySQL) or other setups, see
-[Choose a setup](#choose-a-setup) below.
-
----
-
 ## Add the BOM (recommended)
 
 Import the BOM so all module versions stay in sync:
@@ -77,7 +41,8 @@ Import the BOM so all module versions stay in sync:
     </dependency>
     ```
 
-    Spring Boot will automatically create:
+    With an embedded database (e.g. H2) on the classpath, that's it — no beans, no config.
+    Spring Boot automatically creates:
 
     - a `JdbcSessionRepository` bean backed by the auto-configured `DataSource`
     - a `DefaultSessionService` bean wrapping the repository
@@ -95,22 +60,11 @@ Import the BOM so all module versions stay in sync:
               initialize-schema: always
     ```
 
-    No additional bean declarations are required. To override the auto-configured
-    `SessionService`, declare your own `@Bean SessionService` and it will take precedence.
-
-    The default session time-to-live (used when a `CreateSessionRequest` does not set
-    its own `timeToLive`) defaults to 60 days and can be configured:
-
-    ```yaml
-    spring:
-      ai:
-        session:
-          time-to-live: 30d   # ISO-8601 / Spring duration; defaults to 60d
-    ```
-
-    Storing a `SystemMessage` in a session is disabled by default; supply system prompts
-    per request instead. See [System Messages](session-management/system-messages.md) for
-    `spring.ai.session.allow-system-messages`.
+    Declare your own `@Bean SessionService` to override the auto-configured one. See
+    [JDBC Auto-configuration](session-jdbc/auto-configuration.md#configuration-properties)
+    for all properties, including the default session time-to-live (60 days) and
+    `allow-system-messages` (system prompts are supplied per request by default; see
+    [System Messages](session-management/system-messages.md)).
 
 === "JDBC (manual)"
 
@@ -171,9 +125,8 @@ Import the BOM so all module versions stay in sync:
 
 ## Wire the ChatClient advisor
 
-`SessionMemoryAdvisor` is the recommended way to use sessions with a `ChatClient`. It
-automatically loads history before each request, appends the user and assistant messages
-after each response, and runs compaction when a trigger fires.
+`SessionMemoryAdvisor` loads history before each request, appends the user and assistant
+messages after each response, and compacts when a trigger fires.
 
 ```java
 @Bean
@@ -232,6 +185,7 @@ To use a `-SNAPSHOT` version, add the Central Portal snapshot repository:
 
 - [Session Concepts](session-management/concepts.md) — understand `Session`, `SessionEvent`, and turns
 - [Context Compaction](session-management/compaction.md) — configure triggers and strategies
+- [System Messages](session-management/system-messages.md) — supply system prompts per request, and the opt-in to store them
 - [Multi-Agent Branch Isolation](session-management/multi-agent.md) — share sessions across agents safely
 - [Session JDBC](session-jdbc/index.md) — persistent JDBC-backed repository
 - [Migration Guide](migration.md) — upgrade notes between versions

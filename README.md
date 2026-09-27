@@ -16,21 +16,6 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 - **Turn-aware compaction** — configurable triggers fire when history grows too large; pluggable strategies decide what to keep, always respecting turn boundaries
 - **Persistent repositories** — a clean SPI (`SessionRepository`) makes it trivial to swap the in-memory store for JDBC, Redis, or any other backend
 
-## Project Structure
-
-```
-spring-ai-session/
-├── spring-ai-session-bom/                               # Bill of Materials for aligning module versions
-├── spring-ai-session/                                   # Core SPI, compaction framework, SessionMemoryAdvisor
-├── spring-ai-session-jdbc/                              # JDBC-backed SessionRepository (PostgreSQL, MySQL, MariaDB, H2)
-├── auto-configurations/
-    └── session/
-        ├── spring-ai-autoconfigure-session/             # Spring Boot auto-configuration for DefaultSessionService
-        └── spring-ai-autoconfigure-session-jdbc/        # Spring Boot auto-configuration for the JDBC repository
-└── boot-starters/
-    └── spring-ai-starter-session-jdbc/                  # Spring Boot starter (JDBC session, one-dependency setup)
-```
-
 ## Modules
 
 | Module | Artifact | Description |
@@ -101,24 +86,12 @@ String answer = client.prompt()
 
 ## Documentation
 
-Full reference documentation is available at:
+Full reference documentation: **[spring-ai-community.github.io/spring-ai-session](https://spring-ai-community.github.io/spring-ai-session/)**. Good places to start:
 
-**[https://spring-ai-community.github.io/spring-ai-session/](https://spring-ai-community.github.io/spring-ai-session/)**
-
-Topics covered:
-
-- [Getting Started](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/getting-started/) — setup options (in-memory, JDBC auto-config, JDBC manual)
+- [Getting Started](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/getting-started/) — setup options (Spring Boot starter, JDBC manual, in-memory)
 - [Session Concepts](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/concepts/) — `Session`, `SessionEvent`, turns, and architecture
-- [Event Filtering](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/event-filtering/) — composable `EventFilter` API
 - [Context Compaction](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/compaction/) — triggers, strategies, turn-boundary safety
-- [Compaction Internals](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/compaction-internals/) — diagrams and worked examples of the compaction algorithms
-- [ChatClient Integration](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/chat-client/) — `SessionMemoryAdvisor` setup and options
-- [System Messages](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/system-messages/) — why system prompts are configuration, and how they are stored, ordered and compacted
-- [Multi-Agent Branch Isolation](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/multi-agent/) — sharing sessions across parallel agents
-- [Recall Storage](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/recall-storage/) — keyword search over the full verbatim history
-- [Cross-Session Recall](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/cross-session-recall/) — search across all of a user's sessions
-- [Session JDBC](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-jdbc/) — JDBC repository setup, schema, and design notes
-- [JDBC Auto-configuration](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-jdbc/auto-configuration/) — Spring Boot auto-configuration and properties
+- [ChatClient Integration](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/chat-client/chat-client/) — `SessionMemoryAdvisor` setup and options
 - [Migration Guide](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/migration/) — upgrade notes and breaking changes
 
 ## Requirements
@@ -131,29 +104,12 @@ Topics covered:
 ## Building
 
 ```bash
-./mvnw clean install
+./mvnw clean install              # add -DskipTests to skip tests
 ```
 
-To skip tests:
-
-```bash
-./mvnw clean install -DskipTests
-```
-
-## Snapshot Repository
-
-Snapshot artifacts are published to the Spring snapshot repository:
-
-```xml
-<repositories>
-    <repository>
-        <id>spring-snapshots</id>
-        <url>https://repo.spring.io/snapshot</url>
-        <snapshots><enabled>true</enabled></snapshots>
-        <releases><enabled>false</enabled></releases>
-    </repository>
-</repositories>
-```
+Snapshot artifacts are published to the Central Portal snapshot repository; see
+[Maven Repositories](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/getting-started/#maven-repositories)
+for the `<repositories>` entry.
 
 ## License
 
@@ -161,7 +117,6 @@ Apache License 2.0
 
 ## Links
 
-- [Documentation](https://spring-ai-community.github.io/spring-ai-session/)
 - [Issue Tracker](https://github.com/spring-ai-community/spring-ai-session/issues)
 - [Spring AI Documentation](https://docs.spring.io/spring-ai/reference/)
 - [Spring AI Community](https://github.com/spring-ai-community)

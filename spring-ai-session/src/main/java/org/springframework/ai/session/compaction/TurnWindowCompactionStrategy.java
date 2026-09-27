@@ -53,7 +53,9 @@ import org.springframework.util.Assert;
  *
  * <h3>No-op condition</h3>
  * <p>
- * If the session has fewer turns than {@code maxTurns}, no events are removed.
+ * If the session has at most {@code maxTurns} turns, no real events are removed. If
+ * superseded stored system messages are present, only those are
+ * archived.
  *
  * @author Christian Tzolov
  * @since 2.0.0
@@ -81,7 +83,8 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 
 		List<SessionEvent> events = request.events();
 
-		// 1. Separate synthetic summary events — always preserved, always first
+		// 1. Separate the kept system messages (latest per branch), superseded ones, synthetic
+		// summary events and the real events
 		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
 		List<SessionEvent> supersededSystem = CompactionUtils.supersededSystemEvents(events, pinnedSystem);
 		List<SessionEvent> synthetic = events.stream().filter(SessionEvent::isSynthetic).toList();

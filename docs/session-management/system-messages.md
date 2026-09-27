@@ -19,8 +19,9 @@ rather than as part of the conversation, and which part of the work belongs to w
   system message unless you enable `allowSystemMessages`. If you do enable it, **the latest
   stored system message wins**: it is the session's system prompt, and earlier ones are
   superseded and archived by compaction.
-- **The integration** puts system messages first, drops exact duplicates, and avoids
-  re-sending history inside a tool loop. `SessionMemoryAdvisor` does this for `ChatClient`.
+- **The integration** uses only the latest stored system message of the agent's own
+  branch, puts system messages first, drops exact duplicates, and avoids re-sending
+  history inside a tool loop. `SessionMemoryAdvisor` does this for `ChatClient`.
   Any other integration must do it itself.
 
 ---
@@ -92,33 +93,28 @@ flowchart LR
 These rules hold for every integration, because they are implemented by `SessionService`,
 the repositories and the compaction strategies.
 
-### It stores only what you append
+### It stores only what you append, and no system messages by default
 
-The library never creates or injects a system message. The event log contains exactly
-the messages your integration passes to `appendEvent` / `appendMessage`.
+The library never creates or injects a system message: the event log contains exactly
+the messages your integration passes to `appendEvent` / `appendMessage`. By default,
+`DefaultSessionService` also rejects any event that wraps a `SystemMessage` with an
+`IllegalArgumentException` whose message explains the alternatives. This catches a common
+mistake in custom integrations: appending the whole prompt, system prompt included, on
+every turn, which duplicates the system prompt in every request and grows the log.
 
-### Storing system messages is disabled by default
-
-`DefaultSessionService` rejects any event that wraps a `SystemMessage` with an
-`IllegalArgumentException`. The message explains how to supply the prompt per request
-instead, and how to enable storing. This catches a common mistake in custom integrations:
-appending the whole prompt, system prompt included, on every turn. That mistake duplicates
-the system prompt in every request and grows the log.
-
-`SessionMemoryAdvisor` never stores system messages, so the default does not affect the
-`ChatClient` integration. Existing stored events can still be read, and compaction is not
-affected. The rule is enforced by `DefaultSessionService`; a custom `SessionService`
-implementation, or direct `SessionRepository` access, is not checked.
-
-To store system messages anyway, see
+`SessionMemoryAdvisor` never stores system messages, so the default does not affect
+`ChatClient`. Already stored events can still be read and compacted. Only
+`DefaultSessionService` enforces the rule; a custom `SessionService` or direct
+`SessionRepository` access is not checked. To store system messages anyway, see
 [When storing a system message is acceptable](#when-storing-a-system-message-is-acceptable).
 
 ### It returns history in log order
 
 `getActiveMessages(sessionId)` and `getEvents(sessionId, EventFilter.active())` return
 the active window (archived events excluded) in the order the events were stored.
-**System messages are not moved to the front and not deduplicated**; that is left to the
-integration. `EventFilter.messageTypes(...)` can include or exclude `SYSTEM` events when
+**Reads don't move system messages to the front or deduplicate them**; that is left to
+the integration. (Compaction does place the kept system messages first in the active
+window.) `EventFilter.messageTypes(...)` can include or exclude `SYSTEM` events when
 you load history.
 
 ### Compaction: the latest stored system message wins
@@ -136,7 +132,7 @@ combining several instructions into it is the integration's responsibility. Ever
   sub-agent;
 - earlier ones are **superseded**: archived whenever compaction runs (even when the
   budget needs no cut), never summarized, and still searchable through
-  [Recall Storage](recall-storage.md).
+  [Recall Storage](../recall-memory/recall-storage.md).
 
 At most one stored system message per branch is ever active, so an integration that
 stores one per turn cannot grow the active window.
@@ -159,7 +155,7 @@ Whatever builds the prompt sent to the model owns these steps:
 2. **Load only the active history**: `getActiveMessages(...)` or
    `getEvents(..., EventFilter.active())`.
 3. **Use only the latest stored system message of your agent's own branch** (`null` for
-   the root agent) from the loaded history. Earlier ones are superseded (they may still be
+   the root agent, whose filter has no branch) from the loaded history. Earlier ones are superseded (they may still be
    active until the next compaction), and other branches' system messages configure other
    agents. Put system messages first: many models reject or ignore a system message that
    is not at the start.
@@ -174,19 +170,12 @@ Whatever builds the prompt sent to the model owns these steps:
 
 ### With ChatClient: `SessionMemoryAdvisor`
 
-`SessionMemoryAdvisor` implements all of these steps for `ChatClient`:
-
-- the system prompt comes from `defaultSystem` / `.system` on every request, and the
-  advisor never persists it;
-- of the stored system messages it sends only the latest one on its own branch (the
-  branch of its `EventFilter`, `null` for the root agent), moves every `SystemMessage` to
-  the front (stored one first, then the request's), and sends an exact duplicate only
-  once;
-- when it runs once per tool-call round (see [Default advisor order](chat-client.md)), it
-  leaves system messages out of its "already in the prompt" check, so stored history is not
-  re-sent;
-- it persists only the user (or tool-response) message and the model's reply, and runs
-  compaction when configured.
+`SessionMemoryAdvisor` implements all of these steps for `ChatClient`. The system prompt
+comes from `defaultSystem` / `.system` and is never persisted. Of the stored system
+messages, the advisor sends only the latest one of its own `EventFilter` branch; it puts
+every `SystemMessage` first (stored one, then the request's) and sends exact duplicates
+once. Inside a tool loop (see [Setup](../chat-client/chat-client.md#setup)) its "already in the prompt"
+check ignores system messages, so stored history is not re-sent.
 
 ```mermaid
 flowchart TB
@@ -194,7 +183,8 @@ flowchart TB
     LOG[("Session event log")] -->|"active history"| H["History"]
     UM["Current user message"]
     SP --> C["Combine history + prompt"]
-    H --> C
+    H --> SEL["Keep only the latest stored system<br/>message of the agent's own branch"]
+    SEL --> C
     UM --> C
     C --> F["Move all system messages to the front,<br/>drop exact duplicates"]
     F --> LLM["Model"]
@@ -204,14 +194,14 @@ flowchart TB
 
 ```java
 ChatClient chatClient = ChatClient.builder(chatModel)
-    .defaultSystem("You are a helpful travel assistant. Answer concisely.")
+    .defaultSystem("You are a helpful travel assistant. Answer concisely in {language}.")
     .defaultAdvisors(SessionMemoryAdvisor.builder(sessionService).build())
     .build();
 
-// Session setup rendered from Session.metadata on each request
+// Session setup rendered from Session.metadata on each request. Pass only the parameter:
+// a per-request .system(s -> s.text(...)) would replace the default system text.
 String answer = chatClient.prompt()
-    .system(s -> s.text("Answer in {language}.")
-        .param("language", session.metadata().get("language")))
+    .system(s -> s.param("language", session.metadata().get("language")))
     .user(question)
     .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, session.id()))
     .call()
@@ -231,20 +221,26 @@ String sessionId = session.id();
 SystemMessage systemPrompt = new SystemMessage(
         "You are a helpful travel assistant. Answer in " + session.metadata().get("language") + ".");
 
-// 2. Active history, in log order
-List<Message> history = sessionService.getActiveMessages(sessionId);
+// 2. Active history, in log order. Load events rather than getActiveMessages(...):
+//    choosing the stored system message needs each event's branch.
+List<SessionEvent> events = sessionService.getEvents(sessionId, EventFilter.active());
 
-// 3 + 4. Latest stored system message (if any) and the request's, first;
-//        exact duplicates dropped
-Optional<Message> storedPrompt = history.stream()
-    .filter(SystemMessage.class::isInstance)
+// 3 + 4. The latest stored system message of this (root) agent, if any, and the
+//        request's, first. Other branches' system messages are skipped, and exact
+//        duplicates are dropped.
+Optional<Message> storedPrompt = events.stream()
+    .filter(e -> e.isRootEvent() && !e.isSynthetic() && e.getMessageType() == MessageType.SYSTEM)
+    .map(SessionEvent::getMessage)
     .reduce((earlier, later) -> later);
 Set<String> seen = new HashSet<>();
 List<Message> input = new ArrayList<>();
 Stream.concat(storedPrompt.stream(), Stream.of(systemPrompt))
     .filter(m -> seen.add(m.getText()))
     .forEach(input::add);
-history.stream().filter(m -> !(m instanceof SystemMessage)).forEach(input::add);
+events.stream()
+    .filter(e -> e.getMessageType() != MessageType.SYSTEM)
+    .map(SessionEvent::getMessage)
+    .forEach(input::add);
 
 UserMessage userMessage = new UserMessage(question);
 input.add(userMessage);
@@ -267,18 +263,12 @@ and don't reload and prepend the stored history on every round (step 6).
 
 ## Best practice
 
-**Keep system messages out of the session.** Configuration then always comes from code, a
-change reaches every existing session on its next request, and there is nothing stored
-that can go stale, get duplicated, or be compacted away. This holds for any integration:
-
-- **Agent configuration:** build the system prompt in code on every request.
-- **Session setup:** keep it in `Session.metadata` and render it into the system prompt
-  on every request.
-- **Time-bound instruction:** if it only matters for the current request, send it with
-  that request and don't store it.
-
-The examples above show both styles: the `ChatClient` one sets the system prompt with
-`defaultSystem` / `.system`, and the custom loop builds it in code.
+**Keep system messages out of the session**, as both examples above do. Configuration
+then always comes from code, a change reaches every existing session on its next request,
+and nothing stored can go stale, get duplicated, or be compacted away. Build agent
+configuration in code, render session setup from `Session.metadata`, and send a
+time-bound instruction that matters only for this turn with the request (see
+[Three kinds of instruction](#three-kinds-of-instruction)).
 
 ### When storing a system message is acceptable
 
@@ -321,20 +311,17 @@ sessionService.appendMessage(session.id(), new SystemMessage("Answer in German."
 
 Keep in mind the trade-offs:
 
-- A stored system message doesn't change when your code changes. You have to store a new
-  one to update it.
-- Only the latest stored system message is used, so it must contain every instruction
-  you want in effect. A new one replaces the previous one; it doesn't add to it.
-- Its tokens are sent on every request. The root agent's counts toward
+- It doesn't change when your code changes; you must store a new, complete one.
+- Its tokens are sent on every request, and the root agent's count toward
   `TokenCountCompactionStrategy`'s budget.
-- Your integration still has to use only the latest one, put it first and drop duplicates.
-  `SessionMemoryAdvisor` does this; a custom loop must do it itself (steps 3 and 4 above).
+- A custom loop must still pick the latest one, put it first and drop duplicates
+  (steps 3 and 4 above).
 
 ---
 
 ## See also
 
-- [ChatClient Integration](chat-client.md): what `SessionMemoryAdvisor` does on each
+- [ChatClient Integration](../chat-client/chat-client.md): what `SessionMemoryAdvisor` does on each
   request
 - [Context Compaction](compaction.md): strategies and turn-boundary safety
 - [Session Concepts](concepts.md): sessions, events and the event log

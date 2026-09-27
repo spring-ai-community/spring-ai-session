@@ -87,10 +87,6 @@ chatClient.prompt()
     .content();
 ```
 
-This ensures the advisor only injects events visible to `orch.researcher` into the
-prompt — root events and its own events — while sibling events from `orch.writer` remain
-hidden.
-
 ---
 
 ## Visibility rules
@@ -108,44 +104,52 @@ hidden.
 The dot-separator check (`filterBranch.startsWith(eventBranch + ".")`) ensures that a
 branch named `"orch"` is never confused with one named `"orchestra"`.
 
----
+### Visibility flows down, not up
 
-## Synthetic events and branch
+An agent sees its ancestors' events, never its descendants'. An orchestrator reading
+with `EventFilter.forBranch("orch")` sees the root events and its own `"orch"` events,
+but none of the work its sub-agents record on `"orch.researcher"` or `"orch.writer"`. It
+learns their results the way it delegated, typically as the tool response it stores on
+its own branch.
 
-Synthetic summary events produced by `RecursiveSummarizationCompactionStrategy` always
-have `branch = null`. This ensures compaction summaries remain visible to every agent in
-the session after context has been pruned, regardless of which branch was active when
-compaction ran.
+The exception is a reader **without** a branch filter. `EventFilter.all()`, the default of
+`SessionMemoryAdvisor`, applies no branch restriction at all, so it sees **every** event
+of **every** branch. There is no "root events only" filter: `forBranch(null)` is the same
+as no filter.
+
+| Reader's filter | Sees root (`null`) events | Sees ancestor branches | Sees own branch | Sees sub-agent and sibling branches |
+|---|---|---|---|---|
+| `EventFilter.all()` (no branch) | yes | — | — | **yes, all of them** |
+| `EventFilter.forBranch("orch")` | yes | — | yes | no |
+| `EventFilter.forBranch("orch.researcher")` | yes | yes (`"orch"`) | yes | no |
+
+So if the top-level agent keeps the default filter while sub-agents write to the same
+session, its prompt history includes the sub-agents' internal messages. To keep it
+isolated, give the top-level agent a branch too (as `"orch"` above), so that it becomes
+an ordinary node of the tree. System messages are the one exception: an agent without a
+branch uses only root-level system messages (see
+[System messages and branches](#system-messages-and-branches)).
 
 ---
 
 ## Compaction and branches
 
-Compaction strategies are branch-aware. When computing the cut point, `snapToTurnStart`
-only considers root-level (`branch == null`) `USER` events as valid turn boundaries.
-Branched `UserMessage` events represent prompts sent *to* a sub-agent and are
-turn-internal — snapping to one would split the root turn that contains the sub-agent
-exchange.
-
-See [Turn-boundary Safety](compaction.md#turn-boundary-safety) in the compaction reference
-for the full explanation and event-log diagram.
+Synthetic summary events always have `branch = null`, so summaries stay visible to every
+agent. Compaction only cuts at root-level (`branch == null`) `USER` events: a branched
+`UserMessage` is a prompt sent *to* a sub-agent inside a root turn (see
+[Turn-boundary Safety](compaction.md#turn-boundary-safety)).
 
 ---
 
 ## System messages and branches
 
-System messages are configuration, and they are scoped by branch like everything else. If
-your application stores system messages (an opt-in, see
-[System Messages](system-messages.md)):
-
-- **Each agent uses its own.** An agent's system prompt is the latest system message stored
-  on its own branch: `branch == null` for the root agent, `branch == "orch.researcher"` for
-  that sub-agent. `SessionMemoryAdvisor` never sends another branch's system message, so a
-  sub-agent's instructions cannot leak into the orchestrator's prompt, and the
-  orchestrator's instructions are not added to a sub-agent's prompt.
-- **Compaction.** The latest system message of every branch is kept, placed first and never
-  summarized, so a sub-agent delegated to again in a later turn still has its system
-  prompt. Earlier system messages of the same branch are superseded and archived.
+If your application stores system messages (an opt-in), they are scoped by branch: an
+agent's system prompt is the latest one stored on the branch of its advisor's
+`EventFilter` (`null` for the root agent, whose default `EventFilter.all()` has no
+branch). `SessionMemoryAdvisor` never sends another branch's system message, and
+compaction keeps the latest one of every branch, but only the root agent's counts toward
+the token budget. See
+[System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins).
 
 ```java
 // The researcher's own instructions, stored on its branch
@@ -160,7 +164,7 @@ service.appendEvent(SessionEvent.builder()
 
 ## Recall search and branches
 
-`conversation_search` (see [Recall Storage](recall-storage.md)) searches the whole session
+`conversation_search` (see [Recall Storage](../recall-memory/recall-storage.md)) searches the whole session
 by default, including peer sub-agents' events. To keep a sub-agent's recall inside its
 own view of the session, build its tool instance with the agent's branch:
 

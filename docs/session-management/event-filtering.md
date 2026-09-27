@@ -1,14 +1,11 @@
 # Event Filtering
 
 `EventFilter` controls which events are returned by `SessionService.getEvents()`. All
-non-null conditions must match for an event to be included. Criteria are composable via
-the builder.
+non-null conditions must match for an event to be included.
 
 ---
 
 ## Static factory shortcuts
-
-For the most common cases, `EventFilter` exposes static factories:
 
 ```java
 // All events (default — no filtering applied)
@@ -50,7 +47,7 @@ service.getEvents(id, EventFilter.forBranch("orch.researcher"));
     exhibit catastrophic backtracking (ReDoS) when evaluated against attacker-influenced
     message text. Only pass patterns compiled from a fixed or developer-authored
     expression. This is exactly why no `@Tool`-annotated method in this library accepts a
-    raw regex string — see [Cross-Session Recall](cross-session-recall.md), which
+    raw regex string — see [Cross-Session Recall](../recall-memory/cross-session-recall.md), which
     deliberately exposes only plain-substring `keywords`/`matchMode` search instead.
 
 ---
@@ -73,9 +70,8 @@ EventFilter filter = EventFilter.builder()
     .build();
 ```
 
-`keyword`, `keywords`, and `pattern` are independent criteria that all compose with
-AND-together semantics in `matches()` — set more than one and an event must satisfy every
-one of them, not just one. In practice, callers set exactly one of the three.
+`keyword`, `keywords` and `pattern` are independent criteria combined with AND: set more
+than one and an event must satisfy all of them. In practice, callers set exactly one.
 
 ---
 
@@ -107,14 +103,11 @@ The compact constructor enforces these rules at construction time:
   `IllegalArgumentException`.
 - **Setting `page` without `pageSize`** throws `IllegalArgumentException`.
 - **Setting `pageSize` without `page`** is allowed — `page` defaults to `0` (first page).
-- **`keyword`** is normalised on construction: blank or empty strings become `null`;
-  non-null values are lowercased for case-insensitive matching.
-- **`keywords`** is normalised on construction the same way, term by term: `null`/blank
-  entries are dropped and survivors are lowercased. An empty or all-blank list normalises
-  to `null` (equivalent to no multi-term filter).
-- **`matchMode`** defaults to `ANY` when `keywords` is set and `matchMode` is left `null`.
-  If `keywords` is `null`, `matchMode` is forced to `null` too — even if you set one
-  explicitly — since it has nothing to apply to.
+- **`keyword` and `keywords`** are normalised: blank values (or list entries) are dropped
+  and the rest lowercased. A blank `keyword`, or an empty or all-blank `keywords` list,
+  becomes `null` (no filter).
+- **`matchMode`** defaults to `ANY` when `keywords` is set. If `keywords` is `null`,
+  `matchMode` is forced to `null` too, even if you set one.
 - **`messageTypes`** is normalised on construction: an empty set becomes `null`
   (equivalent to no type filter).
 
@@ -124,12 +117,10 @@ The compact constructor enforces these rules at construction time:
 
 `EventFilter.merge(other)` merges two filters: every non-null field from `other` replaces
 the corresponding field from `this`; the two boolean flags, `excludeSynthetic` and
-`excludeArchived`, are OR-ed so either side can opt in. This is used by
-`SessionMemoryAdvisor` to combine the advisor-level default filter with an optional
-per-request override — and, unconditionally, to force `excludeArchived = true` onto every
-history read via `EventFilter.active()` so the prompt never sees compacted-out events
-regardless of the configured or per-request filter (see
-[ChatClient Integration → What the advisor does](chat-client.md#what-the-advisor-does)):
+`excludeArchived`, are OR-ed so either side can opt in. `SessionMemoryAdvisor` uses it to
+combine its default filter with a
+[per-request override](../chat-client/chat-client.md#per-request-filter-override), and always merges in
+`EventFilter.active()` so the prompt never sees archived events:
 
 ```java
 EventFilter advisorDefault = EventFilter.lastN(50);
@@ -150,9 +141,6 @@ EventFilter merged = EventFilter.lastN(20).merge(EventFilter.keywordSearch("spri
 // merged.lastN() == null, merged.page() == 1, merged.pageSize() == 5
 ```
 
-See [ChatClient Integration → Per-request filter override](chat-client.md#per-request-filter-override)
-for how this is used in practice.
-
 ---
 
 ## Write-side filtering
@@ -160,4 +148,4 @@ for how this is used in practice.
 `EventFilter` is a **read-side** filter: events it excludes remain in storage — they are
 only hidden from the retrieved history. To control which messages get **persisted** in
 the first place, use `MessageFilter` on the `SessionMemoryAdvisor` builder. See
-[ChatClient Integration → Filtering what gets persisted](chat-client.md#filtering-what-gets-persisted-messagefilter).
+[ChatClient Integration → Filtering what gets persisted](../chat-client/chat-client.md#filtering-what-gets-persisted-messagefilter).

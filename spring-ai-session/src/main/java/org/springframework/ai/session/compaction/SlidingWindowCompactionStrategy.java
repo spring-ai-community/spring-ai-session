@@ -47,8 +47,9 @@ import org.springframework.util.Assert;
  *
  * <h3>No-op condition</h3>
  * <p>
- * If the number of real events does not exceed the available slots no events are archived
- * and the session is returned unchanged.
+ * If the number of real events does not exceed the available slots no real events are
+ * archived and the session is returned unchanged. If superseded stored system messages are present, only those are
+ * archived.
  *
  * @author Christian Tzolov
  * @since 2.0.0

@@ -32,13 +32,14 @@ import org.springframework.util.Assert;
  *
  * <h3>Algorithm</h3>
  * <ol>
- * <li>Separate the latest stored system message of each branch (that agent's system prompt — earlier stored system
- * messages are superseded and archived; see {@code CompactionUtils#pinnedSystemEvents}) and synthetic
- * summary events — they are always preserved and placed first in the result. Their token
- * cost of the root agent's system message and of the summaries is deducted from the budget
- * before real events are considered, so a large system prompt or prior compaction summary
- * reduces the space available for real events. Sub-agent system messages are kept but not
- * deducted, because they are only sent to their own sub-agent.</li>
+ * <li>Separate the latest stored system message of each branch (that agent's system
+ * prompt; earlier stored system messages are superseded and archived, see
+ * {@code CompactionUtils#pinnedSystemEvents}) and the synthetic summary events. They are
+ * always preserved and placed first in the result. The token cost of the root agent's
+ * system message and of the summaries is deducted from the budget before real events are
+ * considered, so a large system prompt or prior compaction summary reduces the space
+ * available for real events. Sub-agent system messages are kept but not deducted, because
+ * they are only sent to their own sub-agent.</li>
  * <li>Walk real events from newest to oldest, accumulating cost until the budget is
  * exhausted. Stops at the first event that would exceed the remaining budget, producing a
  * contiguous kept window (a suffix of the real-event list). Skipping oversize events and
@@ -51,8 +52,9 @@ import org.springframework.util.Assert;
  *
  * <h3>No-op condition</h3>
  * <p>
- * If all real events fit within the token budget no events are archived and the session
- * is returned unchanged.
+ * If all real events fit within the token budget no real events are archived and the
+ * session is returned unchanged. If superseded stored system messages are present, only those are
+ * archived.
  *
  * @author Christian Tzolov
  * @since 2.0.0

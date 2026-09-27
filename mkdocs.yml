@@ -37,8 +37,9 @@ theme:
     - content.tabs.link
 
 nav:
-  - Home: index.md
-  - Getting Started: getting-started.md
+  - Home:
+      - index.md
+      - Getting Started: getting-started.md
   - Session Management:
       - Session Concepts: session-management/concepts.md
       - Event Filtering: session-management/event-filtering.md
@@ -46,12 +47,14 @@ nav:
       - Compaction Internals: session-management/compaction-internals.md
       - System Messages: session-management/system-messages.md
       - Multi-Agent Branch Isolation: session-management/multi-agent.md
-      - Recall Storage: session-management/recall-storage.md
-      - Cross-Session Recall: session-management/cross-session-recall.md
-      - ChatClient Integration: session-management/chat-client.md
+  - Recall Memory:
+      - Recall Storage: recall-memory/recall-storage.md
+      - Cross-Session Recall: recall-memory/cross-session-recall.md
   - Session JDBC:
       - Overview & Setup: session-jdbc/index.md
       - Auto-configuration: session-jdbc/auto-configuration.md
+  - ChatClient:
+      - ChatClient Integration: chat-client/chat-client.md
   - Migration Guide: migration.md
 
 markdown_extensions:
