@@ -1172,10 +1172,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#custom-implementers-sessionrepositorycompactevents-keeps-the-log-order" class="md-nav__link">
+  <a href="#custom-implementers-the-sessionrepository-contract" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Custom implementers: SessionRepository.compactEvents keeps the log order
+        Custom implementers: the SessionRepository contract
       
     </span>
   </a>
@@ -1187,17 +1187,6 @@
     <span class="md-ellipsis">
       
         Custom implementers: CompactionStrategy results must be in log order
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#custom-implementers-sessionrepositorydeleteexpiredsessionsinstant" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom implementers: SessionRepository.deleteExpiredSessions(Instant)
       
     </span>
   </a>
@@ -1611,10 +1600,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#custom-implementers-sessionrepositorycompactevents-keeps-the-log-order" class="md-nav__link">
+  <a href="#custom-implementers-the-sessionrepository-contract" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Custom implementers: SessionRepository.compactEvents keeps the log order
+        Custom implementers: the SessionRepository contract
       
     </span>
   </a>
@@ -1626,17 +1615,6 @@
     <span class="md-ellipsis">
       
         Custom implementers: CompactionStrategy results must be in log order
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#custom-implementers-sessionrepositorydeleteexpiredsessionsinstant" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom implementers: SessionRepository.deleteExpiredSessions(Instant)
       
     </span>
   </a>
@@ -2013,6 +1991,17 @@ compaction settings, and pass only the task in and the result back. See
 <a href="../session-management/multi-agent/#session-per-sub-agent">Multi-Agent</a> for an example.</p>
 <h3 id="behavior-changes">Behavior changes<a class="headerlink" href="#behavior-changes" title="Permanent link">&para;</a></h3>
 <ul>
+<li><strong><code>CompactionResult.eventsRemoved()</code> is renamed to <code>archivedEventCount()</code>.</strong> The events it
+  counts are archived, not removed. No deprecated alias.</li>
+<li><strong>Compaction never deletes.</strong> A synthetic summary that a newer recursive summary replaces
+  used to be removed from the log; it is now archived in place like the events it
+  summarized, and <code>RecursiveSummarizationCompactionStrategy</code> lists it in
+  <code>archivedEvents</code> (so <code>archivedEventCount()</code> includes it). Nothing leaves the log except
+  through <code>delete</code> or <code>deleteExpiredSessions</code>.</li>
+<li><strong>Recall tools skip synthetic events.</strong> <code>conversation_search</code> (<code>SessionEventTools</code>) and
+  <code>CrossSessionRecallTools</code> exclude synthetic summaries from their results, since a
+  summary only paraphrases real events that are still in the log. Build your own
+  <code>EventFilter</code> to search summaries.</li>
 <li><strong>Every <code>USER</code> event starts a turn.</strong> Turn counting (<code>TurnCountTrigger</code>) and every
   strategy's turn boundaries now use all non-synthetic <code>USER</code> events, and the event-count
   strategies (<code>maxEvents</code>, <code>maxEventsToKeep</code>) count all real events. Events that were
@@ -2032,9 +2021,13 @@ compaction settings, and pass only the task in and the result back. See
 <li><strong><code>RecursiveSummarizationCompactionStrategy</code>:</strong> when the summarizer returns a blank
   summary, superseded stored system messages are still archived, and
   <code>tokensEstimatedSaved</code> is now net of the new summary turn's tokens.</li>
-<li><strong><code>compactEvents</code> validates new events:</strong> a new event in <code>retainedEvents</code> that belongs to
-  another session is rejected with <code>IllegalArgumentException</code> (in-memory and JDBC), and
-  <code>InMemorySessionRepository</code> now also rejects archived events that are not in the log.</li>
+<li><strong>Compaction validates its inputs:</strong> a new event in a strategy result that belongs to
+  another session is rejected with <code>IllegalArgumentException</code> when the plan is built, and
+  both built-in repositories reject a plan that archives an id not in the log.</li>
+<li><strong><code>SessionService.findEventsByUserId(userId, filter)</code></strong> returns the matching events of
+  every session of a user, sorted by timestamp across sessions and windowed by the
+  filter's <code>lastN</code> or page. <code>cross_session_search</code> now runs one such query per page
+  instead of one query per session plus in-memory paging.</li>
 <li><strong>Compaction never reorders the log.</strong> A kept system message stays where it was stored
   instead of moving to the front of the active window, and archived events stay where they
   were. <code>getEvents(...)</code> therefore returns events in the order they were appended, plus
@@ -2053,19 +2046,47 @@ stays in the bundled schema scripts so existing databases keep working, and it w
 removed from them in a later release. You can drop it yourself:</p>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">AI_SESSION_EVENT</span><span class="w"> </span><span class="k">DROP</span><span class="w"> </span><span class="k">COLUMN</span><span class="w"> </span><span class="n">branch</span><span class="p">;</span>
 </span></code></pre></div>
-<h3 id="custom-implementers-sessionrepositorycompactevents-keeps-the-log-order">Custom implementers: <code>SessionRepository.compactEvents</code> keeps the log order<a class="headerlink" href="#custom-implementers-sessionrepositorycompactevents-keeps-the-log-order" title="Permanent link">&para;</a></h3>
-<p><code>compactEvents(sessionId, archivedEvents, retainedEvents, expectedVersion)</code> must no longer
-rebuild the log as "archived events, then retained events". Instead:</p>
+<h3 id="custom-implementers-the-sessionrepository-contract">Custom implementers: the <code>SessionRepository</code> contract<a class="headerlink" href="#custom-implementers-the-sessionrepository-contract" title="Permanent link">&para;</a></h3>
+<p>The repository contract changed so that a backend owns <em>selection</em> (filtering, paging,
+searching) and core owns <em>interpretation</em> (what a compaction means). A custom repository
+(Redis, MongoDB, …) must be updated:</p>
 <ul>
-<li>mark <code>archivedEvents</code> archived <strong>in place</strong>;</li>
-<li>keep every other existing event where it is, and remove active events that appear in
-  neither list (e.g. a superseded summary);</li>
-<li>insert each <strong>new</strong> event of <code>retainedEvents</code> immediately before the next existing event
-  that follows it in <code>retainedEvents</code>, or append it when none follows.</li>
+<li><strong><code>compactEvents(sessionId, archivedEvents, retainedEvents, expectedVersion)</code> is
+  removed.</strong> Implement
+  <code>applyCompaction(String sessionId, CompactionPlan plan, long expectedVersion)</code> instead.
+  The service computes the plan from the active log and the strategy result; the
+  repository only applies it, under the same compare-and-swap on <code>expectedVersion</code>:<ul>
+<li>flag every id in <code>plan.archiveIds()</code> archived <strong>in place</strong> (reject an unknown id
+  with <code>IllegalArgumentException</code> and change nothing);</li>
+<li>insert each <code>plan.inserts()</code> group immediately before its <code>beforeEventId</code> anchor,
+  or at the end of the log when the anchor is <code>null</code>;</li>
+<li>never move or remove an existing event.</li>
 </ul>
-<p>The built-in in-memory and JDBC repositories do this. With JDBC-style ordering by an
-insert sequence, only the part of the log from the insertion point onward needs to be
-re-inserted.</p>
+</li>
+</ul>
+<p><code>CompactionPlan.applyTo(List&lt;SessionEvent&gt; log)</code> is the reference implementation for a
+  log held as a list; a list-based store can call it directly.
+- <strong><code>saveIfAbsent(Session)</code> and <code>deleteExpiredSessions(Instant)</code> are abstract.</strong> Their
+  non-atomic defaults are gone: implement <code>saveIfAbsent</code> with an atomic insert-if-absent
+  (a primary-key-guarded <code>INSERT</code>, a compare-and-set put) and <code>deleteExpiredSessions</code>
+  with one guarded delete (<code>DELETE … WHERE expires_at &lt; ?</code>), so a session whose TTL was
+  extended concurrently is kept.
+- <strong><code>findExpiredSessionIds(Instant)</code> is removed.</strong> It had no caller left.
+- <strong>New <code>findEventsByUserId(userId, filter)</code></strong> backs <code>cross_session_search</code>. The default
+  runs the filter over each of the user's sessions and windows the union in memory; a
+  store that can join sessions and events should override it with one sorted, paged
+  query.
+- <strong><code>findEvents</code> must push the filter down.</strong> <code>excludeArchived</code>, <code>excludeSynthetic</code>,
+  <code>messageTypes</code>, the time range, <code>lastN</code>, <code>page</code>/<code>pageSize</code> and, where the store can,
+  the keywords belong in the query; a <code>lastN</code> or a page must not read the whole log. Use
+  <code>EventFilter.apply(List&lt;SessionEvent&gt;)</code> only for what the store cannot express (a
+  <code>pattern</code>, typically). Stores that keep messages as columns or fields should use
+  <code>SessionEventCodec</code> (package <code>org.springframework.ai.session.support</code>) so every backend
+  stores the same shape.
+- <strong>Run the contract tests.</strong> Add <code>org.springaicommunity:spring-ai-session-test</code> in test
+  scope, subclass <code>AbstractSessionRepositoryContractTests</code> and implement
+  <code>createRepository()</code>. It is the suite the built-in repositories run; see
+  <a href="../session-management/concepts/#implementing-a-sessionrepository">Implementing a <code>SessionRepository</code></a>.</p>
 <h3 id="custom-implementers-compactionstrategy-results-must-be-in-log-order">Custom implementers: <code>CompactionStrategy</code> results must be in log order<a class="headerlink" href="#custom-implementers-compactionstrategy-results-must-be-in-log-order" title="Permanent link">&para;</a></h3>
 <p><code>CompactionResult.compactedEvents()</code> is the new active window <strong>in log order</strong>: every
 event that is not archived keeps its position, and a new event (such as a summary turn)
@@ -2074,13 +2095,6 @@ position of new events. Existing events are kept as they are stored, so returnin
 modified copy of an existing event (same id, e.g. with a truncated tool result) or a
 different order for existing events no longer has any effect. To change an event's
 content, archive it and add a new event instead.</p>
-<h3 id="custom-implementers-sessionrepositorydeleteexpiredsessionsinstant">Custom implementers: <code>SessionRepository.deleteExpiredSessions(Instant)</code><a class="headerlink" href="#custom-implementers-sessionrepositorydeleteexpiredsessionsinstant" title="Permanent link">&para;</a></h3>
-<p><code>SessionService.deleteExpiredSessions</code> now delegates to a new <code>SessionRepository</code> method,
-<code>deleteExpiredSessions(Instant before)</code>. Its default implementation keeps the previous
-behavior (<code>findExpiredSessionIds</code>, then <code>delete</code> for each), which can delete a session
-whose TTL was extended in between. Override it to check the expiry and delete in one
-atomic step, as the built-in repositories do (JDBC: a single
-<code>DELETE … WHERE expires_at &lt; ?</code>).</p>
 <h3 id="custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed">Custom implementers: <code>JdbcSessionRepositoryDialect.getBranchFilterFragment()</code> removed<a class="headerlink" href="#custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed" title="Permanent link">&para;</a></h3>
 <p>The method is gone from the dialect contract. A custom dialect that overrides it no longer
 compiles because of its <code>@Override</code>; delete the method.</p>
@@ -2183,7 +2197,9 @@ Redis repository) should:</p>
   <code>IllegalStateException</code>. A duplicate id in the <em>same</em> session is still an idempotent
   no-op.</li>
 <li><strong>In <code>compactEvents(...)</code>, reject <code>archivedEvents</code> that are not in the session's log</strong>
-  (the whole call should have no effect). Otherwise a mistaken caller can lose events.</li>
+  (the whole call should have no effect). Otherwise a mistaken caller can lose events.
+  (<code>compactEvents</code> was replaced by <code>applyCompaction</code> in 0.10.0; see
+  <a href="#upgrading-to-0100">Upgrading to 0.10.0</a>.)</li>
 </ul>
 <p>The built-in in-memory and JDBC repositories already do all of this.</p>
 <h4 id="breaking-checklist-for-custom-jdbcsessionrepositorydialect-implementations">Breaking: checklist for custom <code>JdbcSessionRepositoryDialect</code> implementations<a class="headerlink" href="#breaking-checklist-for-custom-jdbcsessionrepositorydialect-implementations" title="Permanent link">&para;</a></h4>

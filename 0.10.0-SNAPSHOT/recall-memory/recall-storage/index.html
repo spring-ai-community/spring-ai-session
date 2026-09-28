@@ -1363,10 +1363,11 @@ not search.</p>
 <p>When nothing matches: <code>"No results found."</code> is returned.</p>
 <hr />
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
-<p>The tool calls <code>SessionService.getEvents(sessionId, EventFilter.keywordSearch(query, page, pageSize))</code>:
+<p>The tool searches with a keyword <code>EventFilter</code> (page and page size from the tool call):
 a case-insensitive substring match on each event's <code>message.getText()</code>, applied before
 pagination. Synthetic summary events produced by <code>RecursiveSummarizationCompactionStrategy</code>
-are searched too.</p>
+are left out, because a summary only paraphrases real events that are still in the log.
+Use <code>SessionService.getEvents</code> with your own <code>EventFilter</code> to search summaries.</p>
 <div class="admonition note">
 <p class="admonition-title">Multi-agent sessions</p>
 <p>With a <a href="../../session-management/multi-agent/#session-per-sub-agent">session per sub-agent</a>,

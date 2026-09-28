@@ -810,10 +810,60 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#5-sequence-jdbc-compactevents-and-a-concurrent-append" class="md-nav__link">
+  <a href="#5-compactionplan-from-result-to-write" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5. Sequence: JDBC compactEvents and a concurrent append
+        5. CompactionPlan: from result to write
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. CompactionPlan: from result to write">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#5a-deriving-the-plan-compactionplanofsessionid-activeevents-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5a. Deriving the plan: CompactionPlan.of(sessionId, activeEvents, result)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5b-applying-the-plan-compactionplanapplytolog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5b. Applying the plan: CompactionPlan.applyTo(log)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5c-worked-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5c. Worked example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-sequence-jdbc-applycompaction-and-a-concurrent-append" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Sequence: JDBC applyCompaction and a concurrent append
       
     </span>
   </a>
@@ -821,10 +871,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#6-worked-examples-of-the-tricky-cases" class="md-nav__link">
+  <a href="#7-worked-examples-of-the-tricky-cases" class="md-nav__link">
     <span class="md-ellipsis">
       
-        6. Worked examples of the tricky cases
+        7. Worked examples of the tricky cases
       
     </span>
   </a>
@@ -1367,10 +1417,60 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#5-sequence-jdbc-compactevents-and-a-concurrent-append" class="md-nav__link">
+  <a href="#5-compactionplan-from-result-to-write" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5. Sequence: JDBC compactEvents and a concurrent append
+        5. CompactionPlan: from result to write
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. CompactionPlan: from result to write">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#5a-deriving-the-plan-compactionplanofsessionid-activeevents-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5a. Deriving the plan: CompactionPlan.of(sessionId, activeEvents, result)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5b-applying-the-plan-compactionplanapplytolog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5b. Applying the plan: CompactionPlan.applyTo(log)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5c-worked-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5c. Worked example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-sequence-jdbc-applycompaction-and-a-concurrent-append" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Sequence: JDBC applyCompaction and a concurrent append
       
     </span>
   </a>
@@ -1378,10 +1478,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#6-worked-examples-of-the-tricky-cases" class="md-nav__link">
+  <a href="#7-worked-examples-of-the-tricky-cases" class="md-nav__link">
     <span class="md-ellipsis">
       
-        6. Worked examples of the tricky cases
+        7. Worked examples of the tricky cases
       
     </span>
   </a>
@@ -1427,15 +1527,19 @@
 
 <h1 id="compaction-internals">Compaction Internals<a class="headerlink" href="#compaction-internals" title="Permanent link">&para;</a></h1>
 <p>This page explains <strong>how</strong> compaction works: the CAS write, turn snapping, recursive
-summarization, stored system messages and concurrent JDBC appends, with diagrams and
-worked examples. For <strong>using</strong> compaction, see <a href="../compaction/">Context Compaction</a>.</p>
+summarization, stored system messages, the <code>CompactionPlan</code> the repository applies and
+concurrent JDBC appends, with diagrams and worked examples. For <strong>using</strong> compaction, see <a href="../compaction/">Context Compaction</a>.</p>
+<p>One word is used precisely throughout: an event is <strong>archived</strong> when compaction flags it
+and it stays in the log (searchable through Recall Storage). Compaction never deletes an
+event; only deleting or expiring the whole session does.</p>
 <div class="admonition note">
 <p class="admonition-title">Implementation details</p>
 <p>This page describes the current implementation. Package-private helpers such as
 <code>CompactionUtils</code> and the exact SQL used by <code>JdbcSessionRepository</code> are not public API
 and may change between releases. The public contract is <code>CompactionTrigger</code>,
 <code>CompactionStrategy</code>, <code>CompactionRequest</code>, <code>CompactionResult</code>,
-<code>SessionService.compact(...)</code> and <code>SessionRepository.compactEvents(...)</code>.</p>
+<code>SessionService.compact(...)</code>, <code>CompactionPlan</code> and
+<code>SessionRepository.applyCompaction(...)</code>.</p>
 </div>
 <hr />
 <h2 id="1-class-diagrams">1. Class diagrams<a class="headerlink" href="#1-class-diagrams" title="Permanent link">&para;</a></h2>
@@ -1455,7 +1559,7 @@ connects them. Any caller can invoke it: <code>SessionMemoryAdvisor</code>, or y
         &lt;&lt;interface&gt;&gt;
         +getEventVersion(id) long
         +findEvents(id, filter) List
-        +compactEvents(id, archived, retained, version) boolean
+        +applyCompaction(id, plan, version) boolean
     }
     class InMemorySessionRepository
     class JdbcSessionRepository
@@ -1481,6 +1585,13 @@ connects them. Any caller can invoke it: <code>SessionMemoryAdvisor</code>, or y
         archivedEvents
         tokensEstimatedSaved
     }
+    class CompactionPlan {
+        &lt;&lt;record&gt;&gt;
+        archiveIds
+        inserts
+        +of(sessionId, activeEvents, result)$ CompactionPlan
+        +applyTo(log) List
+    }
 
     SessionService &lt;|.. DefaultSessionService
     DefaultSessionService --&gt; SessionRepository : version, active events, CAS write
@@ -1488,8 +1599,10 @@ connects them. Any caller can invoke it: <code>SessionMemoryAdvisor</code>, or y
     SessionRepository &lt;|.. JdbcSessionRepository
     DefaultSessionService --&gt; CompactionTrigger : 1. shouldCompact
     DefaultSessionService --&gt; CompactionStrategy : 2. compact
+    DefaultSessionService ..&gt; CompactionPlan : 3. of(result)
     CompactionTrigger ..&gt; CompactionRequest
-    CompactionStrategy ..&gt; CompactionResult</code></pre>
+    CompactionStrategy ..&gt; CompactionResult
+    SessionRepository ..&gt; CompactionPlan : applyCompaction</code></pre>
 <ul>
 <li><strong>Triggers are cheap; strategies can be expensive.</strong> The service always runs the trigger
   first, and only calls the strategy when it fires. That matters most for
@@ -1498,9 +1611,11 @@ connects them. Any caller can invoke it: <code>SessionMemoryAdvisor</code>, or y
   events) and return a <code>CompactionResult</code>. They never touch the repository; the service
   writes the result.</li>
 <li><strong><code>CompactionResult</code> has two lists.</strong> <code>compactedEvents</code> is the new active window.
-  <code>archivedEvents</code> are the events to mark archived: they stay in the log and remain
-  searchable through Recall Storage. An event in neither list is deleted; the only such
-  events are superseded synthetic summaries.</li>
+  <code>archivedEvents</code> are the events to archive: they stay in the log and remain searchable
+  through Recall Storage. Every active event not in <code>compactedEvents</code> is archived, whether
+  or not the strategy listed it.</li>
+<li><strong>The service turns the result into a <code>CompactionPlan</code>.</strong> The repository applies the
+  plan without interpreting the result. §5 explains how the plan is derived and applied.</li>
 </ul>
 <h3 id="1b-triggers">1b. Triggers<a class="headerlink" href="#1b-triggers" title="Permanent link">&para;</a></h3>
 <pre class="mermaid"><code>classDiagram
@@ -1656,10 +1771,11 @@ including the two "nothing happens" paths and the lost-race path.</p>
         Trg--&gt;&gt;Svc: true
         Svc-&gt;&gt;Str: compact(request)
         Str--&gt;&gt;Svc: CompactionResult(compacted, archived, tokens)
-        alt nothing archived
+        Svc-&gt;&gt;Svc: plan = CompactionPlan.of(sessionId, events, result)&lt;br/&gt;(archive ids, inserts keyed by anchor)
+        alt plan is empty
             Svc--&gt;&gt;Adv: result (no repository write)
-        else events archived
-            Svc-&gt;&gt;Repo: compactEvents(sessionId, archived, compacted, v)
+        else plan has operations
+            Svc-&gt;&gt;Repo: applyCompaction(sessionId, plan, v)
             alt version still v (CAS succeeds)
                 Repo--&gt;&gt;Svc: true
                 Svc--&gt;&gt;Adv: result
@@ -1680,7 +1796,8 @@ version, so the write is rejected. The service never writes a result computed fr
 that are newer than the version it checks.</p>
 <hr />
 <h2 id="3-activity-how-a-strategy-chooses-what-to-archive">3. Activity: how a strategy chooses what to archive<a class="headerlink" href="#3-activity-how-a-strategy-chooses-what-to-archive" title="Permanent link">&para;</a></h2>
-<p>All four strategies share this pipeline. They differ in step 3, how the raw cut is
+<p>All four strategies share this pipeline; its output is the <code>CompactionResult</code> that the
+service turns into a <code>CompactionPlan</code> (see §2). They differ in step 3, how the raw cut is
 computed, and in two more places:</p>
 <ul>
 <li><code>TokenCountCompactionStrategy</code> has no step 2 shortcut: it always walks the events and
@@ -1709,10 +1826,10 @@ computed, and in two more places:</p>
     snap --&gt; end1{"cut == real.size()?&lt;br/&gt;(no later turn start)"}
     end1 -- no --&gt; cut
     end1 -- yes --&gt; retain["5. retainLastTurn: move the cut BACK to the&lt;br/&gt;last USER event, so the newest turn is kept&lt;br/&gt;even if it exceeds the budget (no USER at all:&lt;br/&gt;cut = 0, nothing is archived)"]
-    retain --&gt; cut["kept = real[cut..]&lt;br/&gt;removed = real[..cut)"]
-    cut --&gt; empty{"removed empty?&lt;br/&gt;(whole history is one turn)"}
+    retain --&gt; cut["kept = real[cut..]&lt;br/&gt;toArchive = real[..cut)"]
+    cut --&gt; empty{"toArchive empty?&lt;br/&gt;(whole history is one turn)"}
     empty -- yes --&gt; noop
-    empty -- no --&gt; r2(["6. Result: every other event, in log order&lt;br/&gt;archived = removed + superseded (log order)"])</code></pre>
+    empty -- no --&gt; r2(["6. Result: every other event, in log order&lt;br/&gt;archived = toArchive + superseded (log order)"])</code></pre>
 <p><strong>Invariants the pipeline guarantees:</strong></p>
 <ul>
 <li><strong>The kept window always starts at a <code>USER</code> event,</strong> apart from
@@ -1753,7 +1870,7 @@ and has to keep system messages out of the summary.</p>
             R--&gt;&gt;Caller: unchangedExceptSuperseded (no LLM call)
         else something to summarize
             R-&gt;&gt;R: overlap = first overlapSize events of activeWindow
-            R-&gt;&gt;R: drop every SYSTEM event from toArchive and overlap&lt;br/&gt;(system messages are never summarized)
+            R-&gt;&gt;R: leave every SYSTEM event out of the summarization input&lt;br/&gt;(system messages are never summarized)
             R-&gt;&gt;R: prompt = PRIOR SUMMARY (text of prior synthetic ASSISTANT events)&lt;br/&gt;+ CONVERSATION TO SUMMARIZE + UPCOMING CONTEXT (overlap)
             R-&gt;&gt;LLM: prompt().system(systemPrompt).user(prompt).call().content()
             alt blank or null summary
@@ -1763,11 +1880,11 @@ and has to keep system messages out of the summary.</p>
             else summary text
                 LLM--&gt;&gt;R: summary
                 R-&gt;&gt;R: summaryTurn = [USER shadowPrompt, ASSISTANT summary]&lt;br/&gt;(both synthetic, same timestamp)
-                R-&gt;&gt;U: archiving(events, toArchive, superseded, tokens)
+                R-&gt;&gt;U: archiving(events, toArchive,&lt;br/&gt;superseded + prior summaries, tokens)
                 U--&gt;&gt;R: remaining events (log order), archived
-                R-&gt;&gt;R: compacted = remaining minus prior summaries,&lt;br/&gt;with summaryTurn inserted before activeWindow[0]
+                R-&gt;&gt;R: compacted = remaining,&lt;br/&gt;with summaryTurn inserted before activeWindow[0]
                 R--&gt;&gt;Caller: CompactionResult(compacted, archived, tokens)
-                Note over R,Caller: prior summaries are in neither list,&lt;br/&gt;so the repository deletes them:&lt;br/&gt;the new summary already contains them
+                Note over R,Caller: the prior summaries are archived in place:&lt;br/&gt;the new summary carries their content forward
             end
         end
     end
@@ -1777,7 +1894,7 @@ and has to keep system messages out of the summary.</p>
     end</code></pre>
 <p><strong>What makes it "recursive".</strong> Each pass feeds the previous summary's text back to the
 LLM as <code>=== PRIOR SUMMARY ===</code>. The new summary therefore builds on the old one, and the
-old synthetic events are dropped rather than archived. The resulting active window holds
+old synthetic events are archived in place like the events they summarized. The resulting active window holds
 the latest stored system message (if any, where it was stored), one summary turn right
 before the kept conversation, and the recent real events, all in log order.</p>
 <p><strong>Why the summary is a user + assistant pair.</strong> Many providers require the messages after
@@ -1785,13 +1902,84 @@ the system prompt to alternate user and assistant. The shadow-prompt user messag
 the assistant summary, followed by a kept window that starts with a user message, keep
 that alternation valid; a lone assistant summary would not.</p>
 <hr />
-<h2 id="5-sequence-jdbc-compactevents-and-a-concurrent-append">5. Sequence: JDBC <code>compactEvents</code> and a concurrent append<a class="headerlink" href="#5-sequence-jdbc-compactevents-and-a-concurrent-append" title="Permanent link">&para;</a></h2>
+<h2 id="5-compactionplan-from-result-to-write">5. CompactionPlan: from result to write<a class="headerlink" href="#5-compactionplan-from-result-to-write" title="Permanent link">&para;</a></h2>
+<p>A strategy answers one question: what should the active window look like now? A
+repository needs a different one: which rows do I touch? <code>CompactionPlan</code> is the
+translation between the two. <code>DefaultSessionService</code> derives it from the active log the
+strategy saw and the strategy's result, and passes it to <code>applyCompaction</code> (§2, step 3).
+The plan has two parts:</p>
+<ul>
+<li><code>archiveIds</code>: the existing events to flag archived, in place;</li>
+<li><code>inserts</code>: groups of new events, each with the id of the existing event it goes in
+  front of (<code>Insert.before</code>), or with no anchor when it goes at the end (<code>Insert.atEnd</code>).</li>
+</ul>
+<p>Nothing else is expressible: an existing event can only stay or be archived, never move or
+disappear.</p>
+<h3 id="5a-deriving-the-plan-compactionplanofsessionid-activeevents-result">5a. Deriving the plan: <code>CompactionPlan.of(sessionId, activeEvents, result)</code><a class="headerlink" href="#5a-deriving-the-plan-compactionplanofsessionid-activeevents-result" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart LR
+    subgraph existing["1. Every active event"]
+        direction TB
+        e1{"in the result's&lt;br/&gt;compactedEvents?"}
+        e1 -- yes --&gt; e2["untouched"]
+        e1 -- no --&gt; e3["archiveIds"]
+    end
+    subgraph fresh["2. Every run of result events&lt;br/&gt;that are not in the active log"]
+        direction TB
+        n1{"does an existing event&lt;br/&gt;follow the run in the result?"}
+        n1 -- yes --&gt; n2["Insert.before(that event)"]
+        n1 -- no --&gt; n3["Insert.atEnd"]
+    end
+    existing ~~~ fresh</code></pre>
+<ul>
+<li><strong>Archive everything the result does not keep.</strong> This includes what the strategy listed
+  in <code>archivedEvents</code> and anything else it left out, such as the summary a recursive pass
+  replaces. The two are the same set for the built-in strategies; the rule just does not
+  depend on it.</li>
+<li><strong>New events are anchored on what follows them.</strong> Compaction never reorders the log, and
+  since #56 the log order is the prompt order, so a new summary turn has to be <em>placed</em>,
+  not appended. The result already says where: the first existing event after it. A run of
+  new events at the very end of the result has nothing to anchor on and is appended.</li>
+<li><strong>New events must belong to the session.</strong> A result that contains an event of another
+  session is rejected with <code>IllegalArgumentException</code> before anything is written.</li>
+</ul>
+<h3 id="5b-applying-the-plan-compactionplanapplytolog">5b. Applying the plan: <code>CompactionPlan.applyTo(log)</code><a class="headerlink" href="#5b-applying-the-plan-compactionplanapplytolog" title="Permanent link">&para;</a></h3>
+<p>The reference implementation walks the log once. <code>InMemorySessionRepository</code> calls it
+directly; <code>JdbcSessionRepository</code> implements the same rules in SQL (§6).</p>
+<pre class="mermaid"><code>flowchart TD
+    v["validate: every archive id and every anchor id is in the log,&lt;br/&gt;otherwise IllegalArgumentException and nothing changes"]
+    v --&gt; each([for each event in the log, oldest first])
+    each --&gt; g{"an insert group is&lt;br/&gt;anchored on this event?"}
+    g -- yes --&gt; emit["emit the group's events"] --&gt; a
+    g -- no --&gt; a{"id in archiveIds?"}
+    a -- yes --&gt; flag["emit event.asArchived()"] --&gt; more
+    a -- no --&gt; keep["emit the event unchanged"] --&gt; more
+    more{"more events?"} -- yes --&gt; each
+    more -- no --&gt; tail["emit the anchor-less groups"]</code></pre>
+<h3 id="5c-worked-example">5c. Worked example<a class="headerlink" href="#5c-worked-example" title="Permanent link">&para;</a></h3>
+<p>A recursive pass with <code>maxEventsToKeep = 2</code> on a log that already holds a summary
+(<code>Σold</code>) from an earlier pass, in front of the turns that were appended after it. <code>*</code>
+marks the archived flag.</p>
+<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>active log      Σold  U1  A1  U2  A2  U3  A3
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>result          compactedEvents = [Σnew U3 A3]    archivedEvents = [Σold U1 A1 U2 A2]
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>plan            archiveIds = {Σold U1 A1 U2 A2}   active, not in compactedEvents
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>                inserts    = [Σnew before U3]     new, followed by the existing U3
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>applyTo         Σold* U1* A1* U2* A2* Σnew U3 A3
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>active view                          Σnew U3 A3
+</span></code></pre></div>
+<p>Every existing event keeps its position. <code>Σold</code> stays where it was, flagged, so the log
+still shows what the model was told before this pass and Recall Storage can still find it.
+The new turn lands in front of <code>U3</code> because that is where the prompt needs it; an
+append-only write would have put the summary <em>after</em> the events it summarizes.</p>
+<hr />
+<h2 id="6-sequence-jdbc-applycompaction-and-a-concurrent-append">6. Sequence: JDBC <code>applyCompaction</code> and a concurrent append<a class="headerlink" href="#6-sequence-jdbc-applycompaction-and-a-concurrent-append" title="Permanent link">&para;</a></h2>
 <p>On JDBC the CAS is a row-level lock on the session row. Both writers take that lock
 <em>before</em> touching events. An append must also lock the row before it inserts; otherwise
 its event could be ordered before the part of the log that compaction re-inserts.</p>
 <pre class="mermaid"><code>sequenceDiagram
     autonumber
-    participant C as compactEvents (tx 1)
+    participant C as applyCompaction (tx 1)
     participant DB as Database
     participant A as appendEvent (tx 2)
 
@@ -1800,16 +1988,19 @@ its event could be ordered before the part of the log that compaction re-inserts
     Note over DB: row lock held by tx 1
     A-&gt;&gt;DB: UPDATE AI_SESSION SET event_version = event_version + 1 WHERE id = ?
     Note over A,DB: blocks: the row is locked by tx 1
-    C-&gt;&gt;DB: UPDATE AI_SESSION_EVENT SET archived = true&lt;br/&gt;WHERE id = ? AND session_id = ? (batch, one per archived event)
-    alt any update count == 0 (event not in this session's log)
+    C-&gt;&gt;DB: UPDATE AI_SESSION_EVENT SET archived = true&lt;br/&gt;WHERE id = ? AND session_id = ? (batch, one per plan.archiveIds)
+    alt any update count == 0 (id not in this session's log)
         C-&gt;&gt;DB: ROLLBACK, releasing the row lock
         Note over C: IllegalArgumentException, nothing changed
     else all archived
-        C-&gt;&gt;DB: DELETE active events in neither list&lt;br/&gt;(e.g. the previous summary)
-        opt new events (a summary turn)
-            C-&gt;&gt;DB: DELETE FROM AI_SESSION_EVENT&lt;br/&gt;WHERE session_id = ? AND seq &gt;= seq(first kept event after the summary)
-            C-&gt;&gt;DB: INSERT summary turn + that tail (batch, new seq values)
-            Note over C,DB: new events with no existing event after them&lt;br/&gt;are simply appended, with no DELETE
+        opt insert groups with an anchor (a summary turn)
+            C-&gt;&gt;DB: SELECT seq of each anchor event
+            C-&gt;&gt;DB: DELETE FROM AI_SESSION_EVENT&lt;br/&gt;WHERE session_id = ? AND seq &gt;= smallest anchor seq
+            C-&gt;&gt;DB: INSERT that tail again with each group&lt;br/&gt;placed before its anchor (batch, new seq values)
+            Note over C,DB: the tail rows are moved, not deleted:&lt;br/&gt;every event, archived flag included, is re-inserted
+        end
+        opt insert group without an anchor
+            C-&gt;&gt;DB: INSERT the group at the end (batch, no DELETE)
         end
         C-&gt;&gt;DB: COMMIT, releasing the row lock
         Note over C: returns true
@@ -1823,15 +2014,14 @@ its event could be ordered before the part of the log that compaction re-inserts
   <code>seq</code>, so it is ordered after every compacted event. It also bumps the version again,
   and the next compaction sees the new event.</li>
 <li><strong>Append locks first:</strong> compaction's CAS <code>UPDATE</code> waits. When the append commits, the
-  version is <code>v + 1</code>, the CAS matches 0 rows, and <code>compactEvents</code> returns <code>false</code>. The
+  version is <code>v + 1</code>, the CAS matches 0 rows, and <code>applyCompaction</code> returns <code>false</code>. The
   service skips silently, and the next turn compacts from fresh events.</li>
 </ul>
 <p><strong>In-memory equivalent:</strong> <code>InMemorySessionRepository</code> does the same inside a single
-<code>ConcurrentHashMap.compute</code>. It checks the version, walks the log in order (flagging
-archived events in place, dropping events in neither list, inserting new events before
-the retained event that follows them), and bumps the version.</p>
+<code>ConcurrentHashMap.compute</code>. It checks the version, calls <code>CompactionPlan.applyTo(log)</code>
+(§5b), and bumps the version.</p>
 <hr />
-<h2 id="6-worked-examples-of-the-tricky-cases">6. Worked examples of the tricky cases<a class="headerlink" href="#6-worked-examples-of-the-tricky-cases" title="Permanent link">&para;</a></h2>
+<h2 id="7-worked-examples-of-the-tricky-cases">7. Worked examples of the tricky cases<a class="headerlink" href="#7-worked-examples-of-the-tricky-cases" title="Permanent link">&para;</a></h2>
 <p>Each example gives the active events before compaction and the resulting
 <code>compactedEvents</code> / <code>archivedEvents</code>. <code>S:</code> is a stored system message, <code>U</code>/<code>A</code> are user
 and assistant messages, and <code>Σ</code> is the synthetic summary turn.</p>
@@ -1901,7 +2091,7 @@ and assistant messages, and <code>Σ</code> is the synthetic summary turn.</p>
 <td><code>Σold U1 A1 U2 A2 U3 A3</code></td>
 <td>Recursive, <code>maxEventsToKeep = 2</code>, <code>overlapSize = 1</code></td>
 <td><code>Σnew U3 A3</code></td>
-<td><code>U1 A1 U2 A2</code> (<code>Σold</code> deleted)</td>
+<td><code>Σold U1 A1 U2 A2</code></td>
 </tr>
 </tbody>
 </table>
@@ -1911,7 +2101,7 @@ and assistant messages, and <code>Σ</code> is the synthetic summary turn.</p>
    archived whole instead of being split.</li>
 <li>The raw cut lands inside the last turn, and snapping forward finds no later turn.
    <code>retainLastTurn</code> keeps turn 2 even though it exceeds <code>maxEvents</code>.</li>
-<li>Snapping and retaining leave nothing to remove, so the pass is a no-op.</li>
+<li>Snapping and retaining leave nothing to archive, so the pass is a no-op.</li>
 <li>The budget needs no cut, but the superseded <code>S:v1</code> is still archived. <code>S:v2</code> stays
    where it was stored; the advisor puts it first in the prompt.</li>
 <li>The system prompt was stored in turn 1. Turn 1 is archived, but the latest stored
@@ -1920,8 +2110,8 @@ and assistant messages, and <code>Σ</code> is the synthetic summary turn.</p>
    turn fits, so the older turn is archived. Without the system prompt both turns (42)
    would fit in 45.</li>
 <li>The LLM receives <code>Σold</code>'s text as the prior summary plus <code>U1 A1 U2 A2</code> (and the overlap
-   <code>U3</code>). <code>Σold</code> ends up in neither list, so the repository deletes it; its content lives
-   on in <code>Σnew</code>.</li>
+   <code>U3</code>). <code>Σold</code> is archived in place like the turns it summarized; its content lives on
+   in <code>Σnew</code>. §5c shows the same case as a plan.</li>
 </ol>
 <hr />
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>

@@ -1335,9 +1335,11 @@ columns: <code>message_type</code> (enum name), <code>message_content</code> (pl
 (JSON for tool calls and tool responses). This avoids Jackson polymorphism on Spring AI
 message types.</p>
 <p><strong>Optimistic concurrency</strong> — the <code>event_version</code> column on <code>AI_SESSION</code> is incremented on
-every <code>appendEvent</code> and <code>compactEvents</code> call. <code>compactEvents</code> claims the version slot with
-<code>UPDATE … WHERE event_version = ?</code> before modifying the event log, so concurrent
-compactions cannot both succeed.</p>
+every <code>appendEvent</code> that appends a new event and every successful <code>applyCompaction</code> call.
+<code>applyCompaction</code> claims the version slot with <code>UPDATE … WHERE event_version = ?</code> before
+modifying the event log, so concurrent compactions cannot both succeed.</p>
+<p><strong>Cross-session search</strong> — <code>findEventsByUserId</code> is one query that joins <code>AI_SESSION</code> and
+<code>AI_SESSION_EVENT</code>, filters, sorts by timestamp and applies the page in the database.</p>
 <p><strong><code>synthetic</code> column</strong> — stored as a dedicated <code>BOOLEAN</code> column (not only in the metadata
 JSON blob) so <code>EventFilter.excludeSynthetic()</code> translates to a SQL predicate instead of
 an in-process scan.</p>

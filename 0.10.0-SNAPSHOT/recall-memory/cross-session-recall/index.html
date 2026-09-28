@@ -1429,16 +1429,16 @@ array:</p>
 <h2 id="design-notes">Design notes<a class="headerlink" href="#design-notes" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Read-only.</strong> <code>CrossSessionRecallTools</code> has no append/compact/delete capability — it can
-  only call <code>SessionService.findByUserId(...)</code> and <code>SessionService.getEvents(...)</code>.</li>
-<li><strong>Aggregation happens client-side.</strong> Each matching session is queried individually via
-  <code>SessionService.getEvents(sessionId, filter)</code>, and the results are merged and sorted by
-  the events' <code>Instant</code> timestamps (not their string renderings, which don't always sort
-  chronologically).</li>
-<li><strong>No per-session pagination pushdown.</strong> Each session's full matching event set is
-  fetched before pagination is applied to the aggregate — cost scales with a user's total
-  historical event count across all sessions, not just the page size requested. Fine for
-  typical usage; worth keeping in mind for a user with a very large number of long-lived
-  sessions.</li>
+  only call <code>SessionService.findEventsByUserId(...)</code>.</li>
+<li><strong>One query per page.</strong> Each call runs a single <code>findEventsByUserId(userId, filter)</code>
+  with the page in the filter. The JDBC repository answers it with one query that joins
+  sessions and events, sorts by timestamp and applies the page in the database; the
+  in-memory repository sorts and windows the union in memory. A custom repository gets
+  the in-memory behaviour from the default method and should override it with a pushed
+  down query.</li>
+<li><strong>Synthetic summaries are skipped.</strong> The filter sets <code>excludeSynthetic(true)</code>: a
+  summary only paraphrases real events that are still in the log, archived or not, so
+  searching it too would return the same facts twice.</li>
 <li><strong>No regex.</strong> Only plain-substring <code>keywords</code>/<code>matchMode</code> search is exposed, never a
   raw regex string a model could supply; see the
   <a href="../../session-management/event-filtering/#static-factory-shortcuts">ReDoS warning</a>.</li>

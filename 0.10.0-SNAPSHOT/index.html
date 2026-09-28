@@ -1243,6 +1243,11 @@ how the main types fit together.</p>
 <td>Spring Boot starter — one dependency for a fully wired JDBC session setup</td>
 </tr>
 <tr>
+<td><strong>Session Test</strong></td>
+<td><code>spring-ai-session-test</code></td>
+<td><code>AbstractSessionRepositoryContractTests</code>: the repository contract tests, for custom backends</td>
+</tr>
+<tr>
 <td><strong>Session BOM</strong></td>
 <td><code>spring-ai-session-bom</code></td>
 <td>Bill of Materials for managing all module versions together</td>
@@ -1252,8 +1257,8 @@ how the main types fit together.</p>
 <hr />
 <h2 id="key-features">Key Features<a class="headerlink" href="#key-features" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Full history kept</strong> — compaction archives events in place instead of deleting them
-  (only superseded summaries are replaced), so the full history stays searchable</li>
+<li><strong>Full history kept</strong> — compaction archives events in place and never deletes them, so
+  the full history stays searchable</li>
 <li><strong>Composable event filtering</strong> — by message type, time range, single or multi-term
   keyword (<code>ANY</code>/<code>ALL</code>), regular expression, last-N, or pagination</li>
 <li><strong>Four compaction strategies</strong> out of the box:<ul>
@@ -1264,8 +1269,8 @@ how the main types fit together.</p>
 </ul>
 </li>
 <li><strong>Two compaction triggers</strong> — turn count and token count (composable with OR semantics)</li>
-<li><strong>Optimistic concurrency</strong> — compare-and-swap <code>compactEvents</code> makes compaction safe under
-  concurrent requests without locking</li>
+<li><strong>Optimistic concurrency</strong> — compare-and-swap <code>applyCompaction</code> makes compaction safe
+  under concurrent requests without locking</li>
 <li><strong>Multi-agent</strong> — give each sub-agent its own session, with its own memory and
   compaction; see <a href="session-management/multi-agent/">Multi-Agent</a></li>
 <li><strong>Recall storage tools</strong> — <code>conversation_search</code> keyword-searches the current session's
