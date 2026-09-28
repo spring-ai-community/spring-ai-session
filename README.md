@@ -38,7 +38,7 @@ Most AI frameworks store conversation history as a flat list of messages. That w
         <dependency>
             <groupId>org.springaicommunity</groupId>
             <artifactId>spring-ai-session-bom</artifactId>
-            <version>0.9.0</version>
+            <version>0.10.0</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
