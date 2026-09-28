@@ -161,6 +161,17 @@ public final class SessionEvent {
 	}
 
 	/**
+	 * Returns {@code true} if this event starts a turn: a {@link MessageType#USER} event.
+	 * A turn is a user message plus everything up to the next user message (assistant
+	 * replies, tool calls and their results), so it is the unit no read or compaction
+	 * cut may split. A synthetic shadow prompt is a USER event too, so a summary turn
+	 * starts at its shadow prompt and is never separated from its summary.
+	 */
+	public boolean isTurnStart() {
+		return getMessageType() == MessageType.USER;
+	}
+
+	/**
 	 * Returns {@code true} for assistant messages that include tool invocations.
 	 * Delegates to {@link AssistantMessage#hasToolCalls()} — no separate event type
 	 * needed.

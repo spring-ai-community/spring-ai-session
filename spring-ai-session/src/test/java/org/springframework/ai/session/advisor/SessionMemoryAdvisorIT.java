@@ -20,6 +20,7 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -233,19 +234,21 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void beforePrependsHistoryWhenPromptOnlyMatchesItsText() {
 		// The loop check compares messages by content, not equals(): a prompt message with
-		// the same text but a different tool call is not the stored history.
+		// the same text but a different tool call is not the stored history. Both tool
+		// calls are answered, so the tool-call guard leaves them alone.
 		this.sessionService.appendMessage(this.sessionId, new UserMessage("What is the weather?"));
 		this.sessionService.appendMessage(this.sessionId, AssistantMessage.builder()
 			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"city\":\"Paris\"}")))
 			.build());
+		this.sessionService.appendMessage(this.sessionId, toolResponse("call-1"));
 		AssistantMessage otherToolCall = AssistantMessage.builder()
 			.toolCalls(List.of(new AssistantMessage.ToolCall("call-2", "function", "get_weather", "{\"city\":\"Rome\"}")))
 			.build();
 
 		List<Message> instructions = beforeWithPrompt(new UserMessage("What is the weather?"), otherToolCall,
-				new UserMessage("And tomorrow?"));
+				toolResponse("call-2"), new UserMessage("And tomorrow?"));
 
-		assertThat(instructions).hasSize(5);
+		assertThat(instructions).hasSize(7);
 		assertThat(((AssistantMessage) instructions.get(1)).getToolCalls()).extracting(AssistantMessage.ToolCall::id)
 			.containsExactly("call-1");
 	}
@@ -902,6 +905,191 @@ class SessionMemoryAdvisorIT {
 	}
 
 	// --- Helpers ---
+
+	// --- Tool-call integrity ---
+
+	@Test
+	void lastNWindowNeverSplitsAToolCallFromItsResult() {
+		// #44: a lastN window that landed on the tool result used to send an assistant
+		// tool call without the tool message answering it, which providers reject.
+		storeToolTurn(this.sessionId, "Weather in Paris?", "call-1", "Sunny.");
+		SessionMemoryAdvisor windowed = SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.lastN(2))
+			.build();
+
+		ChatClientRequest modified = windowed.before(buildRequest(this.sessionId, "And tomorrow?"),
+				mock(AdvisorChain.class));
+
+		assertThat(describe(modified.prompt().getInstructions())).containsExactly("Weather in Paris?",
+				"call:call-1", "result:call-1", "Sunny.", "And tomorrow?");
+	}
+
+	@Test
+	void messageTypesFilterHidingToolResultsDropsTheStrandedToolCall() {
+		storeToolTurn(this.sessionId, "Weather in Paris?", "call-1", "Sunny.");
+		SessionMemoryAdvisor noToolMessages = SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.builder().messageTypes(Set.of(MessageType.USER, MessageType.ASSISTANT)).build())
+			.build();
+
+		ChatClientRequest modified = noToolMessages.before(buildRequest(this.sessionId, "And tomorrow?"),
+				mock(AdvisorChain.class));
+
+		assertThat(describe(modified.prompt().getInstructions())).containsExactly("Weather in Paris?", "Sunny.",
+				"And tomorrow?");
+	}
+
+	@Test
+	void aToolCallLeftByAnInterruptedTurnIsDroppedFromThePrompt() {
+		// The process died between the tool call and its result
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("Weather in Paris?"));
+		this.sessionService.appendMessage(this.sessionId, toolCall("call-1"));
+
+		ChatClientRequest modified = this.advisor.before(buildRequest(this.sessionId, "Are you there?"),
+				mock(AdvisorChain.class));
+
+		assertThat(describe(modified.prompt().getInstructions())).containsExactly("Weather in Paris?",
+				"Are you there?");
+	}
+
+	@Test
+	void aToolCallAnsweredByThePromptItselfIsKept() {
+		// Round 2 of a tool loop with the looping advisor's history disabled: the prompt
+		// carries only the tool result, the call it answers is the last stored event
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("Weather in Paris?"));
+		this.sessionService.appendMessage(this.sessionId, toolCall("call-1"));
+		ChatClientRequest round2 = ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(toolResponse("call-1"))))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build();
+
+		ChatClientRequest modified = this.advisor.before(round2, mock(AdvisorChain.class));
+
+		assertThat(describe(modified.prompt().getInstructions())).containsExactly("Weather in Paris?", "call:call-1",
+				"result:call-1");
+		assertThat(this.sessionService.getEvents(this.sessionId)).hasSize(3);
+	}
+
+	@Test
+	void parallelToolCallsAreKeptWhenFullyAnsweredAndDroppedWhenPartiallyAnswered() {
+		AssistantMessage twoCalls = AssistantMessage.builder()
+			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{}"),
+					new AssistantMessage.ToolCall("call-2", "function", "get_time", "{}")))
+			.build();
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("Weather and time?"));
+		this.sessionService.appendMessage(this.sessionId, twoCalls);
+		this.sessionService.appendMessage(this.sessionId,
+				ToolResponseMessage.builder()
+					.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "Sunny"),
+							new ToolResponseMessage.ToolResponse("call-2", "get_time", "noon")))
+					.build());
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("Sunny, at noon."));
+
+		ChatClientRequest full = this.advisor.before(buildRequest(this.sessionId, "Thanks"), mock(AdvisorChain.class));
+		assertThat(describe(full.prompt().getInstructions())).containsExactly("Weather and time?", "call:call-1",
+				"result:call-1", "Sunny, at noon.", "Thanks");
+
+		String partial = this.sessionService.create(CreateSessionRequest.builder().userId("test-user").build()).id();
+		this.sessionService.appendMessage(partial, new UserMessage("Weather and time?"));
+		this.sessionService.appendMessage(partial, twoCalls);
+		this.sessionService.appendMessage(partial, toolResponse("call-1"));
+		this.sessionService.appendMessage(partial, new AssistantMessage("Sunny."));
+
+		ChatClientRequest halved = this.advisor.before(buildRequest(partial, "Thanks"), mock(AdvisorChain.class));
+		assertThat(describe(halved.prompt().getInstructions())).containsExactly("Weather and time?", "Sunny.",
+				"Thanks");
+	}
+
+	@Test
+	void aToolResponseWhoseCallWasStoredIsPersistedDespiteTheMessageFilter() {
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT))
+			.build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+		UserMessage user = new UserMessage("Weather in Paris?");
+		AssistantMessage call = toolCall("call-1");
+		filteringAdvisor.before(buildRequest(this.sessionId, user.getText()), chain);
+		filteringAdvisor.after(buildResponseFromMessages(this.sessionId, call), chain);
+
+		ChatClientRequest round2 = ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(user, call, toolResponse("call-1"))))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build();
+		filteringAdvisor.before(round2, chain);
+
+		// The filter would drop the TOOL message, but its call is in the log
+		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getMessageType)
+			.containsExactly(MessageType.USER, MessageType.ASSISTANT, MessageType.TOOL);
+	}
+
+	@Test
+	void aToolResponseWhoseCallWasNotStoredIsSkippedDespiteTheMessageFilter() {
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.messageFilter(message -> !(message instanceof AssistantMessage assistant && assistant.hasToolCalls()))
+			.build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+		UserMessage user = new UserMessage("Weather in Paris?");
+		AssistantMessage call = toolCall("call-1");
+		filteringAdvisor.before(buildRequest(this.sessionId, user.getText()), chain);
+		filteringAdvisor.after(buildResponseFromMessages(this.sessionId, call), chain);
+
+		ChatClientRequest round2 = ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(user, call, toolResponse("call-1"))))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build();
+		filteringAdvisor.before(round2, chain);
+
+		// The filter accepts the TOOL message, but the call it answers was never stored
+		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getMessageType)
+			.containsExactly(MessageType.USER);
+	}
+
+	@Test
+	void storedSystemPromptIsKeptUnderALastNWindow() {
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("Be brief."));
+		for (int i = 1; i <= 3; i++) {
+			this.sessionService.appendMessage(this.sessionId, new UserMessage("q" + i));
+			this.sessionService.appendMessage(this.sessionId, new AssistantMessage("a" + i));
+		}
+		SessionMemoryAdvisor windowed = SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.lastN(2))
+			.build();
+
+		ChatClientRequest modified = windowed.before(buildRequest(this.sessionId, "q4"), mock(AdvisorChain.class));
+
+		assertThat(describe(modified.prompt().getInstructions())).containsExactly("Be brief.", "q3", "a3", "q4");
+	}
+
+	private void storeToolTurn(String sessionId, String question, String callId, String answer) {
+		this.sessionService.appendMessage(sessionId, new UserMessage(question));
+		this.sessionService.appendMessage(sessionId, toolCall(callId));
+		this.sessionService.appendMessage(sessionId, toolResponse(callId));
+		this.sessionService.appendMessage(sessionId, new AssistantMessage(answer));
+	}
+
+	private static AssistantMessage toolCall(String callId) {
+		return AssistantMessage.builder()
+			.toolCalls(List.of(new AssistantMessage.ToolCall(callId, "function", "get_weather", "{\"city\":\"Paris\"}")))
+			.build();
+	}
+
+	private static ToolResponseMessage toolResponse(String callId) {
+		return ToolResponseMessage.builder()
+			.responses(List.of(new ToolResponseMessage.ToolResponse(callId, "get_weather", "Sunny")))
+			.build();
+	}
+
+	/** The text, "call:id" for an assistant tool call, "result:id" for a tool result. */
+	private static List<String> describe(List<Message> messages) {
+		return messages.stream().map(m -> {
+			if (m instanceof AssistantMessage assistant && assistant.hasToolCalls()) {
+				return "call:" + assistant.getToolCalls().get(0).id();
+			}
+			if (m instanceof ToolResponseMessage responses) {
+				return "result:" + responses.getResponses().get(0).id();
+			}
+			return m.getText();
+		}).toList();
+	}
 
 	private static ChatClientRequest buildRequest(String sessionId, String userText) {
 		Prompt prompt = new Prompt(List.of(new UserMessage(userText)));

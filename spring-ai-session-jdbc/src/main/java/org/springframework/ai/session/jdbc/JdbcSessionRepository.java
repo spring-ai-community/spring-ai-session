@@ -417,15 +417,16 @@ public final class JdbcSessionRepository implements SessionRepository {
 	public List<SessionEvent> findEvents(String sessionId, EventFilter filter) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(filter, "filter must not be null");
-		return query(SELECT_EVENTS_BASE, sessionId, filter, "e.seq");
+		return query(SELECT_EVENTS_BASE, sessionId, filter, "e.seq", true);
 	}
 
 	@Override
 	public List<SessionEvent> findEventsByUserId(String userId, EventFilter filter) {
 		Assert.hasText(userId, "userId must not be null or empty");
 		Assert.notNull(filter, "filter must not be null");
-		// Across sessions the log order is the timestamp; seq only breaks ties.
-		return query(SELECT_EVENTS_BY_USER_BASE, userId, filter, "e.timestamp, e.seq");
+		// Across sessions the log order is the timestamp; seq only breaks ties. Turns do
+		// not exist across sessions, so the window is plain.
+		return query(SELECT_EVENTS_BY_USER_BASE, userId, filter, "e.timestamp, e.seq", false);
 	}
 
 	/**
@@ -435,17 +436,25 @@ public final class JdbcSessionRepository implements SessionRepository {
 	 * {@link java.util.regex.Pattern} cannot be safely translated to portable SQL (H2,
 	 * MySQL and PostgreSQL each have their own regex dialect, none a strict superset of
 	 * Java's), so with a pattern the window is deferred and the SQL-filtered result is
-	 * finished with {@link EventFilter#apply(List)} in memory.
+	 * finished in memory with {@link EventFilter#apply(List)} (per session) or
+	 * {@link EventFilter#applyWindow(List)} (across sessions).
+	 * <p>
+	 * A per-session {@code lastN} keeps turns whole (see
+	 * {@link EventFilter#applyTurnAwareWindow(List)}): when the window lands mid-turn,
+	 * {@link #extendToTurnStart} prepends the rest of that turn with one more query.
 	 * @param base the {@code SELECT … WHERE <scope> = ? } prefix
 	 * @param scope the value of the scope column (session id or user id)
 	 * @param order the {@code ORDER BY} columns, ascending; reversed for {@code lastN}
+	 * @param perSession whether the scope is one session, so that a window keeps turns
+	 * whole
 	 */
-	private List<SessionEvent> query(String base, String scope, EventFilter filter, String order) {
+	private List<SessionEvent> query(String base, String scope, EventFilter filter, String order,
+			boolean perSession) {
 		boolean inMemoryWindow = filter.pattern() != null;
 		StringBuilder sql = new StringBuilder(base);
 		List<Object> params = new ArrayList<>();
 		params.add(scope);
-		appendCriteria(sql, params, filter);
+		appendCriteria(sql, params, filter, "e");
 
 		if (inMemoryWindow) {
 			sql.append("ORDER BY ").append(order).append(" ");
@@ -467,37 +476,92 @@ public final class JdbcSessionRepository implements SessionRepository {
 		List<SessionEvent> result = this.jdbcTemplate.query(sql.toString(), new SessionEventRowMapper(),
 				params.toArray());
 		if (inMemoryWindow) {
-			return filter.apply(result);
+			return perSession ? filter.apply(result)
+					: filter.applyWindow(result.stream().filter(filter::matches).toList());
 		}
 		if (filter.lastN() != null) {
 			result = new ArrayList<>(result);
 			Collections.reverse(result);
+			if (perSession) {
+				result = extendToTurnStart(scope, filter, result);
+			}
 		}
 		return Collections.unmodifiableList(result);
 	}
 
-	private void appendCriteria(StringBuilder sql, List<Object> params, EventFilter filter) {
+	/**
+	 * Prepends the rest of the turn a {@code lastN} window landed in, so that the window
+	 * starts at a {@linkplain SessionEvent#isTurnStart() turn start}. Runs one extra query
+	 * only when it can matter: the window is full (fewer than N rows means the whole
+	 * matched log is already in hand), its oldest event is not a turn start, the filter
+	 * does not search text (a search result is not a prompt) and it does not exclude
+	 * {@code USER} events (no turn start could match). The query is bounded by one turn
+	 * of the filtered log and uses the {@code (session_id, seq)} index; a subquery that
+	 * finds no preceding turn start yields no rows, which is the plain-window fallback of
+	 * {@link EventFilter#applyTurnAwareWindow(List)}.
+	 * <p>
+	 * The two reads are not one snapshot: a compaction committing in between can only
+	 * shorten the extension of that one read, which the next turn corrects.
+	 */
+	private List<SessionEvent> extendToTurnStart(String sessionId, EventFilter filter, List<SessionEvent> window) {
+		Integer lastN = filter.lastN();
+		if (lastN == null || window.size() < lastN || window.get(0).isTurnStart() || filter.hasTextCriteria()
+				|| (filter.messageTypes() != null && !filter.messageTypes().contains(MessageType.USER))) {
+			return window;
+		}
+		StringBuilder sql = new StringBuilder(SELECT_EVENTS_BASE);
+		List<Object> params = new ArrayList<>();
+		params.add(sessionId);
+		appendCriteria(sql, params, filter, "e");
+		sql.append("AND e.seq < (SELECT w.seq FROM AI_SESSION_EVENT w WHERE w.id = ? AND w.session_id = ?) ");
+		params.add(window.get(0).getId());
+		params.add(sessionId);
+		sql.append("AND e.seq >= (SELECT MAX(u.seq) FROM AI_SESSION_EVENT u WHERE u.session_id = ? ");
+		params.add(sessionId);
+		sql.append("AND u.message_type = ? ");
+		params.add(MessageType.USER.name());
+		sql.append("AND u.seq < (SELECT w.seq FROM AI_SESSION_EVENT w WHERE w.id = ? AND w.session_id = ?) ");
+		params.add(window.get(0).getId());
+		params.add(sessionId);
+		appendCriteria(sql, params, filter, "u");
+		sql.append(") ORDER BY e.seq");
+		List<SessionEvent> head = this.jdbcTemplate.query(sql.toString(), new SessionEventRowMapper(),
+				params.toArray());
+		if (head.isEmpty()) {
+			return window;
+		}
+		List<SessionEvent> extended = new ArrayList<>(head.size() + window.size());
+		extended.addAll(head);
+		extended.addAll(window);
+		return extended;
+	}
+
+	private void appendCriteria(StringBuilder sql, List<Object> params, EventFilter filter, String alias) {
+		// The dialect's keyword fragments are written against alias "e"
+		Assert.state("e".equals(alias) || !filter.hasTextCriteria(),
+				"text criteria can only be appended for alias e");
+		String col = alias + ".";
 		if (filter.from() != null) {
-			sql.append("AND e.timestamp >= ? ");
+			sql.append("AND ").append(col).append("timestamp >= ? ");
 			params.add(toUtc(filter.from()));
 		}
 		if (filter.to() != null) {
-			sql.append("AND e.timestamp <= ? ");
+			sql.append("AND ").append(col).append("timestamp <= ? ");
 			params.add(toUtc(filter.to()));
 		}
 		if (filter.messageTypes() != null && !filter.messageTypes().isEmpty()) {
-			sql.append("AND e.message_type IN (");
+			sql.append("AND ").append(col).append("message_type IN (");
 			filter.messageTypes().forEach(mt -> sql.append("?,"));
 			sql.setLength(sql.length() - 1);
 			sql.append(") ");
 			filter.messageTypes().forEach(mt -> params.add(mt.name()));
 		}
 		if (filter.excludeSynthetic()) {
-			sql.append("AND e.synthetic = ? ");
+			sql.append("AND ").append(col).append("synthetic = ? ");
 			params.add(false);
 		}
 		if (filter.excludeArchived()) {
-			sql.append("AND e.archived = ? ");
+			sql.append("AND ").append(col).append("archived = ? ");
 			params.add(false);
 		}
 		if (filter.keyword() != null) {

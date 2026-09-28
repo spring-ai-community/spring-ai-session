@@ -38,6 +38,13 @@ import org.springframework.util.Assert;
  * <p>
  * <strong>Retrieval modifier contract:</strong>
  * <ul>
+ * <li>{@link #lastN} is a lower bound on a per-session read: the newest N matching events
+ * are returned, extended back to the start of the turn the window lands in (see
+ * {@link SessionEvent#isTurnStart()}), so a prompt never begins with an assistant reply
+ * or a tool result whose user message or tool call was cut off. The extension is skipped
+ * for filters with text criteria (a search result is not a prompt) and when no turn start
+ * precedes the window. Pages and cross-session reads are plain. See
+ * {@link #applyTurnAwareWindow(List)}.</li>
  * <li>{@link #lastN} and {@link #pageSize} are <em>mutually exclusive</em>; setting both
  * throws {@link IllegalArgumentException}.</li>
  * <li>If {@link #pageSize} is set and {@link #page} is {@code null}, {@link #page}
@@ -274,8 +281,8 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 
 	/**
 	 * Applies this filter to a list of events held in memory: keeps the events that
-	 * {@link #matches(SessionEvent)}, then applies the retrieval window
-	 * ({@link #applyWindow(List)}). This is the reference implementation of the read
+	 * {@link #matches(SessionEvent)}, then applies the retrieval window keeping turns
+	 * whole ({@link #applyTurnAwareWindow(List)}). This is the reference implementation of the read
 	 * contract for a log held as a list; a store that can push the criteria down to a
 	 * query should do so and use this only for what it cannot express (see
 	 * {@link SessionRepository#findEvents}).
@@ -284,14 +291,56 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	 */
 	public List<SessionEvent> apply(List<SessionEvent> events) {
 		Assert.notNull(events, "events must not be null");
-		return applyWindow(events.stream().filter(this::matches).toList());
+		return applyTurnAwareWindow(events.stream().filter(this::matches).toList());
 	}
 
 	/**
-	 * Applies only the retrieval window of this filter ({@link #lastN()}, or
-	 * {@link #page()} / {@link #pageSize()}) to an already filtered list, oldest first.
-	 * A page beyond the end yields an empty list; a page number large enough to overflow
-	 * an {@code int} offset does too.
+	 * Applies the retrieval window of this filter to an already filtered per-session log,
+	 * oldest first, keeping turns whole: a {@link #lastN()} window whose first event is not
+	 * a {@linkplain SessionEvent#isTurnStart() turn start} is extended back to the nearest
+	 * turn start before it, so an assistant tool call is never returned without the user
+	 * message and, by extension, the tool results of its turn. The extension is skipped
+	 * when the filter {@linkplain #hasTextCriteria() searches text} (the result is not a
+	 * prompt) and when no turn start precedes the window (a preamble of stored system
+	 * messages, or a {@link #messageTypes()} filter that excludes {@code USER}); the plain
+	 * window is returned then. Pages are always plain. This is the reference
+	 * implementation of the {@link SessionRepository#findEvents} window contract.
+	 * @param matched the filtered events of one session, oldest first
+	 * @return the windowed events
+	 */
+	public List<SessionEvent> applyTurnAwareWindow(List<SessionEvent> matched) {
+		Assert.notNull(matched, "matched must not be null");
+		if (this.lastN == null || hasTextCriteria() || matched.size() <= this.lastN) {
+			return applyWindow(matched);
+		}
+		int from = matched.size() - this.lastN;
+		if (!matched.get(from).isTurnStart()) {
+			for (int i = from - 1; i >= 0; i--) {
+				if (matched.get(i).isTurnStart()) {
+					from = i;
+					break;
+				}
+			}
+		}
+		return List.copyOf(matched.subList(from, matched.size()));
+	}
+
+	/**
+	 * Returns {@code true} when this filter searches message text: a {@link #keyword()},
+	 * {@link #keywords()} or {@link #pattern()} is set. Such a read is a search, not a
+	 * prompt, so its window is not extended to turn boundaries.
+	 */
+	public boolean hasTextCriteria() {
+		return this.keyword != null || this.keywords != null || this.pattern != null;
+	}
+
+	/**
+	 * Applies only the plain retrieval window of this filter ({@link #lastN()}, or
+	 * {@link #page()} / {@link #pageSize()}) to an already filtered list, oldest first,
+	 * without regard to turns. Used for reads across sessions, where turns do not exist;
+	 * a per-session read uses {@link #applyTurnAwareWindow(List)}. A page beyond the end
+	 * yields an empty list; a page number large enough to overflow an {@code int} offset
+	 * does too.
 	 * @param matched the filtered events, oldest first
 	 * @return the windowed events
 	 */

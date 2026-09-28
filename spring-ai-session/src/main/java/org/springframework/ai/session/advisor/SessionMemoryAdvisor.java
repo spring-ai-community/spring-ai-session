@@ -17,6 +17,7 @@
 package org.springframework.ai.session.advisor;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -87,6 +88,18 @@ import org.springframework.util.Assert;
  * {@link org.springframework.ai.session.SessionRepository#applyCompaction(String, org.springframework.ai.session.compaction.CompactionPlan, long)},
  * so only the first writer succeeds; the second detects the version mismatch and skips
  * silently. No compaction result is lost or corrupted.
+ *
+ * <p>
+ * <strong>Tool-call integrity:</strong> a prompt in which an assistant tool call is not
+ * followed by the tool results answering it is rejected by every provider. The advisor
+ * keeps that from happening at both ends. On read, the configured {@link EventFilter}'s
+ * {@code lastN} window is extended by the repository to the start of the turn it lands
+ * in, and any tool call or tool result that still has no counterpart in the history (a
+ * {@code messageTypes} filter hiding {@code TOOL} events, a log written with a
+ * {@link MessageFilter} that skipped them, or a turn interrupted mid-loop) is dropped from
+ * the prompt with a warning; the log is left untouched. On write, a trailing tool
+ * response is stored exactly when the tool call it answers was stored, overriding the
+ * {@link MessageFilter} in either direction with a warning.
  *
  * <p>
  * <strong>Event id generation:</strong> by default every persisted event gets a fresh
@@ -246,19 +259,31 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 				break;
 			}
 		}
+		// A window (lastN or a page) may leave the stored system prompt outside the events
+		// read; it is configuration, so look it up on its own.
+		if (latestStoredSystem == null && (eventFilter.lastN() != null || eventFilter.pageSize() != null)) {
+			latestStoredSystem = latestStoredSystemPrompt(sessionId);
+		}
 		SessionEvent sessionSystemPrompt = latestStoredSystem;
 		List<Message> promptMessages = request.prompt().getInstructions();
-		List<Message> historySystem = events.stream()
+		List<Message> historySystem = new ArrayList<>();
+		if (sessionSystemPrompt != null && !events.contains(sessionSystemPrompt)) {
+			historySystem.add(sessionSystemPrompt.getMessage());
+		}
+		events.stream()
 			.filter(e -> e.getMessageType() == MessageType.SYSTEM && (e.isSynthetic() || e == sessionSystemPrompt))
 			.map(SessionEvent::getMessage)
-			.toList();
-		List<Message> historyConversation = events.stream()
-			.filter(e -> e.getMessageType() != MessageType.SYSTEM)
-			.map(SessionEvent::getMessage)
-			.toList();
+			.forEach(historySystem::add);
 		List<Message> promptConversation = promptMessages.stream()
 			.filter(m -> !(m instanceof SystemMessage))
 			.toList();
+		// A tool call without its results (or the reverse) makes a prompt every provider
+		// rejects; drop the stranded side before deciding what to prepend, so the check
+		// below compares like with like on every round.
+		List<Message> historyConversation = withoutOrphanToolMessages(events.stream()
+			.filter(e -> e.getMessageType() != MessageType.SYSTEM)
+			.map(SessionEvent::getMessage)
+			.toList(), promptConversation, sessionId);
 		List<Message> combined = new ArrayList<>(historySystem);
 		if (!isHistoryAlreadyInPrompt(promptConversation, historyConversation)) {
 			combined.addAll(historyConversation);
@@ -285,9 +310,10 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		// 4. Append the current user message to the session, subject to the configured
 		// message filter. Skipping only affects persistence — the outgoing prompt is
-		// untouched.
+		// untouched. A tool response is stored exactly when the tool call it answers was
+		// stored, whatever the filter says: either half alone makes an unusable log.
 		Message userMessage = request.prompt().getLastUserOrToolResponseMessage();
-		if (userMessage != null && shouldPersist(userMessage, sessionId)) {
+		if (userMessage != null && shouldPersistTrailing(userMessage, events, eventFilter, sessionId)) {
 			this.sessionService.appendEvent(SessionEvent.builder()
 				.id(this.requestEventIdGenerator.generate(request, userMessage))
 				.sessionId(sessionId)
@@ -337,6 +363,139 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		}
 
 		return response;
+	}
+
+	/**
+	 * Reads the latest stored (non-synthetic, active) system message of the session with
+	 * one pushed-down query, for a read whose window may not contain it.
+	 */
+	private @Nullable SessionEvent latestStoredSystemPrompt(String sessionId) {
+		EventFilter latestSystem = EventFilter.builder()
+			.messageTypes(Set.of(MessageType.SYSTEM))
+			.excludeSynthetic(true)
+			.excludeArchived(true)
+			.lastN(1)
+			.build();
+		List<SessionEvent> found = this.sessionService.getEvents(sessionId, latestSystem);
+		return found.isEmpty() ? null : found.get(0);
+	}
+
+	/**
+	 * Returns {@code history} without tool messages that have no counterpart: an assistant
+	 * message whose tool calls are not all answered by the tool responses that directly
+	 * follow it (in the history, then in {@code following}, the prompt's own messages), or a
+	 * tool response that does not answer the assistant tool call directly before it. Calls
+	 * and responses are matched by id; one response message may answer several parallel
+	 * calls, and a partially answered call is dropped together with its responses. Prompt
+	 * messages are never dropped.
+	 */
+	private static List<Message> withoutOrphanToolMessages(List<Message> history, List<Message> following,
+			String sessionId) {
+		if (history.stream()
+			.noneMatch(m -> m instanceof ToolResponseMessage
+					|| (m instanceof AssistantMessage assistant && assistant.hasToolCalls()))) {
+			return history;
+		}
+		List<Message> all = new ArrayList<>(history);
+		all.addAll(following);
+		boolean[] keep = new boolean[history.size()];
+		Arrays.fill(keep, true);
+		for (int i = 0; i < history.size(); i++) {
+			Message message = history.get(i);
+			if (message instanceof AssistantMessage assistant && assistant.hasToolCalls()) {
+				Set<String> unanswered = new HashSet<>();
+				assistant.getToolCalls().forEach(call -> unanswered.add(call.id()));
+				for (int j = i + 1; j < all.size() && !unanswered.isEmpty(); j++) {
+					if (!(all.get(j) instanceof ToolResponseMessage responses)) {
+						break;
+					}
+					responses.getResponses().forEach(response -> unanswered.remove(response.id()));
+				}
+				keep[i] = unanswered.isEmpty();
+			}
+			else if (message instanceof ToolResponseMessage responses) {
+				int call = i - 1;
+				while (call >= 0 && history.get(call) instanceof ToolResponseMessage) {
+					call--;
+				}
+				keep[i] = call >= 0 && keep[call] && history.get(call) instanceof AssistantMessage assistant
+						&& assistant.hasToolCalls() && answers(assistant, responses);
+			}
+		}
+		List<Message> kept = new ArrayList<>(history.size());
+		int dropped = 0;
+		for (int i = 0; i < history.size(); i++) {
+			if (keep[i]) {
+				kept.add(history.get(i));
+			}
+			else {
+				dropped++;
+			}
+		}
+		if (dropped > 0) {
+			logger.warn("Dropped {} tool message(s) without their counterpart from the prompt for session [{}]. "
+					+ "A messageTypes filter that hides TOOL events, a MessageFilter that skipped them, or a turn "
+					+ "interrupted mid-loop is the likely cause; the session log is unchanged", dropped, sessionId);
+		}
+		return kept;
+	}
+
+	/** Returns {@code true} if every response answers one of the assistant's tool calls. */
+	private static boolean answers(AssistantMessage assistant, ToolResponseMessage responses) {
+		Set<String> callIds = new HashSet<>();
+		assistant.getToolCalls().forEach(call -> callIds.add(call.id()));
+		return responses.getResponses().stream().allMatch(response -> callIds.contains(response.id()));
+	}
+
+	/**
+	 * Decides whether the trailing prompt message is persisted. A user message follows the
+	 * configured {@link MessageFilter}. A tool response is stored exactly when the tool
+	 * call it answers was stored: the filter is overridden, with a warning, when it would
+	 * reject the response of a stored call or accept the response of a call it rejected.
+	 * When the events read cannot show whether the call was stored (a {@code messageTypes}
+	 * filter hiding assistant events, a time range, or a page window), the filter decides.
+	 */
+	private boolean shouldPersistTrailing(Message message, List<SessionEvent> events, EventFilter eventFilter,
+			String sessionId) {
+		if (!(message instanceof ToolResponseMessage response)) {
+			return shouldPersist(message, sessionId);
+		}
+		boolean accepted = this.messageFilter.shouldPersist(message);
+		Boolean callStored = isAnsweringStoredToolCall(response, events, eventFilter);
+		if (callStored == null || callStored == accepted) {
+			return shouldPersist(message, sessionId);
+		}
+		if (callStored) {
+			logger.warn("Storing a tool response the MessageFilter rejected for session [{}]: the tool call it "
+					+ "answers is in the session log and would be unanswerable without it", sessionId);
+			return true;
+		}
+		logger.warn("Skipping a tool response for session [{}]: the tool call it answers was not stored "
+				+ "(rejected by the MessageFilter), so the response alone would be an orphan", sessionId);
+		return false;
+	}
+
+	/**
+	 * Returns whether the newest stored conversation event is the assistant tool call this
+	 * response answers, or {@code null} when the events read cannot tell.
+	 */
+	private static @Nullable Boolean isAnsweringStoredToolCall(ToolResponseMessage response,
+			List<SessionEvent> events, EventFilter eventFilter) {
+		if (eventFilter.pageSize() != null || eventFilter.from() != null || eventFilter.to() != null
+				|| (eventFilter.messageTypes() != null && !eventFilter.messageTypes().contains(MessageType.ASSISTANT))) {
+			return null;
+		}
+		for (int i = events.size() - 1; i >= 0; i--) {
+			SessionEvent event = events.get(i);
+			if (event.getMessageType() == MessageType.SYSTEM) {
+				continue;
+			}
+			if (event.getMessageType() == MessageType.TOOL) {
+				continue; // an earlier response of the same parallel call set
+			}
+			return event.hasToolCalls() && answers((AssistantMessage) event.getMessage(), response);
+		}
+		return false;
 	}
 
 	/**

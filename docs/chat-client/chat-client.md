@@ -17,13 +17,18 @@ On every request the advisor:
    `EventFilter.all()`), merged with any per-request `EVENT_FILTER_CONTEXT_KEY` filter, and
    **prepends** it to the prompt. `EventFilter.active()` is always merged in on top, so
    archived (compacted-out) events never reach the prompt. Of any stored system messages
-   (an opt-in), only the latest one is kept.
+   (an opt-in), only the latest one is kept; under a `lastN` or page window it is looked up
+   separately, so a window never drops the system prompt. A `lastN` window is extended by
+   the repository to the start of the turn it lands in, and any tool call or tool result
+   left without its counterpart is dropped from the prompt with a warning (see
+   [Tool-call integrity](#tool-call-integrity)).
 3. Moves all `SystemMessage`s to the front, in their relative order, and sends a text that
    exactly matches an earlier one only once. Texts are never merged or rewritten, so the
    prompt stays stable for prompt caching. See [System Messages](../session-management/system-messages.md).
 4. Appends the prompt's last user message to the session, if the configured
    `MessageFilter` accepts it. Inside a tool-calling loop this is the trailing
-   tool-response message instead (`Prompt.getLastUserOrToolResponseMessage()`).
+   tool-response message instead (`Prompt.getLastUserOrToolResponseMessage()`); it is
+   stored exactly when the tool call it answers was stored, whatever the filter says.
 5. After the model responds, appends the assistant message(s) through the configured
    `MessageFilter` (default: `MessageFilter.skipEmptyMessages()`). By default, empty
    assistant messages (blank text, no tool calls, and no media) are skipped — some
@@ -193,7 +198,8 @@ retrieval on a single call without reconfiguring the advisor:
 
 ```java
 // Advisor is configured with EventFilter.all() (default).
-// This request overrides to see only the last 5 events.
+// This request overrides to see only the last 5 events, extended to the start of
+// the turn the window lands in so a tool call is never sent without its result.
 String response = client.prompt()
     .user("Quick summary please")
     .advisors(a -> a
@@ -225,6 +231,7 @@ prompt is unaffected — filtering applies to persistence only.
 | Applies when | Loading history in `before()` | Appending messages in `before()` / `after()` |
 | Operates on | Stored `SessionEvent`s | `Message`s about to be persisted |
 | Rejected items | Stay in storage, hidden from the prompt | Never written to storage |
+| Tool messages | A tool call or result left without its counterpart is dropped from the prompt | A tool response is stored exactly when its tool call was stored |
 
 Configure it on the builder:
 
@@ -245,7 +252,7 @@ Built-in factories:
 |---|---|
 | `MessageFilter.all()` | Persists every message (no filtering) |
 | `MessageFilter.skipEmptyMessages()` | Skips assistant messages with blank/null text, no tool calls, and no media (**the default**) |
-| `MessageFilter.byMessageType(types...)` | Persists only the listed `MessageType`s |
+| `MessageFilter.byMessageType(types...)` | Persists only the listed `MessageType`s. Leaving out `TOOL` does not strand a stored tool call: its response is stored anyway (see [Tool-call integrity](#tool-call-integrity)) |
 | `MessageFilter.containsText(keyword)` | Persists only messages whose text contains the keyword (case-insensitive) |
 
 `MessageFilter` is a `@FunctionalInterface`, so a lambda works too, and filters compose
@@ -265,6 +272,30 @@ via `and()`, `or()`, and `negate()`:
     filtered out (recommended — some models reject them when replayed as history),
     compose your filter with it via `.and(MessageFilter.skipEmptyMessages())`.
 
+---
+
+## Tool-call integrity
+
+Every provider rejects a prompt in which an assistant message with tool calls is not
+followed by the tool messages answering it (OpenAI: *"An assistant message with
+'tool_calls' must be followed by tool messages responding to each 'tool_call_id'"*). The
+advisor keeps that from happening at both ends, without touching the log:
+
+- **Windows keep turns whole.** A `lastN` window is extended by the repository to the
+  start of the turn it lands in, so a tool call is never read without its results. See
+  [Windows keep turns whole](../session-management/event-filtering.md#windows-keep-turns-whole).
+- **Read guard.** After loading the history, an assistant tool call whose calls are not
+  all answered by the tool messages that directly follow it (in the history or in the
+  prompt itself, as in round 2 of a tool loop) is dropped from the prompt, and so is a tool
+  message that answers no preceding call. A partially answered parallel call is dropped
+  with its answers. The advisor logs a `WARN` naming the likely causes: a `messageTypes`
+  read filter hiding `TOOL` events, a `MessageFilter` that skipped them, or a turn
+  interrupted between the call and its result.
+- **Write guard.** A trailing tool response is stored exactly when the tool call it
+  answers is the newest stored event: the `MessageFilter` is overridden, with a `WARN`,
+  when it would reject the response of a stored call or accept the response of a call it
+  rejected. When the events read cannot tell (a `messageTypes` filter hiding assistant
+  events, or a page window), the filter decides.
 ---
 
 ## Concurrent compaction safety

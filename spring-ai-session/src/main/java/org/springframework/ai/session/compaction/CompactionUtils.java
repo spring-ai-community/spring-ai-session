@@ -179,11 +179,12 @@ final class CompactionUtils {
 	}
 
 	/**
-	 * Returns {@code true} if the event starts a turn: a {@link MessageType#USER} event.
-	 * Synthetic events are excluded from the real-event list before this is applied.
+	 * Returns {@code true} if the event starts a turn (see
+	 * {@link SessionEvent#isTurnStart()}). Synthetic events are excluded from the
+	 * real-event list before this is applied.
 	 */
 	static boolean isTurnStart(SessionEvent event) {
-		return event.getMessageType() == MessageType.USER;
+		return event.isTurnStart();
 	}
 
 	/**

@@ -140,6 +140,13 @@ predicates — one for `keyword`, one per term for `keywords`, joined with `AND`
 `matchMode`. Terms are always bound as JDBC parameters, and `%`, `_` and `!` are escaped so
 they match literally, as in the in-memory repository.
 
+**`EventFilter.lastN()` keeps turns whole with at most one extra query.** The newest N
+rows come from `ORDER BY seq DESC LIMIT ?`. When that window is full, its oldest row is
+not a `USER` event and the filter neither searches text nor hides `USER` events, a second
+query fetches the rows between the nearest preceding matching `USER` event and the window
+(`seq >= (SELECT MAX(seq) … WHERE message_type = 'USER' AND seq < ?)`), bounded by one
+turn and served by the `(session_id, seq)` index. Cross-session reads use a plain `LIMIT`.
+
 **`EventFilter.pattern()` falls back to in-memory filtering.** Java regex cannot be
 translated to portable SQL — each database has its own regex dialect, none a superset of
 Java's (backreferences, lookaround, named groups). When `pattern` is set, every other

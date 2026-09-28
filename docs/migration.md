@@ -26,6 +26,19 @@ compaction settings, and pass only the task in and the result back. See
   summarized, and `RecursiveSummarizationCompactionStrategy` lists it in
   `archivedEvents` (so `archivedEventCount()` includes it). Nothing leaves the log except
   through `delete` or `deleteExpiredSessions`.
+- **`lastN` keeps turns whole.** A `lastN` window on one session is extended back to the
+  start of the turn it lands in (the nearest preceding `USER` event among the matching
+  events), so it never returns an assistant tool call without its results or a summary
+  without its shadow prompt; the result can therefore hold more than N events. Text
+  searches, pages and cross-session reads stay plain. `SessionEvent.isTurnStart()` marks
+  the turn starts; `EventFilter.applyTurnAwareWindow` is the reference rule. See
+  [Windows keep turns whole](session-management/event-filtering.md#windows-keep-turns-whole).
+- **`SessionMemoryAdvisor` keeps tool calls answerable** (#44). On read it drops a tool
+  call or tool result that has no counterpart in the prompt, with a `WARN`; on write it
+  stores a trailing tool response exactly when the tool call it answers was stored,
+  overriding the `MessageFilter` either way with a `WARN`. Under a `lastN` or page window
+  the stored system prompt is looked up separately instead of being dropped. See
+  [Tool-call integrity](chat-client/chat-client.md#tool-call-integrity).
 - **Recall tools skip synthetic events.** `conversation_search` (`SessionEventTools`) and
   `CrossSessionRecallTools` exclude synthetic summaries from their results, since a
   summary only paraphrases real events that are still in the log. Build your own
@@ -114,6 +127,11 @@ searching) and core owns *interpretation* (what a compaction means). A custom re
   `pattern`, typically). Stores that keep messages as columns or fields should use
   `SessionEventCodec` (package `org.springframework.ai.session.support`) so every backend
   stores the same shape.
+- **A `lastN` window must keep turns whole.** When the oldest event of the window is not
+  a `USER` event, extend the window back to the nearest preceding `USER` event among the
+  matching events, unless the filter searches text or no such event exists. A list-based
+  store gets this from `EventFilter.apply`; the JDBC repository runs one bounded extra
+  query. The contract kit's window tests check it.
 - **Run the contract tests.** Add `org.springaicommunity:spring-ai-session-test` in test
   scope, subclass `AbstractSessionRepositoryContractTests` and implement
   `createRepository()`. It is the suite the built-in repositories run; see
