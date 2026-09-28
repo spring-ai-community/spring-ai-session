@@ -1,8 +1,18 @@
-# Compaction Internals
+# How Compaction Works
 
-This page explains **how** compaction works: the CAS write, turn snapping, recursive
-summarization, stored system messages, the `CompactionPlan` the repository applies and
-concurrent JDBC appends, with diagrams and worked examples. For **using** compaction, see [Context Compaction](compaction.md).
+This page explains what happens when a compaction pass runs, with diagrams and worked
+examples. For choosing and configuring triggers and strategies, see
+[Context Compaction](compaction.md).
+
+| Section | Answers |
+|---|---|
+| [1. Class diagrams](#1-class-diagrams) | Which types take part, and what each contributes |
+| [2. A compaction pass](#2-sequence-a-compaction-pass-end-to-end) | What the service, the strategy and the repository do, in order, and how the version check keeps concurrent writers apart |
+| [3. What gets archived](#3-activity-how-a-strategy-chooses-what-to-archive) | How a strategy turns its budget into a cut that never splits a turn |
+| [4. Summarization](#4-sequence-recursivesummarizationcompactionstrategy) | What the LLM is given, where the summary lands, what happens on a blank answer |
+| [5. The plan](#5-compactionplan-from-result-to-write) | How a strategy result becomes archive flags and anchored inserts, and why an insert needs an anchor |
+| [6. JDBC and a concurrent append](#6-sequence-jdbc-applycompaction-and-a-concurrent-append) | How the row lock orders a compaction against an append, and which rows are rewritten |
+| [7. Tricky cases](#7-worked-examples-of-the-tricky-cases) | Seven inputs and their outputs: mid-turn cuts, oversize turns, updated system prompts, a prior summary |
 
 One word is used precisely throughout: an event is **archived** when compaction flags it
 and it stays in the log (searchable through Recall Storage). Compaction never deletes an
