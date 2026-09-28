@@ -148,7 +148,7 @@ class RecursiveSummarizationCompactionStrategyTests {
 	}
 
 	@Test
-	void priorSyntheticSummaryIsReplacedButNotCountedAsArchived() {
+	void priorSyntheticSummaryIsReplacedAndArchived() {
 		RecursiveSummarizationCompactionStrategy strategy = RecursiveSummarizationCompactionStrategy
 			.builder(this.chatClient)
 			.maxEventsToKeep(2)
@@ -174,11 +174,10 @@ class RecursiveSummarizationCompactionStrategyTests {
 		CompactionRequest context = contextFor(events);
 		CompactionResult result = strategy.compact(context);
 
-		// archivedEvents contains only the real events that were summarized;
-		// prior synthetic events are implicitly replaced by the new summaryTurn and are
-		// NOT included in archivedEvents (consistent with other strategies).
-		assertThat(result.archivedEvents().stream().noneMatch(SessionEvent::isSynthetic)).isTrue();
-		assertThat(result.archivedEvents()).hasSize(2); // msg-1 and msg-2
+		// archivedEvents contains the real events that were summarized and the prior
+		// synthetic summary turn the new one replaces: nothing leaves the log.
+		assertThat(result.archivedEvents()).hasSize(4); // prior summary turn, msg-1 and msg-2
+		assertThat(result.archivedEvents().stream().filter(SessionEvent::isSynthetic)).hasSize(2);
 
 		// New synthetic summary turn (USER shadow + ASSISTANT summary) is first in
 		// compacted, followed by the last 2 real events.

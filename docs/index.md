@@ -38,8 +38,8 @@ how the main types fit together.
 
 ## Key Features
 
-- **Full history kept** — compaction archives events in place instead of deleting them
-  (only superseded summaries are replaced), so the full history stays searchable
+- **Full history kept** — compaction archives events in place and never deletes them, so
+  the full history stays searchable
 - **Composable event filtering** — by message type, time range, single or multi-term
   keyword (`ANY`/`ALL`), regular expression, last-N, or pagination
 - **Four compaction strategies** out of the box:

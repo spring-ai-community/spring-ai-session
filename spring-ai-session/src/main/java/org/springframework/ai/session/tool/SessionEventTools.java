@@ -185,7 +185,14 @@ public class SessionEventTools {
 			return MISSING_SESSION_ID_RESULT;
 		}
 
-		EventFilter filter = EventFilter.keywordSearch(query, pageNumber, this.pageSize);
+		// Synthetic summaries paraphrase the real events, which are still in the log, so
+		// searching them too would only return the same facts twice.
+		EventFilter filter = EventFilter.builder()
+			.keyword(query)
+			.page(pageNumber)
+			.pageSize(this.pageSize)
+			.excludeSynthetic(true)
+			.build();
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, filter);
 
 		List<Map<String, String>> results = events.stream()

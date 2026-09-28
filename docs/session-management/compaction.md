@@ -15,7 +15,7 @@ to compact) and **strategies** (how to compact).
 
 `SessionService.compact()` is the single entry point. It evaluates the trigger first and
 only runs the strategy when the trigger fires. The strategy's result is turned into a
-`CompactionPlan` (which events to archive, remove and insert), and the repository applies
+`CompactionPlan` (which events to archive and which new events to insert), and the repository applies
 that plan in one version-checked write; when the plan is empty, nothing is written.
 
 ```java
@@ -35,10 +35,11 @@ System.out.println(result.tokensEstimatedSaved()); // rough token saving estimat
 service.compact(sessionId, req -> true, SlidingWindowCompactionStrategy.builder().maxEvents(10).build());
 ```
 
-- **Archived, not deleted.** Archived events leave the prompt but stay in the log, and
-  remain searchable through [Recall Storage](../recall-memory/recall-storage.md). The only events
-  compaction removes are superseded synthetic summaries, replaced by a newer summary that
-  builds on them. See [Event lifecycle](concepts.md#event-lifecycle).
+- **Archived, never deleted.** Archived events leave the prompt but stay in the log, and
+  remain searchable through [Recall Storage](../recall-memory/recall-storage.md). This
+  includes a synthetic summary that a newer summary replaces: it is archived like the
+  events it stood for. Compaction never removes an event from the log. See
+  [Event lifecycle](concepts.md#event-lifecycle).
 - **Concurrent writes are safe.** The write is version-checked: if another writer changed
   the log during the pass, compaction is silently skipped, and a no-op result skips the
   write entirely. See the [compaction pass sequence](compaction-internals.md#2-sequence-a-compaction-pass-end-to-end)
@@ -244,8 +245,8 @@ RecursiveSummarizationCompactionStrategy strategy =
    stop without calling the LLM.
 2. Feed `[prior synthetic summaries] + [events to archive] + [overlap events]` to the LLM.
    Stored system messages are never included.
-3. Replace the archived events and the prior summaries with a new synthetic summary turn
-   `[USER shadow, ASSISTANT summary]`.
+3. Archive the summarized events and the prior summaries, and insert a new synthetic
+   summary turn `[USER shadow, ASSISTANT summary]` right before the active window.
 
 The **recursive** property: the `ASSISTANT` text from any prior synthetic summary is fed
 back to the LLM as `=== PRIOR SUMMARY ===` context, so each summary builds on its

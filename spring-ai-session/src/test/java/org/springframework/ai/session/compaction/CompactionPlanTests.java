@@ -38,7 +38,7 @@ class CompactionPlanTests {
 	private static final String SESSION_ID = "session-1";
 
 	@Test
-	void ofArchivesDeletesAndInsertsBeforeTheNextRetainedExistingEvent() {
+	void ofArchivesEveryEventNotKeptAndInsertsBeforeTheNextRetainedExistingEvent() {
 		SessionEvent u1 = user("u1");
 		SessionEvent a1 = assistant("a1");
 		SessionEvent oldSummary = synthetic("old summary");
@@ -50,8 +50,9 @@ class CompactionPlanTests {
 
 		CompactionPlan plan = CompactionPlan.of(SESSION_ID, active, result);
 
-		assertThat(plan.archiveIds()).containsExactlyInAnyOrder(u1.getId(), a1.getId());
-		assertThat(plan.deleteIds()).containsExactly(oldSummary.getId());
+		// The replaced summary is not in the result's archivedEvents, but it is not kept
+		// either, so the plan archives it too: nothing ever leaves the log.
+		assertThat(plan.archiveIds()).containsExactlyInAnyOrder(u1.getId(), a1.getId(), oldSummary.getId());
 		assertThat(plan.inserts()).containsExactly(Insert.before(u2.getId(), List.of(newSummary)));
 		assertThat(plan.insertedEvents()).containsExactly(newSummary);
 		assertThat(plan.isEmpty()).isFalse();
@@ -91,28 +92,28 @@ class CompactionPlanTests {
 	}
 
 	@Test
-	void applyToFlagsArchivesInPlaceDropsDeletesAndInsertsBeforeAnchors() {
+	void applyToFlagsArchivesInPlaceAndInsertsBeforeAnchors() {
 		SessionEvent u1 = user("u1");
 		SessionEvent a1 = assistant("a1");
 		SessionEvent oldSummary = synthetic("old summary");
 		SessionEvent u2 = user("u2");
 		SessionEvent newSummary = synthetic("new summary");
 		SessionEvent tail = synthetic("tail");
-		CompactionPlan plan = new CompactionPlan(Set.of(u1.getId(), a1.getId()), Set.of(oldSummary.getId()),
+		CompactionPlan plan = new CompactionPlan(Set.of(u1.getId(), a1.getId(), oldSummary.getId()),
 				List.of(Insert.before(u2.getId(), List.of(newSummary)), Insert.atEnd(List.of(tail))));
 
 		List<SessionEvent> log = plan.applyTo(List.of(u1, a1, oldSummary, u2));
 
 		assertThat(log).extracting(e -> e.getMessage().getText())
-			.containsExactly("u1", "a1", "new summary", "u2", "tail");
-		assertThat(log).extracting(SessionEvent::isArchived).containsExactly(true, true, false, false, false);
+			.containsExactly("u1", "a1", "old summary", "new summary", "u2", "tail");
+		assertThat(log).extracting(SessionEvent::isArchived).containsExactly(true, true, true, false, false, false);
 	}
 
 	@Test
 	void applyToRejectsUnknownArchiveAndAnchorIds() {
 		SessionEvent u1 = user("u1");
-		CompactionPlan unknownArchive = new CompactionPlan(Set.of("missing"), Set.of(), List.of());
-		CompactionPlan unknownAnchor = new CompactionPlan(Set.of(), Set.of(),
+		CompactionPlan unknownArchive = new CompactionPlan(Set.of("missing"), List.of());
+		CompactionPlan unknownAnchor = new CompactionPlan(Set.of(),
 				List.of(Insert.before("missing", List.of(synthetic("s")))));
 
 		assertThatThrownBy(() -> unknownArchive.applyTo(List.of(u1))).isInstanceOf(IllegalArgumentException.class);

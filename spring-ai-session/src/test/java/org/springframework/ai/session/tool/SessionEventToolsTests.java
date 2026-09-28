@@ -160,7 +160,7 @@ class SessionEventToolsTests {
 	}
 
 	@Test
-	void syntheticEventsAreIncludedInSearch() {
+	void syntheticEventsAreExcludedFromSearch() {
 		this.sessionService.appendEvent(SessionEvent.builder()
 			.sessionId(this.sessionId)
 			.message(new UserMessage("Summarize the conversation we had so far."))
@@ -174,10 +174,11 @@ class SessionEventToolsTests {
 			.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, "test")
 			.build());
 
-		// Synthetic summary text is searchable too
+		// A summary paraphrases real events that are still in the log, so it is not
+		// returned as a search hit of its own
 		String result = search("memory management", 0);
 
-		assertThat(result).contains("memory management");
+		assertThat(result).doesNotContain("memory management");
 	}
 
 	@Test

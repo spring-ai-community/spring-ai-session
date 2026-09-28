@@ -101,7 +101,7 @@ final class DialectScenarios {
 	/**
 	 * Three recursive summarization passes never reorder the log: archived events are
 	 * flagged in place, a kept system message stays where it was stored, and each summary
-	 * goes right before the kept window. Pass 3 archives a superseded system message that
+	 * goes right before the kept window while the replaced one is archived in place. Pass 3 archives a superseded system message that
 	 * sits after the inserted summary, which exercises the re-inserted tail.
 	 */
 	static void repeatedRecursiveSummarizationNeverReordersTheLog(JdbcSessionRepository repository) {
@@ -127,16 +127,18 @@ final class DialectScenarios {
 
 		appendAll(service, id, "u6", "a6", "u7", "a7");
 		service.compact(id, request -> true, strategy);
-		assertThat(labels(service.getEvents(id))).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "u4",
-				"a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7");
+		assertThat(labels(service.getEvents(id))).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "Σ?",
+				"Σ:summary 1", "u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7");
 
 		appendAll(service, id, "u8", "sys-2", "a8", "u9", "sys-3", "a9");
 		service.compact(id, request -> true, strategy);
 		List<SessionEvent> log = service.getEvents(id);
-		assertThat(labels(log)).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5", "a5",
-				"u6", "a6", "u7", "a7", "Σ?", "Σ:summary 3", "u8", "sys-2", "a8", "u9", "sys-3", "a9");
+		assertThat(labels(log)).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1",
+				"u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7", "Σ?", "Σ:summary 3", "u8",
+				"sys-2", "a8", "u9", "sys-3", "a9");
 		assertThat(labels(log.stream().filter(SessionEvent::isArchived).toList())).containsExactly("u1", "sys-1",
-				"a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5", "a5", "u6", "a6", "u7", "a7", "sys-2");
+				"a1", "u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1", "u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2",
+				"u6", "a6", "u7", "a7", "sys-2");
 		assertThat(labels(service.getEvents(id, EventFilter.active()))).containsExactly("Σ?", "Σ:summary 3", "u8",
 				"a8", "u9", "sys-3", "a9");
 	}

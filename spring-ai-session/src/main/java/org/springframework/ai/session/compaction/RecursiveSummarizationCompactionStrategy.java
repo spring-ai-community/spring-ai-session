@@ -63,7 +63,9 @@ import org.springframework.util.Assert;
  * <h3>Recursive / rolling behaviour</h3> Any prior synthetic summary produced by a
  * previous compaction pass is fed back to the LLM as context when generating the new
  * summary. This means each summary <em>builds on</em> its predecessors rather than
- * starting from scratch, creating a rolling window of compressed context.
+ * starting from scratch, creating a rolling window of compressed context. The replaced
+ * summary is archived like the events it stood for: it leaves the active window but stays
+ * in the log.
  *
  * <h3>No-op condition</h3> If the number of real events does not exceed
  * {@code maxEventsToKeep} no LLM call is made and the events are returned unchanged. If
@@ -239,24 +241,23 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 					.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, STRATEGY_NAME)
 					.build());
 
-		// Archived = only the real events that were summarized and removed, plus
-		// superseded stored system messages (never summarized). Prior synthetic summaries
-		// are replaced by the new summary turn and are therefore NOT included in
-		// archivedEvents, consistent with the other strategies, which only report the
-		// events they archived.
-		CompactionResult archiving = CompactionUtils.archiving(events, toArchive, supersededSystem, tokens);
+		// Archived = the real events that were summarized, the superseded stored system
+		// messages (never summarized), and the prior synthetic summaries the new summary
+		// turn replaces. Nothing leaves the log: an archived summary stays readable through
+		// Recall Storage and shows what the model was told before this pass.
+		List<SessionEvent> replaced = new ArrayList<>(supersededSystem);
+		replaced.addAll(syntheticEvents);
+		CompactionResult archiving = CompactionUtils.archiving(events, toArchive, replaced, tokens);
 
-		// The new active window keeps every remaining event in its original log order
-		// (a kept system message stays where it was stored); prior summaries are dropped,
-		// and the new summary turn goes right before the first kept conversation event.
-		List<SessionEvent> compacted = new ArrayList<>(
-				archiving.compactedEvents().stream().filter(e -> !e.isSynthetic()).toList());
+		// The new active window keeps every remaining event in its original log order (a
+		// kept system message stays where it was stored), and the new summary turn goes
+		// right before the first kept conversation event.
+		List<SessionEvent> compacted = new ArrayList<>(archiving.compactedEvents());
 		compacted.addAll(compacted.indexOf(activeWindow.get(0)), summaryTurn);
 
-		// Net saving: the archived events and the replaced prior summary leave the active
-		// window, the new summary turn enters it
-		int saved = archiving.tokensEstimatedSaved() + syntheticEvents.stream().mapToInt(tokens).sum()
-				- summaryTurn.stream().mapToInt(tokens).sum();
+		// Net saving: the archived events leave the active window, the new summary turn
+		// enters it
+		int saved = archiving.tokensEstimatedSaved() - summaryTurn.stream().mapToInt(tokens).sum();
 		return new CompactionResult(compacted, archiving.archivedEvents(), Math.max(0, saved));
 	}
 

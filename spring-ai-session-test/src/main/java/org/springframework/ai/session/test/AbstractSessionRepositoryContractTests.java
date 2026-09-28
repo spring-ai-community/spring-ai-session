@@ -346,7 +346,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 		Session session = newSession("user-archived");
 		append(session.id(), user("old"), user("new"));
 		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
-		apply(session.id(), plan(Set.of(log.get(0).getId()), Set.of(), List.of()));
+		apply(session.id(), plan(Set.of(log.get(0).getId()), List.of()));
 
 		assertThat(texts(session.id(), EventFilter.active())).containsExactly("new");
 		assertThat(texts(session.id(), EventFilter.all())).containsExactly("old", "new");
@@ -454,7 +454,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 		long version = this.repository.getEventVersion(session.id());
 
 		boolean applied = this.repository.applyCompaction(session.id(),
-				plan(Set.of(log.get(0).getId(), log.get(1).getId()), Set.of(), List.of()), version);
+				plan(Set.of(log.get(0).getId(), log.get(1).getId()), List.of()), version);
 
 		assertThat(applied).isTrue();
 		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(version + 1);
@@ -465,16 +465,17 @@ public abstract class AbstractSessionRepositoryContractTests {
 	}
 
 	@Test
-	void deleteIdsRemoveEventsFromTheLog() {
-		Session session = newSession("user-delete");
+	void aReplacedSummaryIsArchivedInPlaceNotRemoved() {
+		Session session = newSession("user-replaced-summary");
 		append(session.id(), user("u1"));
 		this.repository.appendEvent(synthetic(session.id(), new AssistantMessage("old summary")));
 		append(session.id(), user("u2"));
 		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
 
-		apply(session.id(), plan(Set.of(), Set.of(log.get(1).getId()), List.of()));
+		apply(session.id(), plan(Set.of(log.get(1).getId()), List.of()));
 
-		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1", "u2");
+		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1", "old summary", "u2");
+		assertThat(texts(session.id(), EventFilter.active())).containsExactly("u1", "u2");
 	}
 
 	@Test
@@ -484,7 +485,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
 		SessionEvent summary = synthetic(session.id(), new AssistantMessage("summary"));
 
-		apply(session.id(), plan(Set.of(log.get(0).getId(), log.get(1).getId()), Set.of(),
+		apply(session.id(), plan(Set.of(log.get(0).getId(), log.get(1).getId()),
 				List.of(Insert.before(log.get(2).getId(), List.of(summary)))));
 
 		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1", "a1", "summary", "u2", "a2");
@@ -497,7 +498,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 		append(session.id(), user("u1"), assistant("a1"));
 		SessionEvent added = synthetic(session.id(), new AssistantMessage("added"));
 
-		apply(session.id(), plan(Set.of(), Set.of(), List.of(Insert.atEnd(List.of(added)))));
+		apply(session.id(), plan(Set.of(), List.of(Insert.atEnd(List.of(added)))));
 
 		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1", "a1", "added");
 	}
@@ -510,7 +511,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 		SessionEvent x = synthetic(session.id(), new AssistantMessage("x"));
 		SessionEvent y = synthetic(session.id(), new AssistantMessage("y"));
 
-		apply(session.id(), plan(Set.of(), Set.of(), List.of(Insert.before(log.get(1).getId(), List.of(x)),
+		apply(session.id(), plan(Set.of(), List.of(Insert.before(log.get(1).getId(), List.of(x)),
 				Insert.before(log.get(2).getId(), List.of(y)))));
 
 		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1", "x", "u2", "y", "u3");
@@ -526,7 +527,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 				assistant("a3"), user("u4"), assistant("a4"), user("u5"), assistant("a5"));
 		List<SessionEvent> active = this.repository.findEvents(id, EventFilter.active());
 		List<SessionEvent> summary1 = summaryTurn(id, "summary 1");
-		apply(id, plan(ids(active, "u1", "a1", "u2", "a2", "u3", "a3"), Set.of(),
+		apply(id, plan(ids(active, "u1", "a1", "u2", "a2", "u3", "a3"),
 				List.of(Insert.before(idOf(active, "u4"), summary1))));
 
 		assertThat(labels(this.repository.findEvents(id, EventFilter.all()))).containsExactly("u1", "sys-1", "a1",
@@ -534,14 +535,16 @@ public abstract class AbstractSessionRepositoryContractTests {
 		assertThat(labels(this.repository.findEvents(id, EventFilter.active()))).containsExactly("sys-1", "Σ?",
 				"Σ:summary 1", "u4", "a4", "u5", "a5");
 
-		// Pass 2: the previous summary is replaced, the new one precedes the kept window
+		// Pass 2: the previous summary is archived in place, the new one precedes the kept
+		// window
 		append(id, user("u6"), assistant("a6"), user("u7"), assistant("a7"));
 		active = this.repository.findEvents(id, EventFilter.active());
-		apply(id, plan(ids(active, "u4", "a4", "u5", "a5"), ids(active, "Σ?", "Σ:summary 1"),
+		apply(id, plan(ids(active, "Σ?", "Σ:summary 1", "u4", "a4", "u5", "a5"),
 				List.of(Insert.before(idOf(active, "u6"), summaryTurn(id, "summary 2")))));
 
 		assertThat(labels(this.repository.findEvents(id, EventFilter.all()))).containsExactly("u1", "sys-1", "a1",
-				"u2", "a2", "u3", "a3", "u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7");
+				"u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1", "u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6",
+				"u7", "a7");
 		assertThat(labels(this.repository.findEvents(id, EventFilter.active()))).containsExactly("sys-1", "Σ?",
 				"Σ:summary 2", "u6", "a6", "u7", "a7");
 
@@ -549,14 +552,16 @@ public abstract class AbstractSessionRepositoryContractTests {
 		// the kept window, after the inserted summary
 		append(id, user("u8"), system("sys-2"), assistant("a8"), user("u9"), system("sys-3"), assistant("a9"));
 		active = this.repository.findEvents(id, EventFilter.active());
-		apply(id, plan(ids(active, "u6", "a6", "u7", "a7", "sys-1", "sys-2"), ids(active, "Σ?", "Σ:summary 2"),
+		apply(id, plan(ids(active, "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7", "sys-1", "sys-2"),
 				List.of(Insert.before(idOf(active, "u8"), summaryTurn(id, "summary 3")))));
 
 		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
-		assertThat(labels(log)).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5", "a5",
-				"u6", "a6", "u7", "a7", "Σ?", "Σ:summary 3", "u8", "sys-2", "a8", "u9", "sys-3", "a9");
+		assertThat(labels(log)).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1",
+				"u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7", "Σ?", "Σ:summary 3", "u8",
+				"sys-2", "a8", "u9", "sys-3", "a9");
 		assertThat(labels(log.stream().filter(SessionEvent::isArchived).toList())).containsExactly("u1", "sys-1",
-				"a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5", "a5", "u6", "a6", "u7", "a7", "sys-2");
+				"a1", "u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1", "u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2",
+				"u6", "a6", "u7", "a7", "sys-2");
 		assertThat(labels(this.repository.findEvents(id, EventFilter.active()))).containsExactly("Σ?", "Σ:summary 3",
 				"u8", "a8", "u9", "sys-3", "a9");
 	}
@@ -570,7 +575,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 		SessionEvent summary = synthetic(session.id(), new AssistantMessage("should-not-land"));
 
 		boolean applied = this.repository.applyCompaction(session.id(),
-				plan(Set.of(log.get(0).getId()), Set.of(), List.of(Insert.atEnd(List.of(summary)))),
+				plan(Set.of(log.get(0).getId()), List.of(Insert.atEnd(List.of(summary)))),
 				version - 1);
 
 		assertThat(applied).isFalse();
@@ -585,7 +590,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 		Session session = newSession("user-unknown-archive");
 		append(session.id(), user("u1"));
 		long version = this.repository.getEventVersion(session.id());
-		CompactionPlan plan = plan(Set.of(UUID.randomUUID().toString()), Set.of(), List.of());
+		CompactionPlan plan = plan(Set.of(UUID.randomUUID().toString()), List.of());
 
 		assertThatThrownBy(() -> this.repository.applyCompaction(session.id(), plan, version))
 			.isInstanceOf(IllegalArgumentException.class);
@@ -599,7 +604,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 		append(session.id(), user("u1"));
 		long version = this.repository.getEventVersion(session.id());
 		SessionEvent summary = synthetic(session.id(), new AssistantMessage("summary"));
-		CompactionPlan plan = plan(Set.of(), Set.of(),
+		CompactionPlan plan = plan(Set.of(),
 				List.of(Insert.before(UUID.randomUUID().toString(), List.of(summary))));
 
 		assertThatThrownBy(() -> this.repository.applyCompaction(session.id(), plan, version))
@@ -610,7 +615,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 
 	@Test
 	void applyCompactionOnAnUnknownSessionIsRejected() {
-		CompactionPlan plan = plan(Set.of(), Set.of(), List.of());
+		CompactionPlan plan = plan(Set.of(), List.of());
 
 		assertThatThrownBy(() -> this.repository.applyCompaction(UUID.randomUUID().toString(), plan, 0L))
 			.isInstanceOf(IllegalArgumentException.class);
@@ -647,8 +652,8 @@ public abstract class AbstractSessionRepositoryContractTests {
 		return this.repository.findEvents(sessionId, filter).stream().map(e -> e.getMessage().getText()).toList();
 	}
 
-	protected static CompactionPlan plan(Set<String> archiveIds, Set<String> deleteIds, List<Insert> inserts) {
-		return new CompactionPlan(archiveIds, deleteIds, inserts);
+	protected static CompactionPlan plan(Set<String> archiveIds, List<Insert> inserts) {
+		return new CompactionPlan(archiveIds, inserts);
 	}
 
 	/** A synthetic event, as a compaction strategy would produce it. */

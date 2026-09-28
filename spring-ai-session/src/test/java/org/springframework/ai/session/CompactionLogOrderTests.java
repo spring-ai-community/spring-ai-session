@@ -71,12 +71,13 @@ class CompactionLogOrderTests {
 		assertThat(labels(this.service.getEvents(id, EventFilter.active()))).containsExactly("sys-1", "Σ?",
 				"Σ:summary 1", "u4", "a4", "u5", "a5");
 
-		// Pass 2: the previous summary is replaced, the new one precedes the kept window
+		// Pass 2: the previous summary is archived in place, the new one precedes the kept
+		// window
 		append(id, user("u6"), assistant("a6"), user("u7"), assistant("a7"));
 		this.service.compact(id, request -> true, strategy);
 
 		assertThat(labels(this.service.getEvents(id))).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3",
-				"u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7");
+				"Σ?", "Σ:summary 1", "u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7");
 		assertThat(labels(this.service.getEvents(id, EventFilter.active()))).containsExactly("sys-1", "Σ?",
 				"Σ:summary 2", "u6", "a6", "u7", "a7");
 
@@ -86,10 +87,12 @@ class CompactionLogOrderTests {
 		this.service.compact(id, request -> true, strategy);
 
 		List<SessionEvent> log = this.service.getEvents(id);
-		assertThat(labels(log)).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5", "a5",
-				"u6", "a6", "u7", "a7", "Σ?", "Σ:summary 3", "u8", "sys-2", "a8", "u9", "sys-3", "a9");
+		assertThat(labels(log)).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1",
+				"u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7", "Σ?", "Σ:summary 3", "u8",
+				"sys-2", "a8", "u9", "sys-3", "a9");
 		assertThat(labels(log.stream().filter(SessionEvent::isArchived).toList())).containsExactly("u1", "sys-1",
-				"a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5", "a5", "u6", "a6", "u7", "a7", "sys-2");
+				"a1", "u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1", "u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2",
+				"u6", "a6", "u7", "a7", "sys-2");
 		assertThat(labels(this.service.getEvents(id, EventFilter.active()))).containsExactly("Σ?", "Σ:summary 3",
 				"u8", "a8", "u9", "sys-3", "a9");
 	}

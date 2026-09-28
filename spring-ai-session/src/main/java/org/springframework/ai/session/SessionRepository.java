@@ -113,12 +113,10 @@ public interface SessionRepository {
 	 * <p>
 	 * Archived events are <em>retained</em> in the log (soft-deleted via
 	 * {@link SessionEvent#isArchived()}) so they remain searchable by the Recall Storage
-	 * tools. Compaction never reorders existing events. On success:
+	 * tools. Compaction never removes or reorders existing events. On success:
 	 * <ul>
 	 * <li>the events in {@link CompactionPlan#archiveIds()} are flagged archived <em>in
 	 * place</em>;</li>
-	 * <li>the events in {@link CompactionPlan#deleteIds()} (e.g. a superseded synthetic
-	 * summary) are removed;</li>
 	 * <li>each {@link CompactionPlan.Insert} group is inserted immediately before its
 	 * anchor event, or appended at the end of the log when the anchor is {@code null};</li>
 	 * <li>every other event stays where it is.</li>

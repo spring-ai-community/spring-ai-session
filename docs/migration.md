@@ -20,8 +20,16 @@ compaction settings, and pass only the task in and the result back. See
 ### Behavior changes
 
 - **`CompactionResult.eventsRemoved()` is renamed to `archivedEventCount()`.** The events it
-  counts are archived, not removed; the superseded summaries that compaction does remove
-  were never counted. No deprecated alias.
+  counts are archived, not removed. No deprecated alias.
+- **Compaction never deletes.** A synthetic summary that a newer recursive summary replaces
+  used to be removed from the log; it is now archived in place like the events it
+  summarized, and `RecursiveSummarizationCompactionStrategy` lists it in
+  `archivedEvents` (so `archivedEventCount()` includes it). Nothing leaves the log except
+  through `delete` or `deleteExpiredSessions`.
+- **Recall tools skip synthetic events.** `conversation_search` (`SessionEventTools`) and
+  `CrossSessionRecallTools` exclude synthetic summaries from their results, since a
+  summary only paraphrases real events that are still in the log. Build your own
+  `EventFilter` to search summaries.
 - **Every `USER` event starts a turn.** Turn counting (`TurnCountTrigger`) and every
   strategy's turn boundaries now use all non-synthetic `USER` events, and the event-count
   strategies (`maxEvents`, `maxEventsToKeep`) count all real events. Events that were
@@ -84,10 +92,9 @@ searching) and core owns *interpretation* (what a compaction means). A custom re
   repository only applies it, under the same compare-and-swap on `expectedVersion`:
     - flag every id in `plan.archiveIds()` archived **in place** (reject an unknown id
       with `IllegalArgumentException` and change nothing);
-    - remove every id in `plan.deleteIds()` (a superseded summary);
     - insert each `plan.inserts()` group immediately before its `beforeEventId` anchor,
       or at the end of the log when the anchor is `null`;
-    - never move an existing event.
+    - never move or remove an existing event.
 
   `CompactionPlan.applyTo(List<SessionEvent> log)` is the reference implementation for a
   log held as a list; a list-based store can call it directly.

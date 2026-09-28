@@ -67,7 +67,7 @@ what `Message` intentionally omits: identity, ownership, ordering, and framework
 | `AssistantMessage` (with tool calls) | `false` | Agent tool invocation | Archived with its turn, never separated from its tool results |
 | `ToolResponseMessage` | `false` | Tool output | Archived with its turn |
 | `SystemMessage` | `false` | A stored system prompt: configuration, not conversation. Storing one is opt-in | The latest one is kept; earlier ones are archived. Never summarized. See [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins) |
-| `UserMessage` | `true` | Synthetic shadow prompt opening a summary turn | Kept by the sliding-window, turn-window and token-count strategies. Replaced (deleted) by the next recursive summary |
+| `UserMessage` | `true` | Synthetic shadow prompt opening a summary turn | Kept by the sliding-window, turn-window and token-count strategies. Archived by the next recursive summary, which replaces it |
 | `AssistantMessage` | `true` | Synthetic summary text closing a summary turn | As above. Its text is fed to the next recursive summary as the prior summary |
 | `SystemMessage` | `true` | Legacy summary format from earlier versions | As above. Still read as a prior summary by the recursive strategy |
 
@@ -147,8 +147,8 @@ processing real events (for system messages, see
 [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins)).
 The sliding-window, turn-window and token-count strategies keep synthetic events unchanged,
 where they are in the log. `RecursiveSummarizationCompactionStrategy` instead folds the previous
-summary into the new one and **replaces** it: the superseded synthetic events are removed
-from the log (they are not archived).
+summary into the new one and **replaces** it: the superseded synthetic events are archived
+in place, like the real events they summarized.
 
 Build a synthetic summary turn explicitly:
 
@@ -259,7 +259,6 @@ stateDiagram-v2
     direction LR
     [*] --> Active : appendEvent
     Active --> Archived : compaction archives it
-    Active --> Deleted : superseded summary replaced by a new one
     Active --> Deleted : session deleted or expired
     Archived --> Deleted : session deleted or expired
     Deleted --> [*]
@@ -270,12 +269,11 @@ stateDiagram-v2
 
 - **Active:** part of the active context window. Appending an event with an id that
   already exists is an idempotent replay and changes nothing.
-- **Archived:** compaction moved it out of the active window, for example an old turn, or
-  a stored system message superseded by a newer one. The latest stored system message
-  always stays active.
-- **Deleted:** gone from the log. This only happens to a synthetic summary that a new
-  summary replaces, or when its whole session is deleted (`delete`, or
-  `deleteExpiredSessions` for expired sessions).
+- **Archived:** compaction moved it out of the active window, for example an old turn, a
+  stored system message superseded by a newer one, or a synthetic summary that a newer
+  summary replaces. The latest stored system message always stays active.
+- **Deleted:** gone from the log. This only happens when the whole session is deleted
+  (`delete`, or `deleteExpiredSessions` for expired sessions). Compaction never deletes.
 
 **Archiving instead of deleting**
 
@@ -284,9 +282,10 @@ Compaction marks the real events it removes from the active window as archived
 the log. What an integration sends to the model is the `EventFilter.active()` view, while
 [Recall Storage](../recall-memory/recall-storage.md) searches (`EventFilter.keywordSearch(...)`) span the
 whole log, archived events included. This makes the MemGPT recall pattern work: the agent
-can surface any prior exchange after it has been compacted out of context. Only a
-superseded synthetic summary is deleted instead, because its content is carried into the
-new summary.
+can surface any prior exchange after it has been compacted out of context. A replaced
+synthetic summary is archived too, so the log also shows what the model was told before
+each pass. The Recall Storage tools leave synthetic events out of their results by default,
+because a summary only paraphrases real events that are still in the log.
 
 In the JDBC repository, newly archived events are flagged with an in-place `UPDATE`.
 Compaction never reorders the log: only when a summary is inserted is the part of the log
@@ -299,7 +298,7 @@ never re-read or re-written.
 incremented on every `appendEvent` that appends a new event and on every successful
 `applyCompaction` call. `DefaultSessionService.compact` reads it before fetching the
 active events, turns the strategy's result into a `CompactionPlan` (which events to
-archive, which to delete, which new events to insert before which existing event) and
+archive, which new events to insert before which existing event) and
 passes both to `applyCompaction(sessionId, plan, expectedVersion)`. If another writer
 changed the log in between, this compare-and-swap (CAS) returns `false`, and the caller
 treats it as a no-op rather than retrying. Durable implementations should map it to a
@@ -352,10 +351,9 @@ type, text and a JSON `data` payload (tool calls or tool responses), and decodes
 Stores that keep columns or fields use it so every backend stores the same thing.
 
 **Compaction is a plan.** `applyCompaction(sessionId, plan, expectedVersion)` receives a
-`CompactionPlan` with three parts: `archiveIds` to flag archived in place, `deleteIds` to
-remove (a superseded summary), and `inserts`, each a group of new events that goes
-immediately before an existing anchor event, or at the end when the anchor is `null`.
-Existing events never move. `CompactionPlan.applyTo(log)` is the reference merge for a log
+`CompactionPlan` with two parts: `archiveIds` to flag archived in place, and `inserts`,
+each a group of new events that goes immediately before an existing anchor event, or at
+the end when the anchor is `null`. Existing events never move and are never removed. `CompactionPlan.applyTo(log)` is the reference merge for a log
 held as a list; list-based stores can call it directly.
 
 **Run the contract tests.** The `spring-ai-session-test` artifact contains
@@ -383,7 +381,7 @@ class MySessionRepositoryContractTests extends AbstractSessionRepositoryContract
 
 It covers idempotent append, the version rules, `saveIfAbsent` under concurrent creates,
 expiry cleanup, every filter criterion and window, and every compaction rule (archive in
-place, delete, insert before an anchor, append, stale version, unknown ids).
+place, insert before an anchor, append, stale version, unknown ids).
 
 ---
 

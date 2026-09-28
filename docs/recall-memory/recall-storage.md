@@ -74,10 +74,11 @@ When nothing matches: `"No results found."` is returned.
 
 ## How it works
 
-The tool calls `SessionService.getEvents(sessionId, EventFilter.keywordSearch(query, page, pageSize))`:
+The tool searches with a keyword `EventFilter` (page and page size from the tool call):
 a case-insensitive substring match on each event's `message.getText()`, applied before
 pagination. Synthetic summary events produced by `RecursiveSummarizationCompactionStrategy`
-are searched too.
+are left out, because a summary only paraphrases real events that are still in the log.
+Use `SessionService.getEvents` with your own `EventFilter` to search summaries.
 
 !!! note "Multi-agent sessions"
     With a [session per sub-agent](../session-management/multi-agent.md#session-per-sub-agent),

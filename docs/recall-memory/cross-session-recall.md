@@ -92,6 +92,9 @@ When nothing matches: `"No results found."` is returned.
   are dropped *after* paging, so a page may hold fewer results; the next page still starts
   where this one ended. Worth keeping in mind for a user with a very large number of long-lived
   sessions.
+- **Synthetic summaries are skipped.** The filter sets `excludeSynthetic(true)`: a
+  summary only paraphrases real events that are still in the log, archived or not, so
+  searching it too would return the same facts twice.
 - **No regex.** Only plain-substring `keywords`/`matchMode` search is exposed, never a
   raw regex string a model could supply; see the
   [ReDoS warning](../session-management/event-filtering.md#static-factory-shortcuts).

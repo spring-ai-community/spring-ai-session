@@ -29,7 +29,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 import javax.sql.DataSource;
@@ -167,9 +166,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 	private static final String SELECT_EVENT_SEQ =
 		"SELECT seq FROM AI_SESSION_EVENT WHERE id = ? AND session_id = ?";
-
-	private static final String DELETE_EVENT_BY_ID =
-		"DELETE FROM AI_SESSION_EVENT WHERE id = ? AND session_id = ?";
 
 	// Removes the tail of the log that compaction re-inserts with new events in between.
 	private static final String DELETE_EVENTS_FROM_SEQ =
@@ -334,7 +330,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 				return false;
 			}
 			archiveInPlace(sessionId, plan.archiveIds());
-			deleteEvents(sessionId, plan.deleteIds());
 			insertEvents(sessionId, plan.inserts());
 			return true;
 		});
@@ -365,17 +360,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 				}
 			}
 		}
-	}
-
-	private void deleteEvents(String sessionId, Set<String> deleteIds) {
-		if (deleteIds.isEmpty()) {
-			return;
-		}
-		List<String> ids = List.copyOf(deleteIds);
-		this.jdbcTemplate.batchUpdate(DELETE_EVENT_BY_ID, ids, ids.size(), (ps, id) -> {
-			ps.setString(1, id);
-			ps.setString(2, sessionId);
-		});
 	}
 
 	/**

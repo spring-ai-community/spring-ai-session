@@ -149,7 +149,12 @@ public class CrossSessionRecallTools {
 	}
 
 	private EventFilter buildFilter(String query, String matchMode, String since, int page) {
-		EventFilter.Builder builder = EventFilter.builder().page(page).pageSize(this.pageSize);
+		// Synthetic summaries paraphrase real events that are still in the log, so they are
+		// left out to avoid returning the same facts twice.
+		EventFilter.Builder builder = EventFilter.builder()
+			.page(page)
+			.pageSize(this.pageSize)
+			.excludeSynthetic(true);
 
 		// A blank query would apply no keyword filter and return every event of every
 		// session of this user — reject it rather than silently widening the search.

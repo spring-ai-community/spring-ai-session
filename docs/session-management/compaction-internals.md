@@ -4,9 +4,9 @@ This page explains **how** compaction works: the CAS write, turn snapping, recur
 summarization, stored system messages and concurrent JDBC appends, with diagrams and
 worked examples. For **using** compaction, see [Context Compaction](compaction.md).
 
-Two words are used precisely throughout: an event is **archived** when compaction flags it
-and it stays in the log (searchable through Recall Storage); an event is **deleted** when
-it leaves the log. Compaction deletes only superseded synthetic summaries.
+One word is used precisely throughout: an event is **archived** when compaction flags it
+and it stays in the log (searchable through Recall Storage). Compaction never deletes an
+event; only deleting or expiring the whole session does.
 
 !!! note "Implementation details"
     This page describes the current implementation. Package-private helpers such as
@@ -68,7 +68,6 @@ classDiagram
     class CompactionPlan {
         <<record>>
         archiveIds
-        deleteIds
         inserts
         +of(sessionId, activeEvents, result)$ CompactionPlan
         +applyTo(log) List
@@ -94,12 +93,11 @@ classDiagram
   writes the result.
 - **`CompactionResult` has two lists.** `compactedEvents` is the new active window.
   `archivedEvents` are the events to archive: they stay in the log and remain searchable
-  through Recall Storage. An active event in neither list is deleted; the only such events
-  are superseded synthetic summaries.
+  through Recall Storage. Every active event not in `compactedEvents` is archived, whether
+  or not the strategy listed it.
 - **The service turns the result into a `CompactionPlan`.** `CompactionPlan.of(sessionId,
-  activeEvents, result)` computes the ids to archive, the ids to delete, and the new
-  events to insert, each group keyed by the existing event it goes in front of (`null` to
-  append). The repository applies the plan without interpreting the result;
+  activeEvents, result)` computes the ids to archive and the new events to insert, each
+  group keyed by the existing event it goes in front of (`null` to append). The repository applies the plan without interpreting the result;
   `CompactionPlan.applyTo(log)` is the reference merge for a log held as a list.
 
 ### 1b. Triggers
@@ -225,7 +223,7 @@ sequenceDiagram
         Trg-->>Svc: true
         Svc->>Str: compact(request)
         Str-->>Svc: CompactionResult(compacted, archived, tokens)
-        Svc->>Svc: plan = CompactionPlan.of(sessionId, events, result)<br/>(archive ids, delete ids, inserts keyed by anchor)
+        Svc->>Svc: plan = CompactionPlan.of(sessionId, events, result)<br/>(archive ids, inserts keyed by anchor)
         alt plan is empty
             Svc-->>Adv: result (no repository write)
         else plan has operations
@@ -346,11 +344,11 @@ sequenceDiagram
             else summary text
                 LLM-->>R: summary
                 R->>R: summaryTurn = [USER shadowPrompt, ASSISTANT summary]<br/>(both synthetic, same timestamp)
-                R->>U: archiving(events, toArchive, superseded, tokens)
+                R->>U: archiving(events, toArchive,<br/>superseded + prior summaries, tokens)
                 U-->>R: remaining events (log order), archived
-                R->>R: compacted = remaining minus prior summaries,<br/>with summaryTurn inserted before activeWindow[0]
+                R->>R: compacted = remaining,<br/>with summaryTurn inserted before activeWindow[0]
                 R-->>Caller: CompactionResult(compacted, archived, tokens)
-                Note over R,Caller: prior summaries are in neither list,<br/>so the repository deletes them:<br/>the new summary already contains them
+                Note over R,Caller: the prior summaries are archived in place:<br/>the new summary carries their content forward
             end
         end
     end
@@ -362,7 +360,7 @@ sequenceDiagram
 
 **What makes it "recursive".** Each pass feeds the previous summary's text back to the
 LLM as `=== PRIOR SUMMARY ===`. The new summary therefore builds on the old one, and the
-old synthetic events are deleted rather than archived. The resulting active window holds
+old synthetic events are archived in place like the events they summarized. The resulting active window holds
 the latest stored system message (if any, where it was stored), one summary turn right
 before the kept conversation, and the recent real events, all in log order.
 
@@ -396,7 +394,6 @@ sequenceDiagram
         C->>DB: ROLLBACK, releasing the row lock
         Note over C: IllegalArgumentException, nothing changed
     else all archived
-        C->>DB: DELETE FROM AI_SESSION_EVENT WHERE id = ? AND session_id = ?<br/>(batch, one per plan.deleteIds, e.g. the previous summary)
         opt insert groups with an anchor (a summary turn)
             C->>DB: SELECT seq of each anchor event
             C->>DB: DELETE FROM AI_SESSION_EVENT<br/>WHERE session_id = ? AND seq >= smallest anchor seq
@@ -425,8 +422,8 @@ sequenceDiagram
 
 **In-memory equivalent:** `InMemorySessionRepository` does the same inside a single
 `ConcurrentHashMap.compute`. It checks the version, calls `CompactionPlan.applyTo(log)`
-(which flags the archive ids in place, deletes the delete ids, inserts each group before
-its anchor and appends the anchor-less group), and bumps the version.
+(which flags the archive ids in place, inserts each group before its anchor and appends
+the anchor-less group), and bumps the version.
 
 ---
 
@@ -444,7 +441,7 @@ and assistant messages, and `Σ` is the synthetic summary turn.
 | 4 | System message updated mid-session | `S:v1 U1 A1 S:v2 U2 A2` | SlidingWindow, `maxEvents = 20` | `U1 A1 S:v2 U2 A2` | `S:v1` |
 | 5 | System prompt stored in an old turn | `U1 S A1 U2 A2 U3 A3` | SlidingWindow, `maxEvents = 2` | `S U3 A3` | `U1 A1 U2 A2` |
 | 6 | Token budget with a system prompt | `S:sys(11) U(8) A(13) U(8) A(13)` | TokenCount, `maxTokens = 45` | `S:sys U A` (newest turn) | the older turn |
-| 7 | Recursive with a prior summary | `Σold U1 A1 U2 A2 U3 A3` | Recursive, `maxEventsToKeep = 2`, `overlapSize = 1` | `Σnew U3 A3` | `U1 A1 U2 A2` (`Σold` deleted) |
+| 7 | Recursive with a prior summary | `Σold U1 A1 U2 A2 U3 A3` | Recursive, `maxEventsToKeep = 2`, `overlapSize = 1` | `Σnew U3 A3` | `Σold U1 A1 U2 A2` |
 
 **Notes on the examples:**
 
@@ -461,8 +458,8 @@ and assistant messages, and `Σ` is the synthetic summary turn.
    turn fits, so the older turn is archived. Without the system prompt both turns (42)
    would fit in 45.
 7. The LLM receives `Σold`'s text as the prior summary plus `U1 A1 U2 A2` (and the overlap
-   `U3`). `Σold` ends up in neither list, so the repository deletes it; its content lives
-   on in `Σnew`.
+   `U3`). `Σold` is archived in place like the turns it summarized; its content lives on
+   in `Σnew`.
 
 ---
 
