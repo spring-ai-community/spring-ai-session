@@ -857,23 +857,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Turn-boundary Safety">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#the-most-recent-turn-is-always-kept" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The most recent turn is always kept
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
     </ul>
@@ -899,7 +882,7 @@
   <span class="md-ellipsis">
     
   
-    Compaction Internals
+    How Compaction Works
   
 
     
@@ -1504,23 +1487,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Turn-boundary Safety">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#the-most-recent-turn-is-always-kept" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The most recent turn is always kept
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
     </ul>
@@ -1555,9 +1521,10 @@ reduces the session's event history to fit within that window while preserving
 conversational coherence. It is driven by two composable abstractions: <strong>triggers</strong> (when
 to compact) and <strong>strategies</strong> (how to compact).</p>
 <div class="admonition tip">
-<p class="admonition-title">How it works internally</p>
-<p>For class, sequence and activity diagrams of the compaction algorithms, and worked
-examples of the tricky cases, see <a href="../compaction-internals/">Compaction Internals</a>.</p>
+<p class="admonition-title">How it works</p>
+<p>This page is about choosing and configuring compaction. For what happens when a pass
+runs, with class, sequence and activity diagrams and worked examples of the tricky
+cases, see <a href="../compaction-internals/">How Compaction Works</a>.</p>
 </div>
 <hr />
 <h2 id="entry-point">Entry point<a class="headerlink" href="#entry-point" title="Permanent link">&para;</a></h2>
@@ -1783,19 +1750,15 @@ can build on it — creating a rolling, recursive compressed history.</p>
 The summarization call has no session ID in its advisor context, so the advisor would
 reject it with <code>IllegalStateException</code>. Build a plain <code>ChatClient</code> for the summarizer.</p>
 </div>
-<p><strong>Algorithm</strong></p>
-<ol>
-<li>Compute the cut so that the newest <code>maxEventsToKeep</code> real events form the
-   active window, and snap it to a turn boundary. If that leaves nothing to summarize,
-   stop without calling the LLM.</li>
-<li>Feed <code>[prior synthetic summaries] + [events to archive] + [overlap events]</code> to the LLM.
-   Stored system messages are never included.</li>
-<li>Archive the summarized events and the prior summaries, and insert a new synthetic
-   summary turn <code>[USER shadow, ASSISTANT summary]</code> right before the active window.</li>
-</ol>
-<p>The <strong>recursive</strong> property: the <code>ASSISTANT</code> text from any prior synthetic summary is fed
-back to the LLM as <code>=== PRIOR SUMMARY ===</code> context, so each summary builds on its
-predecessors without starting from scratch.</p>
+<p><strong>What the LLM sees, and what happens to its answer</strong></p>
+<p>The summarizer is given the previous summary (if any), the events being archived, and the
+first <code>overlapSize</code> events of the kept window for continuity; stored system messages are
+never included. The answer is stored as a synthetic summary turn, <code>[USER shadow prompt,
+ASSISTANT summary]</code>, inserted right before the kept window. Because the previous summary
+is part of the input, each summary builds on its predecessors, and the previous summary
+turn is archived in place like the events it summarized. The step-by-step, including when
+no LLM call is made, is in
+<a href="../compaction-internals/#4-sequence-recursivesummarizationcompactionstrategy">How Compaction Works</a>.</p>
 <p><strong>LLM failure handling</strong></p>
 <p>If the LLM returns a null or blank summary, the strategy logs a <code>WARN</code> and skips
 summarization, leaving the conversation unchanged (superseded stored system messages are
@@ -1832,31 +1795,22 @@ rendering or multilingual summaries:</p>
 </span></code></pre></div>
 <hr />
 <h2 id="turn-boundary-safety">Turn-boundary Safety<a class="headerlink" href="#turn-boundary-safety" title="Permanent link">&para;</a></h2>
-<p>All four strategies share a common safety rule: the kept window always starts at a
-<code>USER</code> message (apart from <code>TurnWindowCompactionStrategy</code>'s preamble, see above). The
-sliding-window, token-count and recursive-summarization strategies snap their cut point
-forward to the next such message (package-private <code>CompactionUtils.snapToTurnStart</code>);
-<code>TurnWindowCompactionStrategy</code> gets the same result by grouping events into turns. This
-prevents keeping a tool result or assistant reply without the user message that started
-its turn.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>Before snap:  [u1, a1, u2, a2a, | a2b, u3, a3]   ← cut lands on a2b (middle of turn 2)
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>After snap:   [u1, a1, u2, a2a, a2b, | u3, a3]   ← cut moved to u3 (turn start)
+<p>Every strategy gives two guarantees, whatever its budget:</p>
+<ul>
+<li><strong>The kept window starts at a turn.</strong> A cut that lands inside a turn moves forward to
+  the next <code>USER</code> message, so a tool result or an assistant reply is never kept without
+  the user message that started its turn. (<code>TurnWindowCompactionStrategy</code>'s preamble,
+  events before the first <code>USER</code> message, is the one exception: it is kept verbatim.)</li>
+<li><strong>The most recent turn is always kept.</strong> When the newest turn alone exceeds the budget,
+  a long tool-calling loop for example, it stays active anyway, so compaction never
+  archives the turn in progress. When there is no turn boundary to cut at, nothing is
+  archived and the summarizing strategy makes no LLM call.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>Budget: 3 events   [u1, a1, u2, a2a, | a2b, u3, a3]   cut lands inside turn 2
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>Kept:              [u1, a1, u2, a2a, a2b, | u3, a3]   moved to the next turn start
 </span></code></pre></div>
-<p>The full cut-point pipeline and seven worked examples are in
-<a href="../compaction-internals/#3-activity-how-a-strategy-chooses-what-to-archive">Compaction Internals</a>.</p>
-<h3 id="the-most-recent-turn-is-always-kept">The most recent turn is always kept<a class="headerlink" href="#the-most-recent-turn-is-always-kept" title="Permanent link">&para;</a></h3>
-<p>If there is no later turn start to snap to, the cut is moved back to the start of the
-most recent turn instead. This happens when the newest turn alone exceeds the budget, for
-example a long tool-calling loop or a very large tool result. That turn stays active even
-though it goes over <code>maxEvents</code> / <code>maxTokens</code> / <code>maxEventsToKeep</code>, so compaction never
-archives the turn in progress. When the whole history is a single oversize turn, nothing
-is archived (and <code>RecursiveSummarizationCompactionStrategy</code> makes no LLM call). The same
-holds when the active window has no <code>USER</code> message at all: there is no turn boundary to
-cut at, so nothing is archived.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>Budget: 2 events   [u1, a1, u2, a2, a3, a4]
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>Forward snap:      no USER after the cut → would archive everything
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>Kept instead:      [u1, a1, | u2, a2, a3, a4]   ← last turn kept, over budget
-</span></code></pre></div>
+<p>How the cut is computed, and seven worked examples of the tricky cases, are in
+<a href="../compaction-internals/#3-activity-how-a-strategy-chooses-what-to-archive">How Compaction Works</a>.</p>
 
 
 

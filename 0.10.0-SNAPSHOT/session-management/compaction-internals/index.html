@@ -27,7 +27,7 @@
     
     
       
-        <title>Compaction Internals - Spring AI Session</title>
+        <title>How Compaction Works - Spring AI Session</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#compaction-internals" class="md-skip">
+        <a href="#how-compaction-works" class="md-skip">
           Skip to content
         </a>
       
@@ -118,7 +118,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Compaction Internals
+              How Compaction Works
             
           </span>
         </div>
@@ -683,7 +683,7 @@
   <span class="md-ellipsis">
     
   
-    Compaction Internals
+    How Compaction Works
   
 
     
@@ -701,7 +701,7 @@
   <span class="md-ellipsis">
     
   
-    Compaction Internals
+    How Compaction Works
   
 
     
@@ -1525,10 +1525,48 @@
   
 
 
-<h1 id="compaction-internals">Compaction Internals<a class="headerlink" href="#compaction-internals" title="Permanent link">&para;</a></h1>
-<p>This page explains <strong>how</strong> compaction works: the CAS write, turn snapping, recursive
-summarization, stored system messages, the <code>CompactionPlan</code> the repository applies and
-concurrent JDBC appends, with diagrams and worked examples. For <strong>using</strong> compaction, see <a href="../compaction/">Context Compaction</a>.</p>
+<h1 id="how-compaction-works">How Compaction Works<a class="headerlink" href="#how-compaction-works" title="Permanent link">&para;</a></h1>
+<p>This page explains what happens when a compaction pass runs, with diagrams and worked
+examples. For choosing and configuring triggers and strategies, see
+<a href="../compaction/">Context Compaction</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Answers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#1-class-diagrams">1. Class diagrams</a></td>
+<td>Which types take part, and what each contributes</td>
+</tr>
+<tr>
+<td><a href="#2-sequence-a-compaction-pass-end-to-end">2. A compaction pass</a></td>
+<td>What the service, the strategy and the repository do, in order, and how the version check keeps concurrent writers apart</td>
+</tr>
+<tr>
+<td><a href="#3-activity-how-a-strategy-chooses-what-to-archive">3. What gets archived</a></td>
+<td>How a strategy turns its budget into a cut that never splits a turn</td>
+</tr>
+<tr>
+<td><a href="#4-sequence-recursivesummarizationcompactionstrategy">4. Summarization</a></td>
+<td>What the LLM is given, where the summary lands, what happens on a blank answer</td>
+</tr>
+<tr>
+<td><a href="#5-compactionplan-from-result-to-write">5. The plan</a></td>
+<td>How a strategy result becomes archive flags and anchored inserts, and why an insert needs an anchor</td>
+</tr>
+<tr>
+<td><a href="#6-sequence-jdbc-applycompaction-and-a-concurrent-append">6. JDBC and a concurrent append</a></td>
+<td>How the row lock orders a compaction against an append, and which rows are rewritten</td>
+</tr>
+<tr>
+<td><a href="#7-worked-examples-of-the-tricky-cases">7. Tricky cases</a></td>
+<td>Seven inputs and their outputs: mid-turn cuts, oversize turns, updated system prompts, a prior summary</td>
+</tr>
+</tbody>
+</table>
 <p>One word is used precisely throughout: an event is <strong>archived</strong> when compaction flags it
 and it stays in the log (searchable through Recall Storage). Compaction never deletes an
 event; only deleting or expiring the whole session does.</p>
