@@ -1706,7 +1706,10 @@ results) up to the next <code>UserMessage</code>.</p>
 </blockquote>
 <p>Working with turns rather than raw message counts prevents compaction from splitting a
 tool-call/result pair, or from removing an assistant reply while keeping the user question
-that prompted it.</p>
+that prompted it. Reads follow the same rule: a <code>lastN</code> window is extended back to the start
+of the turn it lands in (<code>SessionEvent.isTurnStart()</code> marks the <code>USER</code> events), so a prompt
+built from a window never begins mid-turn either. See
+<a href="../event-filtering/#windows-keep-turns-whole">Windows keep turns whole</a>.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Turn 1: [USER "What is Spring AI?"]  [ASSISTANT "Spring AI is..."]
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>Turn 2: [USER "Can it use tools?"]   [ASSISTANT (tool call)]  [TOOL result]  [ASSISTANT "Yes, ..."]
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>Turn 3: [USER "Show me an example"]  [ASSISTANT "Here is..."]
@@ -1898,9 +1901,13 @@ log for a <code>lastN</code> or a page. Evaluate <code>excludeArchived</code>, <
 keywords in the query itself. <code>EventFilter.apply(List)</code> is the reference implementation of
 the read contract for a log held as a list; use it only for what the store cannot express,
 as the JDBC repository does for <code>pattern</code> (a Java regex cannot be translated to portable
-SQL). <code>findEventsByUserId(userId, filter)</code> has a default that loops over the user's
-sessions and windows the union in memory; a store that can join sessions and events should
-override it with one sorted, paged query.</p>
+SQL). A <code>lastN</code> window must keep turns whole: when its oldest event is not a <code>USER</code> event,
+extend it back to the nearest preceding one among the matching events, unless the filter
+searches text or no such event exists (<code>EventFilter.applyTurnAwareWindow</code> spells out the
+rule; the JDBC repository does it with one bounded extra query). The contract kit checks
+this on every store. <code>findEventsByUserId(userId, filter)</code> has a default that loops over
+the user's sessions and windows the union in memory; a store that can join sessions and
+events should override it with one sorted, paged query.</p>
 <p><strong>Messages have one persisted shape.</strong> <code>SessionEventCodec</code> encodes a <code>Message</code> into its
 type, text and a JSON <code>data</code> payload (tool calls or tool responses), and decodes it back.
 Stores that keep columns or fields use it so every backend stores the same thing.</p>

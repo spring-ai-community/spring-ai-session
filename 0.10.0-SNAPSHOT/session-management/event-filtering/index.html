@@ -704,6 +704,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#windows-keep-turns-whole" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Windows keep turns whole
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#constraints" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1267,6 +1278,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#windows-keep-turns-whole" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Windows keep turns whole
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#constraints" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1333,7 +1355,7 @@ non-null conditions must match for an event to be included.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1">// All events (default — no filtering applied)</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">all</span><span class="p">());</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1">// Most recent N events</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1">// Most recent N events, extended to the start of the turn the window lands in</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">service</span><span class="p">.</span><span class="na">getEvents</span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">20</span><span class="p">));</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1">// Exclude synthetic summary events — only real conversation turns</span>
@@ -1377,7 +1399,7 @@ deliberately exposes only plain-substring <code>keywords</code>/<code>matchMode<
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="p">.</span><span class="na">messageTypes</span><span class="p">(</span><span class="n">Set</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">MessageType</span><span class="p">.</span><span class="na">USER</span><span class="p">,</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">                         </span><span class="n">MessageType</span><span class="p">.</span><span class="na">ASSISTANT</span><span class="p">))</span><span class="w">           </span><span class="c1">// keep only these types</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="p">.</span><span class="na">excludeSynthetic</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span><span class="w">                                </span><span class="c1">// exclude summary events</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">50</span><span class="p">)</span><span class="w">                                             </span><span class="c1">// keep newest 50 matches</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">50</span><span class="p">)</span><span class="w">                                             </span><span class="c1">// newest 50 matches, whole turns</span>
 </span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="p">.</span><span class="na">keyword</span><span class="p">(</span><span class="s">"Spring AI"</span><span class="p">)</span><span class="w">                                  </span><span class="c1">// case-insensitive substring</span>
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="p">.</span><span class="na">keywords</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"no,"</span><span class="p">,</span><span class="w"> </span><span class="s">"actually"</span><span class="p">))</span><span class="w">                  </span><span class="c1">// multi-term substring match</span>
 </span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="p">.</span><span class="na">matchMode</span><span class="p">(</span><span class="n">MatchMode</span><span class="p">.</span><span class="na">ANY</span><span class="p">)</span><span class="w">                               </span><span class="c1">// ANY (default) or ALL of keywords</span>
@@ -1420,7 +1442,7 @@ than one and an event must satisfy all of them. In practice, callers set exactly
 <tr>
 <td><code>lastN</code></td>
 <td><code>Integer</code></td>
-<td>Keep only the most recent N matching events (must be &gt; 0)</td>
+<td>The most recent N matching events (must be &gt; 0), extended back to the start of the turn the window lands in; see <a href="#windows-keep-turns-whole">Windows keep turns whole</a></td>
 </tr>
 <tr>
 <td><code>keyword</code></td>
@@ -1460,6 +1482,30 @@ than one and an event must satisfy all of them. In practice, callers set exactly
 </tbody>
 </table>
 <hr />
+<h2 id="windows-keep-turns-whole">Windows keep turns whole<a class="headerlink" href="#windows-keep-turns-whole" title="Permanent link">&para;</a></h2>
+<p>A <code>lastN</code> window on one session is a lower bound. If its oldest event is not a
+<a href="../concepts/#turn">turn start</a> (a <code>USER</code> event, real or synthetic), the window is extended
+back to the nearest turn start before it, so the result never begins with an assistant reply
+whose question was cut off, a tool result without its tool call, or a summary without its
+shadow prompt. A tool call is therefore never returned without its results, and a prompt
+built from the window is one every provider accepts.</p>
+<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>log:          U1 A1 U2 A2[tool call] T2[result] A2'
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>lastN(2):     U2 A2[tool call] T2[result] A2'      extended from "T2 A2'" to the turn start
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>lastN(5):     U1 A1 U2 A2[tool call] T2[result] A2'
+</span></code></pre></div>
+<p>The extension is bounded by one turn and skipped when it cannot apply:</p>
+<ul>
+<li><strong>Text searches are plain.</strong> A filter with <code>keyword</code>, <code>keywords</code> or <code>pattern</code> returns
+  exactly the newest N matches; a search result is not a prompt.</li>
+<li><strong>No turn start before the window.</strong> A window that lands in a preamble of stored
+  system messages, or a <code>messageTypes</code> filter that hides <code>USER</code> events, returns the plain
+  window.</li>
+<li><strong>Pages are plain</strong>, and so are cross-session reads (<code>findEventsByUserId</code>), where turns
+  do not exist.</li>
+</ul>
+<p><code>EventFilter.apply(List)</code> is the reference implementation; the JDBC repository pushes the
+same rule down as one bounded extra query when the window lands mid-turn.</p>
+<hr />
 <h2 id="constraints">Constraints<a class="headerlink" href="#constraints" title="Permanent link">&para;</a></h2>
 <p>The compact constructor enforces these rules at construction time:</p>
 <ul>
@@ -1483,19 +1529,19 @@ the corresponding field from <code>this</code>; the two boolean flags, <code>exc
 combine its default filter with a
 <a href="../../chat-client/chat-client/#per-request-filter-override">per-request override</a>, and always merges in
 <code>EventFilter.active()</code> so the prompt never sees archived events:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">EventFilter</span><span class="w"> </span><span class="n">advisorDefault</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">50</span><span class="p">);</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">EventFilter</span><span class="w"> </span><span class="n">requestOverride</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">5</span><span class="p">);</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">EventFilter</span><span class="w"> </span><span class="n">merged</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">advisorDefault</span><span class="p">.</span><span class="na">merge</span><span class="p">(</span><span class="n">requestOverride</span><span class="p">);</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1">// merged.lastN() == 5  (request-level wins)</span>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">EventFilter</span><span class="w"> </span><span class="n">advisorDefault</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">50</span><span class="p">);</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">EventFilter</span><span class="w"> </span><span class="n">requestOverride</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">5</span><span class="p">);</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">EventFilter</span><span class="w"> </span><span class="n">merged</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">advisorDefault</span><span class="p">.</span><span class="na">merge</span><span class="p">(</span><span class="n">requestOverride</span><span class="p">);</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1">// merged.lastN() == 5  (request-level wins)</span>
 </span></code></pre></div>
 <p>The retrieval modifier — <code>lastN</code> or <code>page</code>/<code>pageSize</code> — is merged as a single unit. If
 <code>other</code> sets either form, it replaces the base filter's modifier completely, so a
 per-request paginated search can override an advisor-level <code>lastN</code> window (and the other
 way round) without tripping the "<code>lastN</code> and <code>page</code>/<code>pageSize</code> are mutually exclusive"
 check:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">EventFilter</span><span class="w"> </span><span class="n">merged</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">20</span><span class="p">).</span><span class="na">merge</span><span class="p">(</span><span class="n">EventFilter</span><span class="p">.</span><span class="na">keywordSearch</span><span class="p">(</span><span class="s">"spring"</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">));</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1">// merged.lastN() == null, merged.page() == 1, merged.pageSize() == 5</span>
+<div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">EventFilter</span><span class="w"> </span><span class="n">merged</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">20</span><span class="p">).</span><span class="na">merge</span><span class="p">(</span><span class="n">EventFilter</span><span class="p">.</span><span class="na">keywordSearch</span><span class="p">(</span><span class="s">"spring"</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">));</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1">// merged.lastN() == null, merged.page() == 1, merged.pageSize() == 5</span>
 </span></code></pre></div>
 <hr />
 <h2 id="write-side-filtering">Write-side filtering<a class="headerlink" href="#write-side-filtering" title="Permanent link">&para;</a></h2>

@@ -1998,6 +1998,19 @@ compaction settings, and pass only the task in and the result back. See
   summarized, and <code>RecursiveSummarizationCompactionStrategy</code> lists it in
   <code>archivedEvents</code> (so <code>archivedEventCount()</code> includes it). Nothing leaves the log except
   through <code>delete</code> or <code>deleteExpiredSessions</code>.</li>
+<li><strong><code>lastN</code> keeps turns whole.</strong> A <code>lastN</code> window on one session is extended back to the
+  start of the turn it lands in (the nearest preceding <code>USER</code> event among the matching
+  events), so it never returns an assistant tool call without its results or a summary
+  without its shadow prompt; the result can therefore hold more than N events. Text
+  searches, pages and cross-session reads stay plain. <code>SessionEvent.isTurnStart()</code> marks
+  the turn starts; <code>EventFilter.applyTurnAwareWindow</code> is the reference rule. See
+  <a href="../session-management/event-filtering/#windows-keep-turns-whole">Windows keep turns whole</a>.</li>
+<li><strong><code>SessionMemoryAdvisor</code> keeps tool calls answerable</strong> (#44). On read it drops a tool
+  call or tool result that has no counterpart in the prompt, with a <code>WARN</code>; on write it
+  stores a trailing tool response exactly when the tool call it answers was stored,
+  overriding the <code>MessageFilter</code> either way with a <code>WARN</code>. Under a <code>lastN</code> or page window
+  the stored system prompt is looked up separately instead of being dropped. See
+  <a href="../chat-client/chat-client/#tool-call-integrity">Tool-call integrity</a>.</li>
 <li><strong>Recall tools skip synthetic events.</strong> <code>conversation_search</code> (<code>SessionEventTools</code>) and
   <code>CrossSessionRecallTools</code> exclude synthetic summaries from their results, since a
   summary only paraphrases real events that are still in the log. Build your own
@@ -2083,6 +2096,11 @@ searching) and core owns <em>interpretation</em> (what a compaction means). A cu
   <code>pattern</code>, typically). Stores that keep messages as columns or fields should use
   <code>SessionEventCodec</code> (package <code>org.springframework.ai.session.support</code>) so every backend
   stores the same shape.
+- <strong>A <code>lastN</code> window must keep turns whole.</strong> When the oldest event of the window is not
+  a <code>USER</code> event, extend the window back to the nearest preceding <code>USER</code> event among the
+  matching events, unless the filter searches text or no such event exists. A list-based
+  store gets this from <code>EventFilter.apply</code>; the JDBC repository runs one bounded extra
+  query. The contract kit's window tests check it.
 - <strong>Run the contract tests.</strong> Add <code>org.springaicommunity:spring-ai-session-test</code> in test
   scope, subclass <code>AbstractSessionRepositoryContractTests</code> and implement
   <code>createRepository()</code>. It is the suite the built-in repositories run; see

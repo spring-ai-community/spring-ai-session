@@ -1176,6 +1176,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#tool-call-integrity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool-call integrity
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#concurrent-compaction-safety" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1344,6 +1355,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#tool-call-integrity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool-call integrity
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#concurrent-compaction-safety" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1406,13 +1428,18 @@ no manual history loading or appending required in application code.</p>
    <code>EventFilter.all()</code>), merged with any per-request <code>EVENT_FILTER_CONTEXT_KEY</code> filter, and
    <strong>prepends</strong> it to the prompt. <code>EventFilter.active()</code> is always merged in on top, so
    archived (compacted-out) events never reach the prompt. Of any stored system messages
-   (an opt-in), only the latest one is kept.</li>
+   (an opt-in), only the latest one is kept; under a <code>lastN</code> or page window it is looked up
+   separately, so a window never drops the system prompt. A <code>lastN</code> window is extended by
+   the repository to the start of the turn it lands in, and any tool call or tool result
+   left without its counterpart is dropped from the prompt with a warning (see
+   <a href="#tool-call-integrity">Tool-call integrity</a>).</li>
 <li>Moves all <code>SystemMessage</code>s to the front, in their relative order, and sends a text that
    exactly matches an earlier one only once. Texts are never merged or rewritten, so the
    prompt stays stable for prompt caching. See <a href="../../session-management/system-messages/">System Messages</a>.</li>
 <li>Appends the prompt's last user message to the session, if the configured
    <code>MessageFilter</code> accepts it. Inside a tool-calling loop this is the trailing
-   tool-response message instead (<code>Prompt.getLastUserOrToolResponseMessage()</code>).</li>
+   tool-response message instead (<code>Prompt.getLastUserOrToolResponseMessage()</code>); it is
+   stored exactly when the tool call it answers was stored, whatever the filter says.</li>
 <li>After the model responds, appends the assistant message(s) through the configured
    <code>MessageFilter</code> (default: <code>MessageFilter.skipEmptyMessages()</code>). By default, empty
    assistant messages (blank text, no tool calls, and no media) are skipped — some
@@ -1575,15 +1602,16 @@ not affected.</p>
 <p>Pass an <code>EventFilter</code> via <code>EVENT_FILTER_CONTEXT_KEY</code> to narrow or adjust history
 retrieval on a single call without reconfiguring the advisor:</p>
 <div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1">// Advisor is configured with EventFilter.all() (default).</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1">// This request overrides to see only the last 5 events.</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">String</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">"Quick summary please"</span><span class="p">)</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">)</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">EVENT_FILTER_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">5</span><span class="p">))</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1">// This request overrides to see only the last 5 events, extended to the start of</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1">// the turn the window lands in so a tool call is never sent without its result.</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">String</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="p">.</span><span class="na">prompt</span><span class="p">()</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="p">.</span><span class="na">user</span><span class="p">(</span><span class="s">"Quick summary please"</span><span class="p">)</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="p">.</span><span class="na">advisors</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">SESSION_ID_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">sessionId</span><span class="p">)</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">        </span><span class="p">.</span><span class="na">param</span><span class="p">(</span><span class="n">SessionMemoryAdvisor</span><span class="p">.</span><span class="na">EVENT_FILTER_CONTEXT_KEY</span><span class="p">,</span><span class="w"> </span><span class="n">EventFilter</span><span class="p">.</span><span class="na">lastN</span><span class="p">(</span><span class="mi">5</span><span class="p">))</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span><span class="p">.</span><span class="na">call</span><span class="p">()</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span><span class="p">.</span><span class="na">content</span><span class="p">();</span>
 </span></code></pre></div>
 <p><code>EventFilter.merge()</code> semantics: every non-null field from the request filter replaces
 the corresponding field from the advisor default; the two boolean flags, <code>excludeSynthetic</code>
@@ -1621,6 +1649,11 @@ prompt is unaffected — filtering applies to persistence only.</p>
 <td>Stay in storage, hidden from the prompt</td>
 <td>Never written to storage</td>
 </tr>
+<tr>
+<td>Tool messages</td>
+<td>A tool call or result left without its counterpart is dropped from the prompt</td>
+<td>A tool response is stored exactly when its tool call was stored</td>
+</tr>
 </tbody>
 </table>
 <p>Configure it on the builder:</p>
@@ -1652,7 +1685,7 @@ prompt is unaffected — filtering applies to persistence only.</p>
 </tr>
 <tr>
 <td><code>MessageFilter.byMessageType(types...)</code></td>
-<td>Persists only the listed <code>MessageType</code>s</td>
+<td>Persists only the listed <code>MessageType</code>s. Leaving out <code>TOOL</code> does not strand a stored tool call: its response is stored anyway (see <a href="#tool-call-integrity">Tool-call integrity</a>)</td>
 </tr>
 <tr>
 <td><code>MessageFilter.containsText(keyword)</code></td>
@@ -1675,6 +1708,29 @@ via <code>and()</code>, <code>or()</code>, and <code>negate()</code>:</p>
 filtered out (recommended — some models reject them when replayed as history),
 compose your filter with it via <code>.and(MessageFilter.skipEmptyMessages())</code>.</p>
 </div>
+<hr />
+<h2 id="tool-call-integrity">Tool-call integrity<a class="headerlink" href="#tool-call-integrity" title="Permanent link">&para;</a></h2>
+<p>Every provider rejects a prompt in which an assistant message with tool calls is not
+followed by the tool messages answering it (OpenAI: <em>"An assistant message with
+'tool_calls' must be followed by tool messages responding to each 'tool_call_id'"</em>). The
+advisor keeps that from happening at both ends, without touching the log:</p>
+<ul>
+<li><strong>Windows keep turns whole.</strong> A <code>lastN</code> window is extended by the repository to the
+  start of the turn it lands in, so a tool call is never read without its results. See
+  <a href="../../session-management/event-filtering/#windows-keep-turns-whole">Windows keep turns whole</a>.</li>
+<li><strong>Read guard.</strong> After loading the history, an assistant tool call whose calls are not
+  all answered by the tool messages that directly follow it (in the history or in the
+  prompt itself, as in round 2 of a tool loop) is dropped from the prompt, and so is a tool
+  message that answers no preceding call. A partially answered parallel call is dropped
+  with its answers. The advisor logs a <code>WARN</code> naming the likely causes: a <code>messageTypes</code>
+  read filter hiding <code>TOOL</code> events, a <code>MessageFilter</code> that skipped them, or a turn
+  interrupted between the call and its result.</li>
+<li><strong>Write guard.</strong> A trailing tool response is stored exactly when the tool call it
+  answers is the newest stored event: the <code>MessageFilter</code> is overridden, with a <code>WARN</code>,
+  when it would reject the response of a stored call or accept the response of a call it
+  rejected. When the events read cannot tell (a <code>messageTypes</code> filter hiding assistant
+  events, or a page window), the filter decides.</li>
+</ul>
 <hr />
 <h2 id="concurrent-compaction-safety">Concurrent compaction safety<a class="headerlink" href="#concurrent-compaction-safety" title="Permanent link">&para;</a></h2>
 <p>Concurrent <code>after()</code> calls on the same session (e.g. parallel fan-out) may both compact;
