@@ -165,11 +165,11 @@ public class DefaultSessionService implements SessionService {
 			return new CompactionResult(events, List.of(), 0);
 		}
 
-		CompactionResult result = strategy.compact(request);
+		CompactionResult compactionResult = strategy.compact(request);
 
 		// The service holds the active log at the version it will compare-and-swap
 		// against, so it computes the write operations; the repository only applies them.
-		CompactionPlan plan = CompactionPlan.of(session.id(), events, result);
+		CompactionPlan plan = CompactionPlan.of(session.id(), events, compactionResult);
 		if (!plan.isEmpty()) {
 			boolean replaced = this.sessionRepository.applyCompaction(session.id(), plan, version);
 			if (!replaced) {
@@ -179,7 +179,7 @@ public class DefaultSessionService implements SessionService {
 			}
 		}
 
-		return result;
+		return compactionResult;
 	}
 
 	public static Builder builder() {
@@ -206,9 +206,10 @@ public class DefaultSessionService implements SessionService {
 		 * {@code false}: system prompts are configuration, best supplied on every request
 		 * rather than stored in the session, so storing one is rejected with an
 		 * {@link IllegalArgumentException} that explains how to enable it. Set to
-		 * {@code true} to store system messages anyway. The latest stored system message is
-		 * then the system prompt; see
-		 * {@link org.springframework.ai.session.compaction.CompactionStrategy} implementations.
+		 * {@code true} to store system messages anyway. The latest stored system message
+		 * is then the system prompt; see
+		 * {@link org.springframework.ai.session.compaction.CompactionStrategy}
+		 * implementations.
 		 */
 		public Builder allowSystemMessages(boolean allowSystemMessages) {
 			this.allowSystemMessages = allowSystemMessages;
@@ -222,8 +223,7 @@ public class DefaultSessionService implements SessionService {
 		}
 
 		public DefaultSessionService build() {
-			return new DefaultSessionService(this.sessionRepository, this.defaultTimeToLive,
-					this.allowSystemMessages);
+			return new DefaultSessionService(this.sessionRepository, this.defaultTimeToLive, this.allowSystemMessages);
 		}
 
 	}

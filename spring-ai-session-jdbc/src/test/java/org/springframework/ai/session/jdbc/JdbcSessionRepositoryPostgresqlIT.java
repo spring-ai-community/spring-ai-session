@@ -134,7 +134,7 @@ class JdbcSessionRepositoryPostgresqlIT {
 			});
 			awaitBlockedOnLock();
 			CompactionPlan plan = new CompactionPlan(Set.of(oldUser.getId()), Set.of(),
-					List.of(new CompactionPlan.Insert(oldAssistant.getId(), List.of(summary))));
+					List.of(CompactionPlan.Insert.before(oldAssistant.getId(), List.of(summary))));
 			return this.repository.applyCompaction(sessionId, plan, version);
 		});
 

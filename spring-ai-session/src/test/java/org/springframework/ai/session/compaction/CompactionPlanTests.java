@@ -52,7 +52,7 @@ class CompactionPlanTests {
 
 		assertThat(plan.archiveIds()).containsExactlyInAnyOrder(u1.getId(), a1.getId());
 		assertThat(plan.deleteIds()).containsExactly(oldSummary.getId());
-		assertThat(plan.inserts()).containsExactly(new Insert(u2.getId(), List.of(newSummary)));
+		assertThat(plan.inserts()).containsExactly(Insert.before(u2.getId(), List.of(newSummary)));
 		assertThat(plan.insertedEvents()).containsExactly(newSummary);
 		assertThat(plan.isEmpty()).isFalse();
 	}
@@ -65,7 +65,7 @@ class CompactionPlanTests {
 
 		CompactionPlan plan = CompactionPlan.of(SESSION_ID, List.of(u1), result);
 
-		assertThat(plan.inserts()).containsExactly(new Insert(null, List.of(added)));
+		assertThat(plan.inserts()).containsExactly(Insert.atEnd(List.of(added)));
 	}
 
 	@Test
@@ -99,7 +99,7 @@ class CompactionPlanTests {
 		SessionEvent newSummary = synthetic("new summary");
 		SessionEvent tail = synthetic("tail");
 		CompactionPlan plan = new CompactionPlan(Set.of(u1.getId(), a1.getId()), Set.of(oldSummary.getId()),
-				List.of(new Insert(u2.getId(), List.of(newSummary)), new Insert(null, List.of(tail))));
+				List.of(Insert.before(u2.getId(), List.of(newSummary)), Insert.atEnd(List.of(tail))));
 
 		List<SessionEvent> log = plan.applyTo(List.of(u1, a1, oldSummary, u2));
 
@@ -113,7 +113,7 @@ class CompactionPlanTests {
 		SessionEvent u1 = user("u1");
 		CompactionPlan unknownArchive = new CompactionPlan(Set.of("missing"), Set.of(), List.of());
 		CompactionPlan unknownAnchor = new CompactionPlan(Set.of(), Set.of(),
-				List.of(new Insert("missing", List.of(synthetic("s")))));
+				List.of(Insert.before("missing", List.of(synthetic("s")))));
 
 		assertThatThrownBy(() -> unknownArchive.applyTo(List.of(u1))).isInstanceOf(IllegalArgumentException.class);
 		assertThatThrownBy(() -> unknownAnchor.applyTo(List.of(u1))).isInstanceOf(IllegalArgumentException.class);

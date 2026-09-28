@@ -18,7 +18,6 @@ package org.springframework.ai.session.compaction;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -39,9 +38,23 @@ import org.springframework.util.Assert;
  * A repository never has to interpret a compaction: it archives the {@link #archiveIds()}
  * in place, removes the {@link #deleteIds()} (e.g. a superseded synthetic summary), and
  * inserts each {@link Insert} group immediately before its anchor event, or at the end of
- * the log when the anchor is {@code null}. Existing events never move.
+ * the log when the group has no anchor. Existing events never move.
  *
  * <p>
+ * Worked example, for a recursive-summarization pass that replaces an earlier summary
+ * ({@code Σold}) and folds two more turns into the new one ({@code Σnew}):
+ *
+ * <pre>
+ * active log:      U1 A1 U2 A2 Σold U3 A3
+ * strategy result: compactedEvents = [Σnew U3 A3]      archivedEvents = [U1 A1 U2 A2]
+ *
+ * plan:            archiveIds = {U1 A1 U2 A2}   what the strategy archived
+ *                  deleteIds  = {Σold}          active, but in neither list of the result
+ *                  inserts    = [Σnew before U3]  in the result, but not in the active log
+ *
+ * applyTo:         U1* A1* U2* A2* Σnew U3 A3   (* = flagged archived; Σold is gone)
+ * </pre>
+ *
  * {@link #applyTo(List)} is the reference implementation of those rules for a log held as
  * a list, which in-memory and list-based stores can use directly.
  *
@@ -63,7 +76,9 @@ public record CompactionPlan(Set<String> archiveIds, Set<String> deleteIds, List
 	}
 
 	/**
-	 * New events to insert before an existing event.
+	 * A group of new events and where they go: immediately before an existing event (the
+	 * anchor), or at the end of the log when there is no anchor.
+	 *
 	 * @param beforeEventId the id of the existing event the group goes in front of, or
 	 * {@code null} to append the group at the end of the log
 	 * @param events the new events, in order
@@ -73,6 +88,22 @@ public record CompactionPlan(Set<String> archiveIds, Set<String> deleteIds, List
 		public Insert {
 			Assert.notEmpty(events, "events must not be empty");
 			events = List.copyOf(events);
+		}
+
+		/** A group that goes immediately before the existing event with the given id. */
+		public static Insert before(String anchorEventId, List<SessionEvent> events) {
+			Assert.hasText(anchorEventId, "anchorEventId must not be null or empty");
+			return new Insert(anchorEventId, events);
+		}
+
+		/** A group that goes at the end of the log. */
+		public static Insert atEnd(List<SessionEvent> events) {
+			return new Insert(null, events);
+		}
+
+		/** Returns {@code true} when the group has no anchor and goes at the end of the log. */
+		public boolean isAppend() {
+			return this.beforeEventId == null;
 		}
 
 	}
@@ -89,58 +120,76 @@ public record CompactionPlan(Set<String> archiveIds, Set<String> deleteIds, List
 
 	/**
 	 * Computes the plan that turns the active log the strategy saw into the strategy's
-	 * result. Archived events come from the result; active events that the result keeps
-	 * neither active nor archived are deleted; events in the result that are not in the
-	 * active log are new and are inserted before the next existing event that follows
-	 * them in the result.
+	 * result, by comparing the two:
+	 * <ul>
+	 * <li>the result's {@link CompactionResult#archivedEvents() archivedEvents} are
+	 * archived;</li>
+	 * <li>an active event that the result neither keeps nor archives is deleted (a
+	 * superseded summary);</li>
+	 * <li>an event of the result that is not in the active log is new, and is inserted
+	 * before the first existing event that follows it in the result, or at the end when
+	 * none follows.</li>
+	 * </ul>
+	 * See the class Javadoc for a worked example.
 	 * @param sessionId the session being compacted; every new event must belong to it
 	 * @param activeEvents the active log the strategy was given, in log order
-	 * @param result the strategy's result
+	 * @param compactionResult the strategy's result
 	 * @return the plan
 	 * @throws IllegalArgumentException if a new event belongs to another session
 	 */
-	public static CompactionPlan of(String sessionId, List<SessionEvent> activeEvents, CompactionResult result) {
+	public static CompactionPlan of(String sessionId, List<SessionEvent> activeEvents,
+			CompactionResult compactionResult) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(activeEvents, "activeEvents must not be null");
-		Assert.notNull(result, "result must not be null");
+		Assert.notNull(compactionResult, "compactionResult must not be null");
 
-		Set<String> activeIds = activeEvents.stream().map(SessionEvent::getId).collect(Collectors.toSet());
-		Set<String> archiveIds = result.archivedEvents()
-			.stream()
-			.map(SessionEvent::getId)
-			.collect(Collectors.toCollection(LinkedHashSet::new));
-		Set<String> retainedIds = result.compactedEvents()
-			.stream()
-			.map(SessionEvent::getId)
-			.collect(Collectors.toSet());
-		Set<String> deleteIds = new LinkedHashSet<>();
-		for (String id : activeIds) {
-			if (!retainedIds.contains(id) && !archiveIds.contains(id)) {
-				deleteIds.add(id);
-			}
-		}
+		Set<String> activeIds = idsOf(activeEvents);
+		Set<String> archiveIds = idsOf(compactionResult.archivedEvents());
+		Set<String> deleteIds = deletedIds(activeIds, compactionResult);
+		List<Insert> inserts = insertGroups(sessionId, activeIds, compactionResult.compactedEvents());
+		return new CompactionPlan(archiveIds, deleteIds, inserts);
+	}
 
-		List<Insert> inserts = new ArrayList<>();
-		List<SessionEvent> pending = new ArrayList<>();
-		for (SessionEvent event : result.compactedEvents()) {
-			if (activeIds.contains(event.getId())) {
-				if (!pending.isEmpty()) {
-					inserts.add(new Insert(event.getId(), pending));
-					pending.clear();
+	/** Active events that the result neither keeps active nor archives. */
+	private static Set<String> deletedIds(Set<String> activeIds, CompactionResult compactionResult) {
+		Set<String> keptIds = idsOf(compactionResult.compactedEvents());
+		Set<String> archivedIds = idsOf(compactionResult.archivedEvents());
+		Set<String> deleteIds = new LinkedHashSet<>(activeIds);
+		deleteIds.removeAll(keptIds);
+		deleteIds.removeAll(archivedIds);
+		return deleteIds;
+	}
+
+	/**
+	 * Walks the compacted events in order. Every run of events that are not in the active
+	 * log is one group, anchored on the first existing event that follows the run; a run
+	 * at the very end has nothing to anchor on and is appended.
+	 */
+	private static List<Insert> insertGroups(String sessionId, Set<String> activeIds,
+			List<SessionEvent> compactedEvents) {
+		List<Insert> groups = new ArrayList<>();
+		List<SessionEvent> newEventsBeforeNextExisting = new ArrayList<>();
+		for (SessionEvent event : compactedEvents) {
+			boolean isExisting = activeIds.contains(event.getId());
+			if (isExisting) {
+				if (!newEventsBeforeNextExisting.isEmpty()) {
+					groups.add(Insert.before(event.getId(), newEventsBeforeNextExisting));
+					newEventsBeforeNextExisting.clear();
 				}
 			}
 			else {
+				// A strategy may only add events to the session it is compacting.
 				if (!sessionId.equals(event.getSessionId())) {
 					throw new IllegalArgumentException("compaction result contains a new event of session '"
 							+ event.getSessionId() + "', not of session " + sessionId);
 				}
-				pending.add(event);
+				newEventsBeforeNextExisting.add(event);
 			}
 		}
-		if (!pending.isEmpty()) {
-			inserts.add(new Insert(null, pending));
+		if (!newEventsBeforeNextExisting.isEmpty()) {
+			groups.add(Insert.atEnd(newEventsBeforeNextExisting));
 		}
-		return new CompactionPlan(archiveIds, deleteIds, inserts);
+		return groups;
 	}
 
 	/**
@@ -154,38 +203,48 @@ public record CompactionPlan(Set<String> archiveIds, Set<String> deleteIds, List
 	 */
 	public List<SessionEvent> applyTo(List<SessionEvent> log) {
 		Assert.notNull(log, "log must not be null");
-		Set<String> logIds = log.stream().map(SessionEvent::getId).collect(Collectors.toSet());
-		for (String id : this.archiveIds) {
-			if (!logIds.contains(id)) {
-				throw new IllegalArgumentException("archiveIds contains an event that is not in the log: " + id);
-			}
-		}
-		Map<String, List<SessionEvent>> insertBefore = new HashMap<>();
-		List<SessionEvent> append = new ArrayList<>();
+		Set<String> logIds = idsOf(log);
+		requireInLog(logIds, this.archiveIds, "archiveIds contains an event that is not in the log: ");
+
+		Map<String, List<SessionEvent>> groupsByAnchor = new HashMap<>();
+		List<SessionEvent> trailingGroups = new ArrayList<>();
 		for (Insert insert : this.inserts) {
-			if (insert.beforeEventId() == null) {
-				append.addAll(insert.events());
-			}
-			else if (!logIds.contains(insert.beforeEventId())) {
-				throw new IllegalArgumentException(
-						"inserts refers to an anchor event that is not in the log: " + insert.beforeEventId());
+			String anchorId = insert.beforeEventId();
+			if (anchorId == null) {
+				trailingGroups.addAll(insert.events());
 			}
 			else {
-				insertBefore.computeIfAbsent(insert.beforeEventId(), id -> new ArrayList<>()).addAll(insert.events());
+				requireInLog(logIds, Set.of(anchorId), "inserts refers to an anchor event that is not in the log: ");
+				groupsByAnchor.computeIfAbsent(anchorId, id -> new ArrayList<>()).addAll(insert.events());
 			}
 		}
 
-		Set<String> dropped = new HashSet<>(this.deleteIds);
-		List<SessionEvent> result = new ArrayList<>(log.size() + append.size());
+		List<SessionEvent> compacted = new ArrayList<>(log.size() + trailingGroups.size());
 		for (SessionEvent event : log) {
-			result.addAll(insertBefore.getOrDefault(event.getId(), List.of()));
-			if (dropped.contains(event.getId())) {
+			// 1. New events anchored on this event go right before it.
+			compacted.addAll(groupsByAnchor.getOrDefault(event.getId(), List.of()));
+			// 2. A deleted event disappears.
+			if (this.deleteIds.contains(event.getId())) {
 				continue;
 			}
-			result.add(this.archiveIds.contains(event.getId()) ? event.asArchived() : event);
+			// 3. An archived event stays in place, flagged; 4. everything else is untouched.
+			compacted.add(this.archiveIds.contains(event.getId()) ? event.asArchived() : event);
 		}
-		result.addAll(append);
-		return List.copyOf(result);
+		// 5. Groups without an anchor go at the end.
+		compacted.addAll(trailingGroups);
+		return List.copyOf(compacted);
+	}
+
+	private static Set<String> idsOf(List<SessionEvent> events) {
+		return events.stream().map(SessionEvent::getId).collect(Collectors.toCollection(LinkedHashSet::new));
+	}
+
+	private static void requireInLog(Set<String> logIds, Set<String> ids, String message) {
+		for (String id : ids) {
+			if (!logIds.contains(id)) {
+				throw new IllegalArgumentException(message + id);
+			}
+		}
 	}
 
 }
