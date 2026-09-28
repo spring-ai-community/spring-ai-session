@@ -177,8 +177,9 @@ public interface SessionRepository {
 
 	/**
 	 * Returns the events of <em>every</em> session of the given user that match the
-	 * filter, ordered by timestamp (then event id) across sessions, with the filter's
-	 * {@link EventFilter#lastN()} or page applied to that combined order.
+	 * filter, ordered by timestamp across sessions (ties broken in a stable, store-defined
+	 * order), with the filter's {@link EventFilter#lastN()} or page applied to that
+	 * combined order.
 	 * <p>
 	 * The default runs the filter without its window over each session of the user,
 	 * sorts the union and applies the window in memory, which costs the total number of

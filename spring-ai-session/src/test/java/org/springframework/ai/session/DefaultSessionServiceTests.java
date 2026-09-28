@@ -349,7 +349,7 @@ class DefaultSessionServiceTests {
 		}
 
 		// Two threads race to compact the same session to a window of 2.
-		// The CAS in compactEvents guarantees that only the first writer lands;
+		// The CAS in applyCompaction guarantees that only the first writer lands;
 		// the second detects a version mismatch and skips silently.
 		CountDownLatch ready = new CountDownLatch(2);
 		CountDownLatch go = new CountDownLatch(1);

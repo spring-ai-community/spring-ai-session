@@ -55,8 +55,7 @@ compaction settings, and pass only the task in and the result back. See
 - **`SessionService.findEventsByUserId(userId, filter)`** returns the matching events of
   every session of a user, sorted by timestamp across sessions and windowed by the
   filter's `lastN` or page. `cross_session_search` now runs one such query per page
-  instead of one query per session plus in-memory paging; a page can be shorter than
-  `pageSize` because events without text are dropped after paging.
+  instead of one query per session plus in-memory paging.
 - **Compaction never reorders the log.** A kept system message stays where it was stored
   instead of moving to the front of the active window, and archived events stay where they
   were. `getEvents(...)` therefore returns events in the order they were appended, plus

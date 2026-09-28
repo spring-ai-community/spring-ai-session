@@ -74,18 +74,18 @@ import org.springframework.util.Assert;
  * <ul>
  * <li>{@code message_type} — the {@link MessageType} name</li>
  * <li>{@code message_content} — plain text ({@code message.getText()})</li>
- * <li>{@code message_data} — JSON blob for type-specific structured data
- * ({@link AssistantMessage.ToolCall} list or {@link ToolResponseMessage.ToolResponse}
- * list)</li>
+ * <li>{@code message_data} — JSON blob for type-specific structured data (the tool calls
+ * of an assistant message or the responses of a tool response message)</li>
  * </ul>
+ * The three columns are the persisted shape defined by {@link SessionEventCodec}.
  *
  * <h2>Optimistic concurrency (CAS)</h2>
  * <p>
  * The {@code event_version} column in {@code AI_SESSION} is incremented atomically on
  * every {@link #appendEvent} call that appends a new event (a replay leaves it unchanged)
- * and on every {@link #compactEvents} call. {@code compactEvents} guards
+ * and on every successful {@link #applyCompaction} call. {@code applyCompaction} guards
  * compaction by issuing a conditional {@code UPDATE … WHERE event_version = ?} first; if
- * zero rows are updated the swap is abandoned and {@code false} is returned.
+ * zero rows are updated the plan is abandoned and {@code false} is returned.
  *
  * <h2>Idempotent append</h2>
  * <p>
@@ -269,7 +269,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 		try {
 			this.transactionTemplate.execute(status -> {
 				// Bump the version BEFORE inserting: the UPDATE locks the session row, so the
-				// event's seq is only assigned once any in-flight compactEvents on this
+				// event's seq is only assigned once any in-flight applyCompaction on this
 				// session has committed. Inserting first would let a concurrent compaction
 				// miss the uncommitted row and re-insert the tail of the log with higher
 				// seq values, ordering this (newer) event before them without the CAS

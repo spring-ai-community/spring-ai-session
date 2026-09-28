@@ -84,7 +84,7 @@ import org.springframework.util.Assert;
  * <strong>Concurrent compaction safety:</strong> If two requests for the same session
  * complete concurrently, both {@code after()} calls may reach the compaction step
  * simultaneously. Compaction uses an optimistic compare-and-swap write via
- * {@link org.springframework.ai.session.SessionRepository#compactEvents(String, java.util.List, java.util.List, long)},
+ * {@link org.springframework.ai.session.SessionRepository#applyCompaction(String, org.springframework.ai.session.compaction.CompactionPlan, long)},
  * so only the first writer succeeds; the second detects the version mismatch and skips
  * silently. No compaction result is lost or corrupted.
  *

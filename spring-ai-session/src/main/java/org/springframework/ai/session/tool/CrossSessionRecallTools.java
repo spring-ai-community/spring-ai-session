@@ -128,9 +128,9 @@ public class CrossSessionRecallTools {
 
 		EventFilter filter = buildFilter(query, matchMode, since, pageNumber);
 
-		// One query across the user's sessions, sorted and paged by the store. Events
-		// without text (e.g. bare tool calls) are dropped afterwards, so a page can be
-		// shorter than pageSize; the next page still starts where this one ended.
+		// One query across the user's sessions, sorted and paged by the store. A keyword
+		// only matches an event with text, so the text guard below is a safety net rather
+		// than a second filter.
 		List<SessionEvent> pageResults = this.sessionService.findEventsByUserId(this.userId, filter)
 			.stream()
 			.filter(event -> StringUtils.hasText(event.getMessage().getText()))

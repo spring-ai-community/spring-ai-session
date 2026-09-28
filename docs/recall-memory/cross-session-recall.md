@@ -88,10 +88,6 @@ When nothing matches: `"No results found."` is returned.
   in-memory repository sorts and windows the union in memory. A custom repository gets
   the in-memory behaviour from the default method and should override it with a pushed
   down query.
-- **Pages can be shorter than `pageSize`.** Events without text (e.g. a bare tool call)
-  are dropped *after* paging, so a page may hold fewer results; the next page still starts
-  where this one ended. Worth keeping in mind for a user with a very large number of long-lived
-  sessions.
 - **Synthetic summaries are skipped.** The filter sets `excludeSynthetic(true)`: a
   summary only paraphrases real events that are still in the log, archived or not, so
   searching it too would return the same facts twice.

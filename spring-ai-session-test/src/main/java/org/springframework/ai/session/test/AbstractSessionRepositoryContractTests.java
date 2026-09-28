@@ -18,6 +18,7 @@ package org.springframework.ai.session.test;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -685,7 +686,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 	protected static Set<String> ids(List<SessionEvent> events, String... labels) {
 		List<String> wanted = List.of(labels);
 		List<String> eventLabels = labels(events);
-		Set<String> ids = new java.util.LinkedHashSet<>();
+		Set<String> ids = new LinkedHashSet<>();
 		for (int i = 0; i < events.size(); i++) {
 			if (wanted.contains(eventLabels.get(i))) {
 				ids.add(events.get(i).getId());
