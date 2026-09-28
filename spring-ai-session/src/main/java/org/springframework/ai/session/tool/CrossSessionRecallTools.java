@@ -18,8 +18,6 @@ package org.springframework.ai.session.tool;
 
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -28,7 +26,6 @@ import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventFilter.MatchMode;
-import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.tool.annotation.Tool;
@@ -129,33 +126,15 @@ public class CrossSessionRecallTools {
 		logger.debug("[cross_session_search] userId: {}, innerThought: {}, query: {}, matchMode: {}, since: {}, page: {}",
 				this.userId, innerThought, query, matchMode, since, pageNumber);
 
-		EventFilter filter = buildFilter(query, matchMode, since);
+		EventFilter filter = buildFilter(query, matchMode, since, pageNumber);
 
-		List<Session> sessions = this.sessionService.findByUserId(this.userId);
-
-		List<SessionEvent> allMatches = new ArrayList<>();
-		for (Session session : sessions) {
-			for (SessionEvent event : this.sessionService.getEvents(session.id(), filter)) {
-				if (StringUtils.hasText(event.getMessage().getText())) {
-					allMatches.add(event);
-				}
-			}
-		}
-
-		// Sort by the actual Instant, not its String rendering. Instant.toString()
-		// omits the fractional-seconds component when it is exactly zero but includes it
-		// otherwise, so two rendered timestamps of different lengths do not reliably
-		// compare in chronological order (e.g. "...:00.001Z" < "...:00Z" lexicographically,
-		// even though the former instant is later).
-		allMatches.sort(Comparator.comparing(SessionEvent::getTimestamp));
-
-		// Cast to long before multiplying so a large `page` cannot silently overflow int
-		// arithmetic and produce a negative index — mirrors the same guard already used
-		// for the SQL OFFSET parameter in JdbcSessionRepository.findEvents.
-		long fromIndexLong = (long) pageNumber * this.pageSize;
-		int fromIndex = (int) Math.min(fromIndexLong, allMatches.size());
-		int toIndex = (int) Math.min(fromIndexLong + this.pageSize, allMatches.size());
-		List<SessionEvent> pageResults = allMatches.subList(fromIndex, toIndex);
+		// One query across the user's sessions, sorted and paged by the store. Events
+		// without text (e.g. bare tool calls) are dropped afterwards, so a page can be
+		// shorter than pageSize; the next page still starts where this one ended.
+		List<SessionEvent> pageResults = this.sessionService.findEventsByUserId(this.userId, filter)
+			.stream()
+			.filter(event -> StringUtils.hasText(event.getMessage().getText()))
+			.toList();
 
 		if (pageResults.isEmpty()) {
 			return "No results found.";
@@ -169,8 +148,8 @@ public class CrossSessionRecallTools {
 		return JsonParser.toJson(jsonResults);
 	}
 
-	private EventFilter buildFilter(String query, String matchMode, String since) {
-		EventFilter.Builder builder = EventFilter.builder();
+	private EventFilter buildFilter(String query, String matchMode, String since, int page) {
+		EventFilter.Builder builder = EventFilter.builder().page(page).pageSize(this.pageSize);
 
 		// A blank query would apply no keyword filter and return every event of every
 		// session of this user — reject it rather than silently widening the search.

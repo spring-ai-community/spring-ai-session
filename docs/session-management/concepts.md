@@ -21,7 +21,7 @@ The event log is stored separately in the repository and fetched on demand.
 
 Keeping `Session` metadata-only means it can be passed across boundaries cheaply and stays
 immutable: every event mutation goes through dedicated repository methods (`appendEvent`,
-`compactEvents`), and compaction strategies receive the event list as an explicit
+`applyCompaction`), and compaction strategies receive the event list as an explicit
 parameter.
 
 Sessions are created through `SessionService`, which is the primary API for the entire
@@ -202,10 +202,12 @@ classDiagram
         +save(session) Session
         +saveIfAbsent(session) boolean
         +findById(id) Session
+        +deleteExpiredSessions(before) int
         +appendEvent(event)
         +findEvents(id, filter) List
+        +findEventsByUserId(userId, filter) List
         +getEventVersion(id) long
-        +compactEvents(id, archived, retained, version) boolean
+        +applyCompaction(id, plan, version) boolean
     }
     class InMemorySessionRepository
     class JdbcSessionRepository
@@ -278,7 +280,7 @@ stateDiagram-v2
 **Archiving instead of deleting**
 
 Compaction marks the real events it removes from the active window as archived
-(`SessionEvent.isArchived()`) via `compactEvents`, so the full verbatim history stays in
+(`SessionEvent.isArchived()`) via `applyCompaction`, so the full verbatim history stays in
 the log. What an integration sends to the model is the `EventFilter.active()` view, while
 [Recall Storage](../recall-memory/recall-storage.md) searches (`EventFilter.keywordSearch(...)`) span the
 whole log, archived events included. This makes the MemGPT recall pattern work: the agent
@@ -295,12 +297,14 @@ never re-read or re-written.
 
 `SessionRepository.getEventVersion(sessionId)` is a monotonically increasing counter,
 incremented on every `appendEvent` that appends a new event and on every successful
-`compactEvents` call. Callers read it before
-fetching events and pass it to `compactEvents(sessionId, archivedEvents, retainedEvents,
-expectedVersion)`. If another writer changed the log in between, this compare-and-swap
-(CAS) returns `false`, and the caller treats it as a no-op rather than retrying. Durable
-implementations should map it to a database-level optimistic-lock column, as the JDBC
-repository does; a Redis implementation, for example, would use `WATCH`.
+`applyCompaction` call. `DefaultSessionService.compact` reads it before fetching the
+active events, turns the strategy's result into a `CompactionPlan` (which events to
+archive, which to delete, which new events to insert before which existing event) and
+passes both to `applyCompaction(sessionId, plan, expectedVersion)`. If another writer
+changed the log in between, this compare-and-swap (CAS) returns `false`, and the caller
+treats it as a no-op rather than retrying. Durable implementations should map it to a
+database-level optimistic-lock column, as the JDBC repository does; a Redis
+implementation, for example, would use `WATCH`.
 
 ### Idempotent appendEvent {#idempotent-appendevent}
 
@@ -323,6 +327,63 @@ Events are returned in insertion (logical conversation) order, not by wall-clock
 timestamp. The JDBC implementation persists a monotonic `seq` column for this purpose so
 that a synthetic compaction summary — stamped with the compaction time — stays correctly
 positioned ahead of the older active-window events it precedes.
+
+### Implementing a `SessionRepository`
+
+The contract follows one rule: **the backend owns selection, core owns interpretation.**
+Filtering, paging and searching are the backend's job, because their cost grows with the
+size of the log. What a compaction *means* (turn boundaries, ordering, what a summary
+replaces) is decided in core and handed to the backend as plain write operations, so no
+backend has to reimplement it. Core ships three helpers for this, and a test kit that
+checks the whole contract.
+
+**Reads push the filter down.** `findEvents(sessionId, filter)` must not read the whole
+log for a `lastN` or a page. Evaluate `excludeArchived`, `excludeSynthetic`,
+`messageTypes`, the time range, `lastN`, `page`/`pageSize` and, where the store can, the
+keywords in the query itself. `EventFilter.apply(List)` is the reference implementation of
+the read contract for a log held as a list; use it only for what the store cannot express,
+as the JDBC repository does for `pattern` (a Java regex cannot be translated to portable
+SQL). `findEventsByUserId(userId, filter)` has a default that loops over the user's
+sessions and windows the union in memory; a store that can join sessions and events should
+override it with one sorted, paged query.
+
+**Messages have one persisted shape.** `SessionEventCodec` encodes a `Message` into its
+type, text and a JSON `data` payload (tool calls or tool responses), and decodes it back.
+Stores that keep columns or fields use it so every backend stores the same thing.
+
+**Compaction is a plan.** `applyCompaction(sessionId, plan, expectedVersion)` receives a
+`CompactionPlan` with three parts: `archiveIds` to flag archived in place, `deleteIds` to
+remove (a superseded summary), and `inserts`, each a group of new events that goes
+immediately before an existing anchor event, or at the end when the anchor is `null`.
+Existing events never move. `CompactionPlan.applyTo(log)` is the reference merge for a log
+held as a list; list-based stores can call it directly.
+
+**Run the contract tests.** The `spring-ai-session-test` artifact contains
+`AbstractSessionRepositoryContractTests`, the suite the built-in in-memory, H2, PostgreSQL
+and MySQL repositories run. Subclass it and provide a repository:
+
+```xml
+<dependency>
+    <groupId>org.springaicommunity</groupId>
+    <artifactId>spring-ai-session-test</artifactId>
+    <scope>test</scope>
+</dependency>
+```
+
+```java
+class MySessionRepositoryContractTests extends AbstractSessionRepositoryContractTests {
+
+    @Override
+    protected SessionRepository createRepository() {
+        return new MySessionRepository(/* a fresh or emptied store */);
+    }
+
+}
+```
+
+It covers idempotent append, the version rules, `saveIfAbsent` under concurrent creates,
+expiry cleanup, every filter criterion and window, and every compaction rule (archive in
+place, delete, insert before an anchor, append, stale version, unknown ids).
 
 ---
 
@@ -356,7 +417,7 @@ sequenceDiagram
         Svc->>Repo: appendEvent(...)
         opt the compaction trigger fires
             App->>Svc: compact(id, trigger, strategy)
-            Svc->>Repo: getEventVersion, findEvents, compactEvents (CAS)
+            Svc->>Repo: getEventVersion, findEvents, applyCompaction(plan) (CAS)
             Note over Repo: old events archived, still searchable
         end
     end

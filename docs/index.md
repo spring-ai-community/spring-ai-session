@@ -31,6 +31,7 @@ how the main types fit together.
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
 | **Session JDBC Starter** | `spring-ai-starter-session-jdbc` | Spring Boot starter — one dependency for a fully wired JDBC session setup |
+| **Session Test** | `spring-ai-session-test` | `AbstractSessionRepositoryContractTests`: the repository contract tests, for custom backends |
 | **Session BOM** | `spring-ai-session-bom` | Bill of Materials for managing all module versions together |
 
 ---
@@ -47,8 +48,8 @@ how the main types fit together.
     - `TokenCountCompactionStrategy` — keep a token-budget-bounded suffix
     - `RecursiveSummarizationCompactionStrategy` — LLM-powered rolling summary
 - **Two compaction triggers** — turn count and token count (composable with OR semantics)
-- **Optimistic concurrency** — compare-and-swap `compactEvents` makes compaction safe under
-  concurrent requests without locking
+- **Optimistic concurrency** — compare-and-swap `applyCompaction` makes compaction safe
+  under concurrent requests without locking
 - **Multi-agent** — give each sub-agent its own session, with its own memory and
   compaction; see [Multi-Agent](session-management/multi-agent.md)
 - **Recall storage tools** — `conversation_search` keyword-searches the current session's

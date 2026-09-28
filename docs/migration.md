@@ -38,9 +38,14 @@ compaction settings, and pass only the task in and the result back. See
 - **`RecursiveSummarizationCompactionStrategy`:** when the summarizer returns a blank
   summary, superseded stored system messages are still archived, and
   `tokensEstimatedSaved` is now net of the new summary turn's tokens.
-- **`compactEvents` validates new events:** a new event in `retainedEvents` that belongs to
-  another session is rejected with `IllegalArgumentException` (in-memory and JDBC), and
-  `InMemorySessionRepository` now also rejects archived events that are not in the log.
+- **Compaction validates its inputs:** a new event in a strategy result that belongs to
+  another session is rejected with `IllegalArgumentException` when the plan is built, and
+  both built-in repositories reject a plan that archives an id not in the log.
+- **`SessionService.findEventsByUserId(userId, filter)`** returns the matching events of
+  every session of a user, sorted by timestamp across sessions and windowed by the
+  filter's `lastN` or page. `cross_session_search` now runs one such query per page
+  instead of one query per session plus in-memory paging; a page can be shorter than
+  `pageSize` because events without text are dropped after paging.
 - **Compaction never reorders the log.** A kept system message stays where it was stored
   instead of moving to the front of the active window, and archived events stay where they
   were. `getEvents(...)` therefore returns events in the order they were appended, plus
@@ -63,20 +68,47 @@ removed from them in a later release. You can drop it yourself:
 ALTER TABLE AI_SESSION_EVENT DROP COLUMN branch;
 ```
 
-### Custom implementers: `SessionRepository.compactEvents` keeps the log order
+### Custom implementers: the `SessionRepository` contract
 
-`compactEvents(sessionId, archivedEvents, retainedEvents, expectedVersion)` must no longer
-rebuild the log as "archived events, then retained events". Instead:
+The repository contract changed so that a backend owns *selection* (filtering, paging,
+searching) and core owns *interpretation* (what a compaction means). A custom repository
+(Redis, MongoDB, …) must be updated:
 
-- mark `archivedEvents` archived **in place**;
-- keep every other existing event where it is, and remove active events that appear in
-  neither list (e.g. a superseded summary);
-- insert each **new** event of `retainedEvents` immediately before the next existing event
-  that follows it in `retainedEvents`, or append it when none follows.
+- **`compactEvents(sessionId, archivedEvents, retainedEvents, expectedVersion)` is
+  removed.** Implement
+  `applyCompaction(String sessionId, CompactionPlan plan, long expectedVersion)` instead.
+  The service computes the plan from the active log and the strategy result; the
+  repository only applies it, under the same compare-and-swap on `expectedVersion`:
+    - flag every id in `plan.archiveIds()` archived **in place** (reject an unknown id
+      with `IllegalArgumentException` and change nothing);
+    - remove every id in `plan.deleteIds()` (a superseded summary);
+    - insert each `plan.inserts()` group immediately before its `beforeEventId` anchor,
+      or at the end of the log when the anchor is `null`;
+    - never move an existing event.
 
-The built-in in-memory and JDBC repositories do this. With JDBC-style ordering by an
-insert sequence, only the part of the log from the insertion point onward needs to be
-re-inserted.
+  `CompactionPlan.applyTo(List<SessionEvent> log)` is the reference implementation for a
+  log held as a list; a list-based store can call it directly.
+- **`saveIfAbsent(Session)` and `deleteExpiredSessions(Instant)` are abstract.** Their
+  non-atomic defaults are gone: implement `saveIfAbsent` with an atomic insert-if-absent
+  (a primary-key-guarded `INSERT`, a compare-and-set put) and `deleteExpiredSessions`
+  with one guarded delete (`DELETE … WHERE expires_at < ?`), so a session whose TTL was
+  extended concurrently is kept.
+- **`findExpiredSessionIds(Instant)` is removed.** It had no caller left.
+- **New `findEventsByUserId(userId, filter)`** backs `cross_session_search`. The default
+  runs the filter over each of the user's sessions and windows the union in memory; a
+  store that can join sessions and events should override it with one sorted, paged
+  query.
+- **`findEvents` must push the filter down.** `excludeArchived`, `excludeSynthetic`,
+  `messageTypes`, the time range, `lastN`, `page`/`pageSize` and, where the store can,
+  the keywords belong in the query; a `lastN` or a page must not read the whole log. Use
+  `EventFilter.apply(List<SessionEvent>)` only for what the store cannot express (a
+  `pattern`, typically). Stores that keep messages as columns or fields should use
+  `SessionEventCodec` (package `org.springframework.ai.session.support`) so every backend
+  stores the same shape.
+- **Run the contract tests.** Add `org.springaicommunity:spring-ai-session-test` in test
+  scope, subclass `AbstractSessionRepositoryContractTests` and implement
+  `createRepository()`. It is the suite the built-in repositories run; see
+  [Implementing a `SessionRepository`](session-management/concepts.md#implementing-a-sessionrepository).
 
 ### Custom implementers: `CompactionStrategy` results must be in log order
 
@@ -87,15 +119,6 @@ position of new events. Existing events are kept as they are stored, so returnin
 modified copy of an existing event (same id, e.g. with a truncated tool result) or a
 different order for existing events no longer has any effect. To change an event's
 content, archive it and add a new event instead.
-
-### Custom implementers: `SessionRepository.deleteExpiredSessions(Instant)`
-
-`SessionService.deleteExpiredSessions` now delegates to a new `SessionRepository` method,
-`deleteExpiredSessions(Instant before)`. Its default implementation keeps the previous
-behavior (`findExpiredSessionIds`, then `delete` for each), which can delete a session
-whose TTL was extended in between. Override it to check the expiry and delete in one
-atomic step, as the built-in repositories do (JDBC: a single
-`DELETE … WHERE expires_at < ?`).
 
 ### Custom implementers: `JdbcSessionRepositoryDialect.getBranchFilterFragment()` removed
 
@@ -229,6 +252,8 @@ Redis repository) should:
   no-op.
 - **In `compactEvents(...)`, reject `archivedEvents` that are not in the session's log**
   (the whole call should have no effect). Otherwise a mistaken caller can lose events.
+  (`compactEvents` was replaced by `applyCompaction` in 0.10.0; see
+  [Upgrading to 0.10.0](#upgrading-to-0100).)
 
 The built-in in-memory and JDBC repositories already do all of this.
 

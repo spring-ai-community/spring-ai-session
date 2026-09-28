@@ -19,12 +19,14 @@ package org.springframework.ai.session.jdbc;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.testcontainers.junit.jupiter.Container;
@@ -36,6 +38,9 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionRepository;
+import org.springframework.ai.session.compaction.CompactionPlan;
+import org.springframework.ai.session.test.AbstractSessionRepositoryContractTests;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -86,33 +91,13 @@ class JdbcSessionRepositoryPostgresqlIT {
 	}
 
 	@Test
-	void deleteExpiredSessionsDeletesOnlyExpiredSessions() {
-		DialectScenarios.deleteExpiredSessionsDeletesOnlyExpiredSessions(this.repository);
-	}
-
-	@Test
 	void repeatedRecursiveSummarizationNeverReordersTheLog() {
 		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
 	}
 
 	@Test
-	void keywordWildcardCharactersMatchLiterally() {
-		DialectScenarios.keywordWildcardCharactersMatchLiterally(this.repository);
-	}
-
-	@Test
 	void timestampsAreStoredAsUtcRegardlessOfJvmTimeZone() {
 		DialectScenarios.timestampsAreStoredAsUtcRegardlessOfJvmTimeZone(this.repository, this.jdbcTemplate);
-	}
-
-	@Test
-	void concurrentCreatesOfSameIdHaveExactlyOneWinner() throws Exception {
-		DialectScenarios.concurrentCreatesOfSameIdHaveExactlyOneWinner(this.repository);
-	}
-
-	@Test
-	void upsertKeepsCreatedAtAndEvents() {
-		DialectScenarios.upsertKeepsCreatedAtAndEvents(this.repository);
 	}
 
 	@Test
@@ -148,8 +133,9 @@ class JdbcSessionRepositoryPostgresqlIT {
 				}
 			});
 			awaitBlockedOnLock();
-			return this.repository.compactEvents(sessionId, List.of(oldUser), List.of(summary, oldAssistant),
-					version);
+			CompactionPlan plan = new CompactionPlan(Set.of(oldUser.getId()), Set.of(),
+					List.of(new CompactionPlan.Insert(oldAssistant.getId(), List.of(summary))));
+			return this.repository.applyCompaction(sessionId, plan, version);
 		});
 
 		assertThat(compacted).isTrue();
@@ -190,6 +176,17 @@ class JdbcSessionRepositoryPostgresqlIT {
 
 	private static SessionEvent event(String sessionId, org.springframework.ai.chat.messages.Message message) {
 		return SessionEvent.builder().sessionId(sessionId).timestamp(Instant.now()).message(message).build();
+	}
+
+	/** The repository contract, run against PostgreSQL. */
+	@Nested
+	class Contract extends AbstractSessionRepositoryContractTests {
+
+		@Override
+		protected SessionRepository createRepository() {
+			return JdbcSessionRepository.builder().dataSource(dataSource).build();
+		}
+
 	}
 
 }

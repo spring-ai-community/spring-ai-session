@@ -19,16 +19,10 @@ package org.springframework.ai.session.jdbc;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.TimeZone;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 
 import org.mockito.Answers;
 
@@ -41,7 +35,6 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
-import org.springframework.ai.session.EventFilter.MatchMode;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
@@ -63,19 +56,6 @@ import static org.mockito.Mockito.mock;
 final class DialectScenarios {
 
 	private DialectScenarios() {
-	}
-
-	static void keywordWildcardCharactersMatchLiterally(JdbcSessionRepository repository) {
-		String sessionId = newSession(repository);
-		for (String text : List.of("100% done", "1000 done", "snake_case", "snakeXcase", "a!b", "ab")) {
-			append(repository, sessionId, text);
-		}
-
-		assertThat(texts(repository, sessionId, EventFilter.keywordSearch("100%"))).containsExactly("100% done");
-		assertThat(texts(repository, sessionId, EventFilter.keywordSearch("_case"))).containsExactly("snake_case");
-		assertThat(texts(repository, sessionId, EventFilter.keywordSearch("a!b"))).containsExactly("a!b");
-		assertThat(texts(repository, sessionId, EventFilter.keywordsSearch(List.of("0%", "e_c"), MatchMode.ANY)))
-			.containsExactly("100% done", "snake_case");
 	}
 
 	static void timestampsAreStoredAsUtcRegardlessOfJvmTimeZone(JdbcSessionRepository repository,
@@ -103,62 +83,12 @@ final class DialectScenarios {
 			assertThat(repository.findEvents(sessionId, EventFilter.all()).get(0).getTimestamp()).isEqualTo(instant);
 			assertThat(repository.findEvents(sessionId, EventFilter.builder().from(instant).to(instant).build()))
 				.hasSize(1);
-			assertThat(repository.findExpiredSessionIds(instant.plusMillis(1))).contains(sessionId);
-			assertThat(repository.findExpiredSessionIds(instant)).doesNotContain(sessionId);
+			// The expiry comparison uses the same UTC wall-clock value
+			assertThat(repository.deleteExpiredSessions(instant)).isZero();
+			assertThat(repository.deleteExpiredSessions(instant.plusMillis(1))).isEqualTo(1);
 		}
 		finally {
 			TimeZone.setDefault(original);
-		}
-	}
-
-	static void upsertKeepsCreatedAtAndEvents(JdbcSessionRepository repository) {
-		String sessionId = UUID.randomUUID().toString();
-		Instant created = Instant.parse("2026-01-01T00:00:00Z");
-		repository.save(Session.builder().id(sessionId).userId("user-1").createdAt(created).build());
-		append(repository, sessionId, "kept");
-
-		Instant laterExpiry = Instant.parse("2027-01-01T00:00:00Z");
-		Session saved = repository.save(Session.builder()
-			.id(sessionId)
-			.userId("user-2")
-			.createdAt(Instant.parse("2026-06-01T00:00:00Z"))
-			.expiresAt(laterExpiry)
-			.build());
-
-		assertThat(saved.createdAt()).as("save returns the stored session").isEqualTo(created);
-		Session found = repository.findById(sessionId);
-		assertThat(found.createdAt()).isEqualTo(created);
-		assertThat(found.userId()).isEqualTo("user-2");
-		assertThat(found.expiresAt()).isEqualTo(laterExpiry);
-		assertThat(texts(repository, sessionId, EventFilter.all())).containsExactly("kept");
-	}
-
-	static void concurrentCreatesOfSameIdHaveExactlyOneWinner(JdbcSessionRepository repository) throws Exception {
-		String sessionId = UUID.randomUUID().toString();
-		int callers = 8;
-		ExecutorService executor = Executors.newFixedThreadPool(callers);
-		try {
-			CountDownLatch start = new CountDownLatch(1);
-			List<Future<Boolean>> results = new ArrayList<>();
-			for (int i = 0; i < callers; i++) {
-				String userId = "user-" + i;
-				results.add(executor.submit(() -> {
-					start.await();
-					return repository.saveIfAbsent(Session.builder().id(sessionId).userId(userId).build());
-				}));
-			}
-			start.countDown();
-			List<String> winners = new ArrayList<>();
-			for (int i = 0; i < callers; i++) {
-				if (results.get(i).get(30, TimeUnit.SECONDS)) {
-					winners.add("user-" + i);
-				}
-			}
-			assertThat(winners).hasSize(1);
-			assertThat(repository.findById(sessionId).userId()).isEqualTo(winners.get(0));
-		}
-		finally {
-			executor.shutdownNow();
 		}
 	}
 
@@ -233,22 +163,6 @@ final class DialectScenarios {
 		assertThat(texts(repository, sessionId, EventFilter.all())).containsExactly("once", "after");
 		// The replay did not count as an appended event
 		assertThat(repository.getEventVersion(sessionId)).isEqualTo(version + 1);
-	}
-
-	/** Only expired sessions are deleted, together with their events. */
-	static void deleteExpiredSessionsDeletesOnlyExpiredSessions(JdbcSessionRepository repository) {
-		Instant now = Instant.now();
-		String expired = UUID.randomUUID().toString();
-		String extended = UUID.randomUUID().toString();
-		repository.save(Session.builder().id(expired).userId("user-ttl").expiresAt(now.minusSeconds(60)).build());
-		repository.save(Session.builder().id(extended).userId("user-ttl").expiresAt(now.plusSeconds(60)).build());
-		append(repository, expired, "gone");
-		append(repository, extended, "kept");
-
-		assertThat(repository.deleteExpiredSessions(now)).isEqualTo(1);
-		assertThat(repository.findById(expired)).isNull();
-		assertThat(repository.findEvents(expired, EventFilter.all())).isEmpty();
-		assertThat(texts(repository, extended, EventFilter.all())).containsExactly("kept");
 	}
 
 	/** Appends messages by label: "u…" user, "a…" assistant, "sys…" system. */

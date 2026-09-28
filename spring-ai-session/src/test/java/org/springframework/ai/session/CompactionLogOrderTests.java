@@ -17,7 +17,6 @@
 package org.springframework.ai.session;
 
 import java.util.List;
-import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.Answers;
@@ -32,7 +31,6 @@ import org.springframework.ai.session.compaction.RecursiveSummarizationCompactio
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
@@ -40,7 +38,8 @@ import static org.mockito.Mockito.mock;
 /**
  * Compaction never reorders the event log: archived events are flagged in place, a kept
  * system message stays where it was stored, and a summary turn is inserted right before
- * the kept conversation.
+ * the kept conversation. The repository-level rules are covered by the contract test kit;
+ * these tests run the real strategies through the service.
  */
 class CompactionLogOrderTests {
 
@@ -105,68 +104,6 @@ class CompactionLogOrderTests {
 
 		assertThat(labels(this.service.getEvents(id))).containsExactly("u1", "a1", "u2", "sys-1", "a2", "u3", "a3");
 		assertThat(labels(this.service.getEvents(id, EventFilter.active()))).containsExactly("sys-1", "u3", "a3");
-	}
-
-	@Test
-	void newEventsWithoutAFollowingRetainedEventAreAppended() {
-		String id = this.service.create(CreateSessionRequest.builder().userId("user-order").build()).id();
-		append(id, user("u1"), assistant("a1"));
-		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
-		SessionEvent added = SessionEvent.builder().sessionId(id).message(new UserMessage("added")).build();
-
-		this.repository.compactEvents(id, List.of(log.get(0)), List.of(log.get(1), added),
-				this.repository.getEventVersion(id));
-
-		assertThat(labels(this.repository.findEvents(id, EventFilter.all()))).containsExactly("u1", "a1", "added");
-	}
-
-	@Test
-	void retainedEventThatIsAlreadyArchivedStaysInPlace() {
-		String id = this.service.create(CreateSessionRequest.builder().userId("user-order").build()).id();
-		append(id, user("e1"), user("e2"), user("e3"));
-		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
-		this.repository.compactEvents(id, List.of(log.get(0)), List.of(log.get(1), log.get(2)),
-				this.repository.getEventVersion(id));
-		SessionEvent summary = SessionEvent.builder().sessionId(id).message(new UserMessage("summary")).build();
-
-		this.repository.compactEvents(id, List.of(log.get(1)), List.of(log.get(0), summary, log.get(2)),
-				this.repository.getEventVersion(id));
-
-		List<SessionEvent> after = this.repository.findEvents(id, EventFilter.all());
-		assertThat(labels(after)).containsExactly("e1", "e2", "summary", "e3");
-		assertThat(after).extracting(SessionEvent::isArchived).containsExactly(true, true, false, false);
-	}
-
-	@Test
-	void compactEventsRejectsANewEventOfAnotherSession() {
-		String id = this.service.create(CreateSessionRequest.builder().userId("user-order").build()).id();
-		append(id, user("u1"));
-		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
-		SessionEvent foreign = SessionEvent.builder()
-			.sessionId("another-session")
-			.message(new UserMessage("foreign"))
-			.build();
-
-		assertThatThrownBy(() -> this.repository.compactEvents(id, List.of(), List.of(foreign, log.get(0)),
-				this.repository.getEventVersion(id)))
-			.isInstanceOf(IllegalArgumentException.class);
-		assertThat(labels(this.repository.findEvents(id, EventFilter.all()))).containsExactly("u1");
-	}
-
-	@Test
-	void compactEventsRejectsAnArchivedEventThatIsNotInTheLog() {
-		String id = this.service.create(CreateSessionRequest.builder().userId("user-order").build()).id();
-		append(id, user("u1"));
-		SessionEvent unknown = SessionEvent.builder()
-			.id(UUID.randomUUID().toString())
-			.sessionId(id)
-			.message(new UserMessage("unknown"))
-			.build();
-
-		assertThatThrownBy(() -> this.repository.compactEvents(id, List.of(unknown), List.of(),
-				this.repository.getEventVersion(id)))
-			.isInstanceOf(IllegalArgumentException.class);
-		assertThat(labels(this.repository.findEvents(id, EventFilter.all()))).containsExactly("u1");
 	}
 
 	private void append(String sessionId, Message... messages) {

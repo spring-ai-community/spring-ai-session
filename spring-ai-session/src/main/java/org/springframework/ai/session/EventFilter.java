@@ -25,6 +25,7 @@ import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.util.Assert;
 
 /**
  * Criteria for filtering {@link SessionEvent}s when retrieving session history.
@@ -269,6 +270,60 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * Applies this filter to a list of events held in memory: keeps the events that
+	 * {@link #matches(SessionEvent)}, then applies the retrieval window
+	 * ({@link #applyWindow(List)}). This is the reference implementation of the read
+	 * contract for a log held as a list; a store that can push the criteria down to a
+	 * query should do so and use this only for what it cannot express (see
+	 * {@link SessionRepository#findEvents}).
+	 * @param events the events, oldest first
+	 * @return the matching events, oldest first, never the input list itself
+	 */
+	public List<SessionEvent> apply(List<SessionEvent> events) {
+		Assert.notNull(events, "events must not be null");
+		return applyWindow(events.stream().filter(this::matches).toList());
+	}
+
+	/**
+	 * Applies only the retrieval window of this filter ({@link #lastN()}, or
+	 * {@link #page()} / {@link #pageSize()}) to an already filtered list, oldest first.
+	 * A page beyond the end yields an empty list; a page number large enough to overflow
+	 * an {@code int} offset does too.
+	 * @param matched the filtered events, oldest first
+	 * @return the windowed events
+	 */
+	public List<SessionEvent> applyWindow(List<SessionEvent> matched) {
+		Assert.notNull(matched, "matched must not be null");
+		if (this.lastN != null) {
+			if (matched.size() > this.lastN) {
+				return List.copyOf(matched.subList(matched.size() - this.lastN, matched.size()));
+			}
+			return List.copyOf(matched);
+		}
+		if (this.pageSize != null) {
+			int pageNum = (this.page != null) ? this.page : 0;
+			// long arithmetic: a large page number must not overflow into a negative index
+			long fromIdx = (long) pageNum * this.pageSize;
+			if (fromIdx >= matched.size()) {
+				return List.of();
+			}
+			return List.copyOf(matched.subList((int) fromIdx, (int) Math.min(fromIdx + this.pageSize, matched.size())));
+		}
+		return List.copyOf(matched);
+	}
+
+	/**
+	 * Returns this filter without its retrieval window ({@link #lastN()}, {@link #page()}
+	 * and {@link #pageSize()} cleared), keeping every per-event criterion. Used to run the
+	 * same criteria over several sessions before windowing the combined result.
+	 * @return the filter without a window
+	 */
+	public EventFilter withoutWindow() {
+		return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, null, this.keyword,
+				this.keywords, this.matchMode, this.pattern, null, null, this.excludeArchived);
 	}
 
 	/**

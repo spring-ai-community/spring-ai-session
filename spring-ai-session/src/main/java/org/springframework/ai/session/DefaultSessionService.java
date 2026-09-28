@@ -25,6 +25,7 @@ import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.session.compaction.CompactionPlan;
 import org.springframework.ai.session.compaction.CompactionRequest;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -122,6 +123,13 @@ public class DefaultSessionService implements SessionService {
 	}
 
 	@Override
+	public List<SessionEvent> findEventsByUserId(String userId, EventFilter filter) {
+		Assert.hasText(userId, "userId must not be null or empty");
+		Assert.notNull(filter, "filter must not be null");
+		return this.sessionRepository.findEventsByUserId(userId, filter);
+	}
+
+	@Override
 	public List<SessionEvent> getEvents(String sessionId, EventFilter filter) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(filter, "filter must not be null");
@@ -159,9 +167,11 @@ public class DefaultSessionService implements SessionService {
 
 		CompactionResult result = strategy.compact(request);
 
-		if (!result.archivedEvents().isEmpty()) {
-			boolean replaced = this.sessionRepository.compactEvents(session.id(), result.archivedEvents(),
-					result.compactedEvents(), version);
+		// The service holds the active log at the version it will compare-and-swap
+		// against, so it computes the write operations; the repository only applies them.
+		CompactionPlan plan = CompactionPlan.of(session.id(), events, result);
+		if (!plan.isEmpty()) {
+			boolean replaced = this.sessionRepository.applyCompaction(session.id(), plan, version);
 			if (!replaced) {
 				// CAS rejected — a concurrent writer already mutated the log; skip
 				// silently.

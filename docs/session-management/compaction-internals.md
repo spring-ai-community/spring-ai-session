@@ -9,7 +9,8 @@ worked examples. For **using** compaction, see [Context Compaction](compaction.m
     `CompactionUtils` and the exact SQL used by `JdbcSessionRepository` are not public API
     and may change between releases. The public contract is `CompactionTrigger`,
     `CompactionStrategy`, `CompactionRequest`, `CompactionResult`,
-    `SessionService.compact(...)` and `SessionRepository.compactEvents(...)`.
+    `SessionService.compact(...)`, `CompactionPlan` and
+    `SessionRepository.applyCompaction(...)`.
 
 ---
 
@@ -34,7 +35,7 @@ classDiagram
         <<interface>>
         +getEventVersion(id) long
         +findEvents(id, filter) List
-        +compactEvents(id, archived, retained, version) boolean
+        +applyCompaction(id, plan, version) boolean
     }
     class InMemorySessionRepository
     class JdbcSessionRepository
@@ -81,6 +82,11 @@ classDiagram
   `archivedEvents` are the events to mark archived: they stay in the log and remain
   searchable through Recall Storage. An event in neither list is deleted; the only such
   events are superseded synthetic summaries.
+- **The service turns the result into a `CompactionPlan`.** `CompactionPlan.of(sessionId,
+  activeEvents, result)` computes the ids to archive, the ids to delete, and the new
+  events to insert, each group keyed by the existing event it goes in front of (`null` to
+  append). The repository applies the plan without interpreting the result;
+  `CompactionPlan.applyTo(log)` is the reference merge for a log held as a list.
 
 ### 1b. Triggers
 
@@ -205,10 +211,11 @@ sequenceDiagram
         Trg-->>Svc: true
         Svc->>Str: compact(request)
         Str-->>Svc: CompactionResult(compacted, archived, tokens)
-        alt nothing archived
+        Svc->>Svc: plan = CompactionPlan.of(sessionId, events, result)<br/>(archive ids, delete ids, inserts keyed by anchor)
+        alt plan is empty
             Svc-->>Adv: result (no repository write)
-        else events archived
-            Svc->>Repo: compactEvents(sessionId, archived, compacted, v)
+        else plan has operations
+            Svc->>Repo: applyCompaction(sessionId, plan, v)
             alt version still v (CAS succeeds)
                 Repo-->>Svc: true
                 Svc-->>Adv: result
@@ -234,7 +241,8 @@ that are newer than the version it checks.
 
 ## 3. Activity: how a strategy chooses what to archive
 
-All four strategies share this pipeline. They differ in step 3, how the raw cut is
+All four strategies share this pipeline; its output is the `CompactionResult` that the
+service turns into a `CompactionPlan` (see §2). They differ in step 3, how the raw cut is
 computed, and in two more places:
 
 - `TokenCountCompactionStrategy` has no step 2 shortcut: it always walks the events and
@@ -351,7 +359,7 @@ that alternation valid; a lone assistant summary would not.
 
 ---
 
-## 5. Sequence: JDBC `compactEvents` and a concurrent append
+## 5. Sequence: JDBC `applyCompaction` and a concurrent append
 
 On JDBC the CAS is a row-level lock on the session row. Both writers take that lock
 *before* touching events. An append must also lock the row before it inserts; otherwise
@@ -360,7 +368,7 @@ its event could be ordered before the part of the log that compaction re-inserts
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as compactEvents (tx 1)
+    participant C as applyCompaction (tx 1)
     participant DB as Database
     participant A as appendEvent (tx 2)
 
@@ -369,16 +377,19 @@ sequenceDiagram
     Note over DB: row lock held by tx 1
     A->>DB: UPDATE AI_SESSION SET event_version = event_version + 1 WHERE id = ?
     Note over A,DB: blocks: the row is locked by tx 1
-    C->>DB: UPDATE AI_SESSION_EVENT SET archived = true<br/>WHERE id = ? AND session_id = ? (batch, one per archived event)
-    alt any update count == 0 (event not in this session's log)
+    C->>DB: UPDATE AI_SESSION_EVENT SET archived = true<br/>WHERE id = ? AND session_id = ? (batch, one per plan.archiveIds)
+    alt any update count == 0 (id not in this session's log)
         C->>DB: ROLLBACK, releasing the row lock
         Note over C: IllegalArgumentException, nothing changed
     else all archived
-        C->>DB: DELETE active events in neither list<br/>(e.g. the previous summary)
-        opt new events (a summary turn)
-            C->>DB: DELETE FROM AI_SESSION_EVENT<br/>WHERE session_id = ? AND seq >= seq(first kept event after the summary)
-            C->>DB: INSERT summary turn + that tail (batch, new seq values)
-            Note over C,DB: new events with no existing event after them<br/>are simply appended, with no DELETE
+        C->>DB: DELETE FROM AI_SESSION_EVENT WHERE id = ? AND session_id = ?<br/>(batch, one per plan.deleteIds, e.g. the previous summary)
+        opt insert groups with an anchor (a summary turn)
+            C->>DB: SELECT seq of each anchor event
+            C->>DB: DELETE FROM AI_SESSION_EVENT<br/>WHERE session_id = ? AND seq >= smallest anchor seq
+            C->>DB: INSERT that tail again with each group<br/>placed before its anchor (batch, new seq values)
+        end
+        opt insert group without an anchor
+            C->>DB: INSERT the group at the end (batch, no DELETE)
         end
         C->>DB: COMMIT, releasing the row lock
         Note over C: returns true
@@ -394,13 +405,13 @@ sequenceDiagram
   `seq`, so it is ordered after every compacted event. It also bumps the version again,
   and the next compaction sees the new event.
 - **Append locks first:** compaction's CAS `UPDATE` waits. When the append commits, the
-  version is `v + 1`, the CAS matches 0 rows, and `compactEvents` returns `false`. The
+  version is `v + 1`, the CAS matches 0 rows, and `applyCompaction` returns `false`. The
   service skips silently, and the next turn compacts from fresh events.
 
 **In-memory equivalent:** `InMemorySessionRepository` does the same inside a single
-`ConcurrentHashMap.compute`. It checks the version, walks the log in order (flagging
-archived events in place, dropping events in neither list, inserting new events before
-the retained event that follows them), and bumps the version.
+`ConcurrentHashMap.compute`. It checks the version, calls `CompactionPlan.applyTo(log)`
+(which flags the archive ids in place, drops the delete ids, inserts each group before its
+anchor and appends the anchor-less group), and bumps the version.
 
 ---
 

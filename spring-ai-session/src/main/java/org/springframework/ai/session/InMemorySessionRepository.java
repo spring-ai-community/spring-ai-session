@@ -18,16 +18,14 @@ package org.springframework.ai.session;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 import org.jspecify.annotations.Nullable;
 
+import org.springframework.ai.session.compaction.CompactionPlan;
 import org.springframework.util.Assert;
 
 /**
@@ -123,16 +121,6 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public List<String> findExpiredSessionIds(Instant before) {
-		Assert.notNull(before, "before must not be null");
-		return this.store.values()
-			.stream()
-			.filter(d -> isExpired(d, before))
-			.map(d -> d.session().id())
-			.toList();
-	}
-
-	@Override
 	public void delete(String sessionId) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		this.store.remove(sessionId);
@@ -160,11 +148,9 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public boolean compactEvents(String sessionId, List<SessionEvent> archivedEvents,
-			List<SessionEvent> retainedEvents, long expectedVersion) {
+	public boolean applyCompaction(String sessionId, CompactionPlan plan, long expectedVersion) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
-		Assert.notNull(archivedEvents, "archivedEvents must not be null");
-		Assert.notNull(retainedEvents, "retainedEvents must not be null");
+		Assert.notNull(plan, "plan must not be null");
 		boolean[] success = { false };
 		this.store.compute(sessionId, (id, existing) -> {
 			if (existing == null) {
@@ -173,66 +159,12 @@ public final class InMemorySessionRepository implements SessionRepository {
 			if (existing.version() != expectedVersion) {
 				return existing;
 			}
+			// applyTo validates the plan against the log and throws before anything changes
+			List<SessionEvent> compacted = plan.applyTo(existing.events());
 			success[0] = true;
-			return existing.withEvents(compactedLog(sessionId, existing.events(), archivedEvents, retainedEvents));
+			return existing.withEvents(compacted);
 		});
 		return success[0];
-	}
-
-	/**
-	 * Applies a compaction without reordering existing events: {@code archivedEvents}
-	 * are flagged archived in place, previously-active events in neither list are dropped,
-	 * and each new event in {@code retainedEvents} is inserted immediately before the next
-	 * existing event that follows it there (or appended when none follows).
-	 */
-	private static List<SessionEvent> compactedLog(String sessionId, List<SessionEvent> log,
-			List<SessionEvent> archivedEvents, List<SessionEvent> retainedEvents) {
-		Set<String> logIds = log.stream().map(SessionEvent::getId).collect(Collectors.toSet());
-		Set<String> archivedIds = new HashSet<>();
-		for (SessionEvent event : archivedEvents) {
-			if (!logIds.contains(event.getId())) {
-				throw new IllegalArgumentException(
-						"archivedEvents contains an event that is not in the log of session " + sessionId);
-			}
-			archivedIds.add(event.getId());
-		}
-		Set<String> retainedIds = retainedEvents.stream().map(SessionEvent::getId).collect(Collectors.toSet());
-
-		// Group the new events by the existing event they must precede
-		Map<String, List<SessionEvent>> insertBefore = new HashMap<>();
-		List<SessionEvent> pending = new ArrayList<>();
-		for (SessionEvent event : retainedEvents) {
-			if (logIds.contains(event.getId())) {
-				if (!pending.isEmpty()) {
-					insertBefore.computeIfAbsent(event.getId(), id -> new ArrayList<>()).addAll(pending);
-					pending.clear();
-				}
-			}
-			else {
-				if (!sessionId.equals(event.getSessionId())) {
-					throw new IllegalArgumentException("retainedEvents contains a new event of session '"
-							+ event.getSessionId() + "', not of session " + sessionId);
-				}
-				pending.add(event);
-			}
-		}
-
-		List<SessionEvent> result = new ArrayList<>();
-		for (SessionEvent event : log) {
-			result.addAll(insertBefore.getOrDefault(event.getId(), List.of()));
-			if (event.isArchived()) {
-				result.add(event);
-			}
-			else if (archivedIds.contains(event.getId())) {
-				result.add(event.asArchived());
-			}
-			else if (retainedIds.contains(event.getId())) {
-				result.add(event);
-			}
-			// else: a previously-active event in neither list (e.g. a superseded summary)
-		}
-		result.addAll(pending);
-		return List.copyOf(result);
 	}
 
 	@Override
@@ -248,33 +180,21 @@ public final class InMemorySessionRepository implements SessionRepository {
 		Assert.notNull(filter, "filter must not be null");
 
 		SessionData data = this.store.get(sessionId);
-		if (data == null) {
-			return List.of();
-		}
+		return (data != null) ? filter.apply(data.events()) : List.of();
+	}
 
-		List<SessionEvent> matched = data.events()
+	@Override
+	public List<SessionEvent> findEventsByUserId(String userId, EventFilter filter) {
+		Assert.hasText(userId, "userId must not be null or empty");
+		Assert.notNull(filter, "filter must not be null");
+		EventFilter perSession = filter.withoutWindow();
+		List<SessionEvent> matches = this.store.values()
 			.stream()
-			.filter(filter::matches)
-			.collect(Collectors.toCollection(ArrayList::new));
-
-		if (filter.lastN() != null && matched.size() > filter.lastN()) {
-			matched = matched.subList(matched.size() - filter.lastN(), matched.size());
-		}
-
-		if (filter.pageSize() != null) {
-			int pageNum = (filter.page() != null) ? filter.page() : 0;
-			int size = filter.pageSize();
-			// long arithmetic: a large page number must not overflow into a negative index
-			long fromIdx = (long) pageNum * size;
-			if (fromIdx >= matched.size()) {
-				matched = new ArrayList<>();
-			}
-			else {
-				matched = matched.subList((int) fromIdx, (int) Math.min(fromIdx + size, matched.size()));
-			}
-		}
-
-		return List.copyOf(matched);
+			.filter(d -> userId.equals(d.session().userId()))
+			.flatMap(d -> perSession.apply(d.events()).stream())
+			.sorted(Comparator.comparing(SessionEvent::getTimestamp).thenComparing(SessionEvent::getId))
+			.toList();
+		return filter.applyWindow(matches);
 	}
 
 	private record SessionData(Session session, List<SessionEvent> events, long version) {

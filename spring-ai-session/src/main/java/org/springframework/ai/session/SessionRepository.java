@@ -17,9 +17,13 @@
 package org.springframework.ai.session;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
+
+import org.springframework.ai.session.compaction.CompactionPlan;
 
 /**
  * Persistence contract for {@link Session} objects and their event logs.
@@ -49,29 +53,16 @@ public interface SessionRepository {
 	 * two concurrent creates of the same id cannot both succeed (the second would
 	 * otherwise silently take over the first caller's session).
 	 * <p>
-	 * Implementations should perform the check and the insert atomically (e.g. a
-	 * primary-key-guarded {@code INSERT}). The default implementation is a non-atomic
-	 * {@link #findById} followed by {@link #save}, kept only for compatibility with
-	 * existing custom repositories; override it.
+	 * Implementations must perform the check and the insert atomically (e.g. a
+	 * primary-key-guarded {@code INSERT}, or a compare-and-set put).
 	 * @return {@code true} if the session was inserted, {@code false} if a session with
 	 * the same id already exists (the existing session is left untouched)
 	 */
-	default boolean saveIfAbsent(Session session) {
-		if (findById(session.id()) != null) {
-			return false;
-		}
-		save(session);
-		return true;
-	}
+	boolean saveIfAbsent(Session session);
 
 	@Nullable Session findById(String sessionId);
 
 	List<Session> findByUserId(String userId);
-
-	/**
-	 * Returns the IDs of all sessions whose TTL has expired before the given instant.
-	 */
-	List<String> findExpiredSessionIds(Instant before);
 
 	/**
 	 * Deletes the session with the given ID.
@@ -82,18 +73,13 @@ public interface SessionRepository {
 	 * Deletes every session whose TTL has expired before the given instant, together with
 	 * its events, and returns the number of sessions deleted.
 	 * <p>
-	 * Implementations should check the expiry and delete in one atomic step, so that a
-	 * session whose TTL was extended concurrently (e.g. by {@link #save(Session)}) is not
-	 * deleted. The default implementation is not atomic: it deletes the sessions returned
-	 * by {@link #findExpiredSessionIds(Instant)} one by one.
+	 * Implementations must check the expiry and delete in one atomic step (e.g. a single
+	 * {@code DELETE … WHERE expires_at < ?}), so that a session whose TTL was extended
+	 * concurrently (e.g. by {@link #save(Session)}) is not deleted.
 	 * @param before the expiry cut-off
 	 * @return the number of sessions deleted
 	 */
-	default int deleteExpiredSessions(Instant before) {
-		List<String> expired = findExpiredSessionIds(before);
-		expired.forEach(this::delete);
-		return expired.size();
-	}
+	int deleteExpiredSessions(Instant before);
 
 	// Events
 
@@ -119,29 +105,26 @@ public interface SessionRepository {
 	void appendEvent(SessionEvent event);
 
 	/**
-	 * Atomically applies a compaction result to the session's event log using an
-	 * optimistic compare-and-swap. The swap is performed only if the current event-log
-	 * version equals {@code expectedVersion}; otherwise the call is a no-op and returns
-	 * {@code false} (another writer mutated the log between the caller's read and this
-	 * write).
+	 * Atomically applies a compaction plan to the session's event log using an optimistic
+	 * compare-and-swap. The plan is applied only if the current event-log version equals
+	 * {@code expectedVersion}; otherwise the call is a no-op and returns {@code false}
+	 * (another writer mutated the log between the caller's read and this write).
 	 *
 	 * <p>
 	 * Archived events are <em>retained</em> in the log (soft-deleted via
 	 * {@link SessionEvent#isArchived()}) so they remain searchable by the Recall Storage
 	 * tools. Compaction never reorders existing events. On success:
 	 * <ul>
-	 * <li>the events in {@code archivedEvents} are marked archived <em>in place</em>;</li>
-	 * <li>events that were already archived, and the existing events in
-	 * {@code retainedEvents}, stay where they are;</li>
-	 * <li>any previously-active event that appears in neither list (e.g. a superseded
-	 * synthetic summary) is removed;</li>
-	 * <li>each <em>new</em> event in {@code retainedEvents} (one not yet in the log, such
-	 * as a synthetic summary turn) is inserted immediately before the next existing event
-	 * that follows it in {@code retainedEvents}, or appended at the end of the log when
-	 * none follows.</li>
+	 * <li>the events in {@link CompactionPlan#archiveIds()} are flagged archived <em>in
+	 * place</em>;</li>
+	 * <li>the events in {@link CompactionPlan#deleteIds()} (e.g. a superseded synthetic
+	 * summary) are removed;</li>
+	 * <li>each {@link CompactionPlan.Insert} group is inserted immediately before its
+	 * anchor event, or appended at the end of the log when the anchor is {@code null};</li>
+	 * <li>every other event stays where it is.</li>
 	 * </ul>
-	 * The order of the existing events within {@code retainedEvents} is not used, except
-	 * to position the new events.
+	 * {@link CompactionPlan#applyTo(List)} is the reference implementation of these rules
+	 * for a log held as a list.
 	 *
 	 * <p>
 	 * Callers should read {@link #getEventVersion} <em>before</em> reading events via
@@ -149,30 +132,25 @@ public interface SessionRepository {
 	 * {@code false} the caller should treat the compaction as a no-op — the concurrent
 	 * writer already handled the session.
 	 * @param sessionId the session whose log is being compacted
-	 * @param archivedEvents events to mark archived (must already exist in the log;
-	 * implementations may reject the whole call with {@link IllegalArgumentException}
-	 * otherwise)
-	 * @param retainedEvents the new active window, in log order, including any new events
-	 * at the position they should take (new events must belong to {@code sessionId};
-	 * implementations reject the whole call with {@link IllegalArgumentException}
-	 * otherwise)
+	 * @param plan the plan; its archive ids and anchor ids must be in the session's log,
+	 * otherwise implementations reject the whole call with
+	 * {@link IllegalArgumentException} and change nothing
 	 * @param expectedVersion the event-log version the caller observed
-	 * @return {@code true} when the swap succeeded, {@code false} on a version mismatch
+	 * @return {@code true} when the plan was applied, {@code false} on a version mismatch
 	 * @throws IllegalArgumentException if the session does not exist
 	 */
-	boolean compactEvents(String sessionId, List<SessionEvent> archivedEvents, List<SessionEvent> retainedEvents,
-			long expectedVersion);
+	boolean applyCompaction(String sessionId, CompactionPlan plan, long expectedVersion);
 
 	/**
 	 * Returns the current event-log version for the given session. The version is
 	 * incremented atomically on every {@link #appendEvent} call that actually appends a
-	 * new event, and on every {@link #compactEvents} call (an idempotent replay of an
-	 * already-applied {@link #appendEvent} does not increment it). Returns {@code 0} when
-	 * the session does not exist or has no events yet.
+	 * new event, and on every successful {@link #applyCompaction} call (an idempotent
+	 * replay of an already-applied {@link #appendEvent} does not increment it). Returns
+	 * {@code 0} when the session does not exist or has no events yet.
 	 * <p>
 	 * Read this <em>before</em> calling {@link #findEvents} to obtain a version that is
 	 * guaranteed to be ≤ the version of the events you subsequently read, which is the
-	 * safe ordering for passing to {@link #compactEvents(String, List, List, long)}.
+	 * safe ordering for passing to {@link #applyCompaction(String, CompactionPlan, long)}.
 	 */
 	long getEventVersion(String sessionId);
 
@@ -181,13 +159,45 @@ public interface SessionRepository {
 	 * {@link EventFilter#lastN()} is set, only the most recent N matching events are
 	 * returned. Events are always returned in chronological order (oldest first).
 	 * <p>
+	 * <strong>Push the filter down.</strong> The cost of a read must not grow with the
+	 * size of the whole log: an implementation is expected to evaluate
+	 * {@link EventFilter#excludeArchived()}, {@link EventFilter#excludeSynthetic()},
+	 * {@link EventFilter#messageTypes()}, the time range, {@link EventFilter#lastN()},
+	 * {@link EventFilter#page()} / {@link EventFilter#pageSize()} and, where the store
+	 * can, the keywords in its query, and to fall back to {@link EventFilter#apply(List)}
+	 * only for what the store cannot express (a {@link EventFilter#pattern()}, typically),
+	 * as {@code JdbcSessionRepository} does.
+	 * <p>
 	 * <strong>Existence contract:</strong> returns an empty list when the session does
 	 * not exist, rather than throwing. This differs from {@link #appendEvent} and
-	 * {@link #compactEvents}, which throw {@link IllegalArgumentException} for unknown
+	 * {@link #applyCompaction}, which throw {@link IllegalArgumentException} for unknown
 	 * sessions. The silent-empty behaviour allows callers to query event history without
 	 * first checking whether the session exists (the "read before write" pattern used by
 	 * {@code SessionMemoryAdvisor}).
 	 */
 	List<SessionEvent> findEvents(String sessionId, EventFilter filter);
+
+	/**
+	 * Returns the events of <em>every</em> session of the given user that match the
+	 * filter, ordered by timestamp (then event id) across sessions, with the filter's
+	 * {@link EventFilter#lastN()} or page applied to that combined order.
+	 * <p>
+	 * The default runs the filter without its window over each session of the user,
+	 * sorts the union and applies the window in memory, which costs the total number of
+	 * matches on every call. Stores that can join sessions and events should override it
+	 * with a single sorted, paged query.
+	 * @param userId the user whose sessions are searched
+	 * @param filter the filter; its window applies to the combined result
+	 * @return the matching events, oldest first
+	 */
+	default List<SessionEvent> findEventsByUserId(String userId, EventFilter filter) {
+		EventFilter perSession = filter.withoutWindow();
+		List<SessionEvent> matches = new ArrayList<>();
+		for (Session session : findByUserId(userId)) {
+			matches.addAll(findEvents(session.id(), perSession));
+		}
+		matches.sort(Comparator.comparing(SessionEvent::getTimestamp).thenComparing(SessionEvent::getId));
+		return filter.applyWindow(matches);
+	}
 
 }

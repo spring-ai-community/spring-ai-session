@@ -124,9 +124,12 @@ columns: `message_type` (enum name), `message_content` (plain text), and `messag
 message types.
 
 **Optimistic concurrency** — the `event_version` column on `AI_SESSION` is incremented on
-every `appendEvent` and `compactEvents` call. `compactEvents` claims the version slot with
-`UPDATE … WHERE event_version = ?` before modifying the event log, so concurrent
-compactions cannot both succeed.
+every `appendEvent` that appends a new event and every successful `applyCompaction` call.
+`applyCompaction` claims the version slot with `UPDATE … WHERE event_version = ?` before
+modifying the event log, so concurrent compactions cannot both succeed.
+
+**Cross-session search** — `findEventsByUserId` is one query that joins `AI_SESSION` and
+`AI_SESSION_EVENT`, filters, sorts by timestamp and applies the page in the database.
 
 **`synthetic` column** — stored as a dedicated `BOOLEAN` column (not only in the metadata
 JSON blob) so `EventFilter.excludeSynthetic()` translates to a SQL predicate instead of

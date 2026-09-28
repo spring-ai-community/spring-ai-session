@@ -19,11 +19,14 @@ package org.springframework.ai.session.jdbc;
 import com.mysql.cj.jdbc.MysqlDataSource;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mysql.MySQLContainer;
 
+import org.springframework.ai.session.SessionRepository;
+import org.springframework.ai.session.test.AbstractSessionRepositoryContractTests;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
@@ -64,18 +67,8 @@ class JdbcSessionRepositoryMysqlIT {
 	}
 
 	@Test
-	void keywordWildcardCharactersMatchLiterally() {
-		DialectScenarios.keywordWildcardCharactersMatchLiterally(this.repository);
-	}
-
-	@Test
 	void timestampsAreStoredAsUtcRegardlessOfJvmTimeZone() {
 		DialectScenarios.timestampsAreStoredAsUtcRegardlessOfJvmTimeZone(this.repository, new JdbcTemplate(dataSource));
-	}
-
-	@Test
-	void concurrentCreatesOfSameIdHaveExactlyOneWinner() throws Exception {
-		DialectScenarios.concurrentCreatesOfSameIdHaveExactlyOneWinner(this.repository);
 	}
 
 	@Test
@@ -85,18 +78,19 @@ class JdbcSessionRepositoryMysqlIT {
 	}
 
 	@Test
-	void deleteExpiredSessionsDeletesOnlyExpiredSessions() {
-		DialectScenarios.deleteExpiredSessionsDeletesOnlyExpiredSessions(this.repository);
-	}
-
-	@Test
 	void repeatedRecursiveSummarizationNeverReordersTheLog() {
 		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
 	}
 
-	@Test
-	void upsertKeepsCreatedAtAndEvents() {
-		DialectScenarios.upsertKeepsCreatedAtAndEvents(this.repository);
+	/** The repository contract, run against MySQL. */
+	@Nested
+	class Contract extends AbstractSessionRepositoryContractTests {
+
+		@Override
+		protected SessionRepository createRepository() {
+			return JdbcSessionRepository.builder().dataSource(dataSource).build();
+		}
+
 	}
 
 }

@@ -81,15 +81,16 @@ When nothing matches: `"No results found."` is returned.
 ## Design notes
 
 - **Read-only.** `CrossSessionRecallTools` has no append/compact/delete capability — it can
-  only call `SessionService.findByUserId(...)` and `SessionService.getEvents(...)`.
-- **Aggregation happens client-side.** Each matching session is queried individually via
-  `SessionService.getEvents(sessionId, filter)`, and the results are merged and sorted by
-  the events' `Instant` timestamps (not their string renderings, which don't always sort
-  chronologically).
-- **No per-session pagination pushdown.** Each session's full matching event set is
-  fetched before pagination is applied to the aggregate — cost scales with a user's total
-  historical event count across all sessions, not just the page size requested. Fine for
-  typical usage; worth keeping in mind for a user with a very large number of long-lived
+  only call `SessionService.findEventsByUserId(...)`.
+- **One query per page.** Each call runs a single `findEventsByUserId(userId, filter)`
+  with the page in the filter. The JDBC repository answers it with one query that joins
+  sessions and events, sorts by timestamp and applies the page in the database; the
+  in-memory repository sorts and windows the union in memory. A custom repository gets
+  the in-memory behaviour from the default method and should override it with a pushed
+  down query.
+- **Pages can be shorter than `pageSize`.** Events without text (e.g. a bare tool call)
+  are dropped *after* paging, so a page may hold fewer results; the next page still starts
+  where this one ended. Worth keeping in mind for a user with a very large number of long-lived
   sessions.
 - **No regex.** Only plain-substring `keywords`/`matchMode` search is exposed, never a
   raw regex string a model could supply; see the

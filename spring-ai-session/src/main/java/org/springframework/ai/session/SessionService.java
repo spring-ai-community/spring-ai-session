@@ -94,6 +94,14 @@ public interface SessionService {
 	}
 
 	/**
+	 * Returns the matching events of <em>every</em> session of the user, ordered by
+	 * timestamp across sessions, with the filter's window (last-N or page) applied to that
+	 * combined order. Backed by {@link SessionRepository#findEventsByUserId}, which stores
+	 * push down to one sorted, paged query.
+	 */
+	List<SessionEvent> findEventsByUserId(String userId, EventFilter filter);
+
+	/**
 	 * Convenience: returns the messages of <em>all</em> events as a flat {@link Message}
 	 * list, including events archived by compaction and any synthetic summaries. This is
 	 * the full recorded history, not a prompt: after compaction it contains both the

@@ -22,11 +22,13 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -35,23 +37,18 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import tools.jackson.core.JacksonException;
-import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
+import org.springframework.ai.session.compaction.CompactionPlan;
+import org.springframework.ai.session.support.SessionEventCodec;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -131,9 +128,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 		"SELECT id, user_id, created_at, expires_at, metadata, event_version"
 		+ " FROM AI_SESSION WHERE user_id = ? ORDER BY created_at, id";
 
-	private static final String SELECT_EXPIRED_SESSION_IDS =
-		"SELECT id FROM AI_SESSION WHERE expires_at IS NOT NULL AND expires_at < ?";
-
 	// Checks the expiry in the DELETE itself, so a concurrently extended TTL is respected.
 	// Events are removed by the ON DELETE CASCADE foreign key.
 	private static final String DELETE_EXPIRED_SESSIONS =
@@ -171,11 +165,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private static final String SELECT_EVENT_SESSION_ID =
 		"SELECT session_id FROM AI_SESSION_EVENT WHERE id = ?";
 
-	// The active events in log order; compaction uses them to find dropped events and
-	// where new events go.
-	private static final String SELECT_ACTIVE_EVENT_IDS =
-		"SELECT id, seq FROM AI_SESSION_EVENT WHERE session_id = ? AND archived = false ORDER BY seq";
-
 	private static final String SELECT_EVENT_SEQ =
 		"SELECT seq FROM AI_SESSION_EVENT WHERE id = ? AND session_id = ?";
 
@@ -186,11 +175,22 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private static final String DELETE_EVENTS_FROM_SEQ =
 		"DELETE FROM AI_SESSION_EVENT WHERE session_id = ? AND seq >= ?";
 
-	private static final String SELECT_EVENTS_BASE =
+	private static final String SELECT_EVENT_COLUMNS =
 		"SELECT e.id, e.session_id, e.timestamp, e.message_type, e.message_content,"
-		+ "       e.message_data, e.synthetic, e.archived, e.metadata"
+		+ "       e.message_data, e.synthetic, e.archived, e.metadata";
+
+	private static final String SELECT_EVENTS_BASE =
+		SELECT_EVENT_COLUMNS
 		+ " FROM AI_SESSION_EVENT e"
 		+ " WHERE e.session_id = ? ";
+
+	// Cross-session reads: one query over every session of a user, joined on the session
+	// row so the store sorts and pages the union.
+	private static final String SELECT_EVENTS_BY_USER_BASE =
+		SELECT_EVENT_COLUMNS
+		+ " FROM AI_SESSION_EVENT e"
+		+ " JOIN AI_SESSION s ON s.id = e.session_id"
+		+ " WHERE s.user_id = ? ";
 
 	// @formatter:on
 
@@ -200,14 +200,14 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 	private final JdbcSessionRepositoryDialect dialect;
 
-	private final JsonMapper jsonMapper;
+	private final SessionEventCodec codec;
 
 	private JdbcSessionRepository(JdbcTemplate jdbcTemplate, JdbcSessionRepositoryDialect dialect,
-			PlatformTransactionManager txManager, JsonMapper jsonMapper) {
+			PlatformTransactionManager txManager, SessionEventCodec codec) {
 		this.jdbcTemplate = jdbcTemplate;
 		this.dialect = dialect;
 		this.transactionTemplate = new TransactionTemplate(txManager);
-		this.jsonMapper = jsonMapper;
+		this.codec = codec;
 	}
 
 	// -------------------------------------------------------------------------
@@ -218,7 +218,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 	public Session save(Session session) {
 		Assert.notNull(session, "session must not be null");
 		this.jdbcTemplate.update(this.dialect.getUpsertSessionSql(), session.id(), session.userId(),
-				toUtc(session.createdAt()), toUtc(session.expiresAt()), toJson(session.metadata()));
+				toUtc(session.createdAt()), toUtc(session.expiresAt()), this.codec.toJson(session.metadata()));
 		// Re-read: an update keeps the stored created_at, so the input is not what was
 		// saved.
 		return Objects.requireNonNull(findById(session.id()), () -> "Session vanished after save: " + session.id());
@@ -230,7 +230,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 		try {
 			return this.jdbcTemplate.update(this.dialect.getInsertSessionIfAbsentSql(), session.id(),
 					session.userId(), toUtc(session.createdAt()), toUtc(session.expiresAt()),
-					toJson(session.metadata())) == 1;
+					this.codec.toJson(session.metadata())) == 1;
 		}
 		catch (DuplicateKeyException ex) {
 			return false;
@@ -248,12 +248,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 	public List<Session> findByUserId(String userId) {
 		Assert.hasText(userId, "userId must not be null or empty");
 		return this.jdbcTemplate.query(SELECT_SESSIONS_BY_USER, new SessionRowMapper(), userId);
-	}
-
-	@Override
-	public List<String> findExpiredSessionIds(Instant before) {
-		Assert.notNull(before, "before must not be null");
-		return this.jdbcTemplate.queryForList(SELECT_EXPIRED_SESSION_IDS, String.class, toUtc(before));
 	}
 
 	@Override
@@ -328,11 +322,9 @@ public final class JdbcSessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public boolean compactEvents(String sessionId, List<SessionEvent> archivedEvents,
-			List<SessionEvent> retainedEvents, long expectedVersion) {
+	public boolean applyCompaction(String sessionId, CompactionPlan plan, long expectedVersion) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
-		Assert.notNull(archivedEvents, "archivedEvents must not be null");
-		Assert.notNull(retainedEvents, "retainedEvents must not be null");
+		Assert.notNull(plan, "plan must not be null");
 		requireSessionExists(sessionId);
 		Boolean success = this.transactionTemplate.execute(status -> {
 			// Atomically claim the version slot. If another writer already changed it,
@@ -341,88 +333,83 @@ public final class JdbcSessionRepository implements SessionRepository {
 			if (updated == 0) {
 				return false;
 			}
-			// Archive newly compacted events in place: compaction never moves an event,
-			// so the logical order defined by the seq column is preserved.
-			if (!archivedEvents.isEmpty()) {
-				int[][] counts = this.jdbcTemplate.batchUpdate(ARCHIVE_EVENT_BY_ID, archivedEvents,
-						archivedEvents.size(), (ps, event) -> {
-							ps.setString(1, event.getId());
-							ps.setString(2, sessionId);
-						});
-				// Every archived event must already exist in this session's log; otherwise
-				// it would silently be lost. Negative counts
-				// (Statement.SUCCESS_NO_INFO) are driver-specific and treated as success.
-				for (int[] batch : counts) {
-					for (int count : batch) {
-						if (count == 0) {
-							throw new IllegalArgumentException(
-									"archivedEvents contains an event that is not in the log of session " + sessionId);
-						}
-					}
-				}
-			}
-
-			applyRetainedEvents(sessionId, retainedEvents);
+			archiveInPlace(sessionId, plan.archiveIds());
+			deleteEvents(sessionId, plan.deleteIds());
+			insertEvents(sessionId, plan.inserts());
 			return true;
 		});
 		return Boolean.TRUE.equals(success);
 	}
 
 	/**
-	 * Applies the retained events of a compaction without reordering existing events.
-	 * Active events in neither list were dropped by the strategy (e.g. a superseded
-	 * summary) and are deleted. New events are inserted immediately before the next
-	 * existing event that follows them in {@code retainedEvents}: because {@code seq} is
-	 * assigned on insert, the log is re-inserted from the first such event onward, so only
-	 * that tail (typically the kept window) is rewritten. When no event is new, as with
-	 * every strategy except summarization, no row is re-inserted at all.
+	 * Flags the events archived in place: compaction never moves an event, so the logical
+	 * order defined by the {@code seq} column is preserved. Every id must be in this
+	 * session's log, otherwise the whole transaction is rolled back.
 	 */
-	private void applyRetainedEvents(String sessionId, List<SessionEvent> retainedEvents) {
-		Map<String, Long> activeSeqs = new HashMap<>();
-		this.jdbcTemplate.query(SELECT_ACTIVE_EVENT_IDS,
-				(RowCallbackHandler) rs -> activeSeqs.put(rs.getString("id"), rs.getLong("seq")), sessionId);
-		Set<String> retainedIds = retainedEvents.stream().map(SessionEvent::getId).collect(Collectors.toSet());
-
-		List<String> dropped = activeSeqs.keySet().stream().filter(id -> !retainedIds.contains(id)).toList();
-		if (!dropped.isEmpty()) {
-			this.jdbcTemplate.batchUpdate(DELETE_EVENT_BY_ID, dropped, dropped.size(), (ps, id) -> {
-				ps.setString(1, id);
-				ps.setString(2, sessionId);
-			});
+	private void archiveInPlace(String sessionId, Set<String> archiveIds) {
+		if (archiveIds.isEmpty()) {
+			return;
 		}
-
-		// A retained event that is not active may still exist in the log (archived); it
-		// then stays where it is, like any existing event. Only the others are new.
-		Map<String, Long> existingSeqs = new HashMap<>(activeSeqs);
-		for (SessionEvent event : retainedEvents) {
-			if (!existingSeqs.containsKey(event.getId())) {
-				this.jdbcTemplate.query(SELECT_EVENT_SEQ, (RowCallbackHandler) rs -> existingSeqs.put(event.getId(),
-						rs.getLong("seq")), event.getId(), sessionId);
+		List<String> ids = List.copyOf(archiveIds);
+		int[][] counts = this.jdbcTemplate.batchUpdate(ARCHIVE_EVENT_BY_ID, ids, ids.size(), (ps, id) -> {
+			ps.setString(1, id);
+			ps.setString(2, sessionId);
+		});
+		// Negative counts (Statement.SUCCESS_NO_INFO) are driver-specific and treated as
+		// success.
+		for (int[] batch : counts) {
+			for (int count : batch) {
+				if (count == 0) {
+					throw new IllegalArgumentException(
+							"archiveIds contains an event that is not in the log of session " + sessionId);
+				}
 			}
 		}
+	}
 
-		// Group the new events by the existing event they must precede
+	private void deleteEvents(String sessionId, Set<String> deleteIds) {
+		if (deleteIds.isEmpty()) {
+			return;
+		}
+		List<String> ids = List.copyOf(deleteIds);
+		this.jdbcTemplate.batchUpdate(DELETE_EVENT_BY_ID, ids, ids.size(), (ps, id) -> {
+			ps.setString(1, id);
+			ps.setString(2, sessionId);
+		});
+	}
+
+	/**
+	 * Inserts each group immediately before its anchor event. Because {@code seq} is
+	 * assigned on insert, the log is re-inserted from the smallest anchor onward, so only
+	 * that tail (typically the kept window) is rewritten; groups without an anchor are
+	 * appended. When nothing is inserted, as with every strategy except summarization, no
+	 * row is re-inserted at all.
+	 */
+	private void insertEvents(String sessionId, List<CompactionPlan.Insert> inserts) {
+		if (inserts.isEmpty()) {
+			return;
+		}
 		Map<String, List<SessionEvent>> insertBefore = new HashMap<>();
-		List<SessionEvent> pending = new ArrayList<>();
-		for (SessionEvent event : retainedEvents) {
-			if (existingSeqs.containsKey(event.getId())) {
-				if (!pending.isEmpty()) {
-					insertBefore.computeIfAbsent(event.getId(), id -> new ArrayList<>()).addAll(pending);
-					pending.clear();
-				}
+		List<SessionEvent> append = new ArrayList<>();
+		Map<String, Long> anchorSeqs = new HashMap<>();
+		for (CompactionPlan.Insert insert : inserts) {
+			String anchor = insert.beforeEventId();
+			if (anchor == null) {
+				append.addAll(insert.events());
+				continue;
 			}
-			else {
-				if (!sessionId.equals(event.getSessionId())) {
-					throw new IllegalArgumentException("retainedEvents contains a new event of session '"
-							+ event.getSessionId() + "', not of session " + sessionId);
-				}
-				pending.add(event);
+			List<Long> seq = this.jdbcTemplate.queryForList(SELECT_EVENT_SEQ, Long.class, anchor, sessionId);
+			if (seq.isEmpty()) {
+				throw new IllegalArgumentException(
+						"inserts refers to an anchor event that is not in the log of session " + sessionId);
 			}
+			anchorSeqs.put(anchor, seq.get(0));
+			insertBefore.computeIfAbsent(anchor, id -> new ArrayList<>()).addAll(insert.events());
 		}
 
 		List<SessionEvent> toInsert = new ArrayList<>();
-		if (!insertBefore.isEmpty()) {
-			long fromSeq = insertBefore.keySet().stream().mapToLong(existingSeqs::get).min().orElseThrow();
+		if (!anchorSeqs.isEmpty()) {
+			long fromSeq = anchorSeqs.values().stream().mapToLong(Long::longValue).min().orElseThrow();
 			List<SessionEvent> tail = this.jdbcTemplate.query(SELECT_EVENTS_BASE + "AND e.seq >= ? ORDER BY e.seq ASC",
 					new SessionEventRowMapper(), sessionId, fromSeq);
 			this.jdbcTemplate.update(DELETE_EVENTS_FROM_SEQ, sessionId, fromSeq);
@@ -431,10 +418,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 				toInsert.add(event);
 			}
 		}
-		toInsert.addAll(pending);
-		if (!toInsert.isEmpty()) {
-			batchInsertEvents(toInsert);
-		}
+		toInsert.addAll(append);
+		batchInsertEvents(toInsert);
 	}
 
 	@Override
@@ -448,21 +433,66 @@ public final class JdbcSessionRepository implements SessionRepository {
 	public List<SessionEvent> findEvents(String sessionId, EventFilter filter) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(filter, "filter must not be null");
+		return query(SELECT_EVENTS_BASE, sessionId, filter, "e.seq");
+	}
 
-		// A java.util.regex.Pattern cannot be safely translated to portable SQL — H2,
-		// MySQL, and PostgreSQL each have their own regex dialect, none of which is a
-		// strict superset of Java's regex syntax (backreferences, lookaround, named
-		// groups). When `pattern` is set, every other criterion is still pushed down to
-		// SQL as usual, but LIMIT/OFFSET is deferred: the pattern (and, redundantly but
-		// harmlessly, every other criterion) is re-checked in Java via EventFilter.matches
-		// against the full SQL-filtered result, then lastN/page/pageSize is applied
-		// in-memory — mirroring how InMemorySessionRepository filters and paginates.
-		boolean patternRequiresInMemoryFiltering = filter.pattern() != null;
+	@Override
+	public List<SessionEvent> findEventsByUserId(String userId, EventFilter filter) {
+		Assert.hasText(userId, "userId must not be null or empty");
+		Assert.notNull(filter, "filter must not be null");
+		// Across sessions the log order is the timestamp; seq only breaks ties.
+		return query(SELECT_EVENTS_BY_USER_BASE, userId, filter, "e.timestamp, e.seq");
+	}
 
-		StringBuilder sql = new StringBuilder(SELECT_EVENTS_BASE);
+	/**
+	 * Runs an event query: every criterion the database can evaluate is pushed down as a
+	 * {@code WHERE} clause, and the window ({@code lastN} or a page) as {@code LIMIT} /
+	 * {@code OFFSET}. A {@link EventFilter#pattern()} is the exception: a
+	 * {@link java.util.regex.Pattern} cannot be safely translated to portable SQL (H2,
+	 * MySQL and PostgreSQL each have their own regex dialect, none a strict superset of
+	 * Java's), so with a pattern the window is deferred and the SQL-filtered result is
+	 * finished with {@link EventFilter#apply(List)} in memory.
+	 * @param base the {@code SELECT … WHERE <scope> = ? } prefix
+	 * @param scope the value of the scope column (session id or user id)
+	 * @param order the {@code ORDER BY} columns, ascending; reversed for {@code lastN}
+	 */
+	private List<SessionEvent> query(String base, String scope, EventFilter filter, String order) {
+		boolean inMemoryWindow = filter.pattern() != null;
+		StringBuilder sql = new StringBuilder(base);
 		List<Object> params = new ArrayList<>();
-		params.add(sessionId);
+		params.add(scope);
+		appendCriteria(sql, params, filter);
 
+		if (inMemoryWindow) {
+			sql.append("ORDER BY ").append(order).append(" ");
+		}
+		else if (filter.lastN() != null) {
+			sql.append("ORDER BY ").append(descending(order)).append(" LIMIT ? ");
+			params.add(filter.lastN());
+		}
+		else if (filter.pageSize() != null) {
+			int page = filter.page() != null ? filter.page() : 0;
+			sql.append("ORDER BY ").append(order).append(" LIMIT ? OFFSET ? ");
+			params.add(filter.pageSize());
+			params.add((long) page * filter.pageSize());
+		}
+		else {
+			sql.append("ORDER BY ").append(order).append(" ");
+		}
+
+		List<SessionEvent> result = this.jdbcTemplate.query(sql.toString(), new SessionEventRowMapper(),
+				params.toArray());
+		if (inMemoryWindow) {
+			return filter.apply(result);
+		}
+		if (filter.lastN() != null) {
+			result = new ArrayList<>(result);
+			Collections.reverse(result);
+		}
+		return Collections.unmodifiableList(result);
+	}
+
+	private void appendCriteria(StringBuilder sql, List<Object> params, EventFilter filter) {
 		if (filter.from() != null) {
 			sql.append("AND e.timestamp >= ? ");
 			params.add(toUtc(filter.from()));
@@ -502,64 +532,11 @@ public final class JdbcSessionRepository implements SessionRepository {
 			}
 			sql.append(") ");
 		}
-
-		if (patternRequiresInMemoryFiltering) {
-			sql.append("ORDER BY e.seq ASC ");
-		}
-		else if (filter.lastN() != null) {
-			sql.append("ORDER BY e.seq DESC LIMIT ? ");
-			params.add(filter.lastN());
-		}
-		else if (filter.pageSize() != null) {
-			int page = filter.page() != null ? filter.page() : 0;
-			sql.append("ORDER BY e.seq ASC LIMIT ? OFFSET ? ");
-			params.add(filter.pageSize());
-			params.add((long) page * filter.pageSize());
-		}
-		else {
-			sql.append("ORDER BY e.seq ASC ");
-		}
-
-		List<SessionEvent> result = this.jdbcTemplate.query(sql.toString(), new SessionEventRowMapper(),
-				params.toArray());
-
-		if (patternRequiresInMemoryFiltering) {
-			result = result.stream().filter(filter::matches).collect(Collectors.toCollection(ArrayList::new));
-			result = applyInMemoryPagination(result, filter);
-		}
-		else if (filter.lastN() != null) {
-			result = new ArrayList<>(result);
-			Collections.reverse(result);
-		}
-
-		return Collections.unmodifiableList(result);
 	}
 
-	/**
-	 * Applies {@code lastN} / {@code page}+{@code pageSize} slicing to an already
-	 * fully-filtered, seq-ascending event list. Only used on the {@code pattern}
-	 * in-memory-filtering path above, where SQL-level LIMIT/OFFSET can't be used because
-	 * the pattern criterion is only evaluated after the query runs. Mirrors
-	 * InMemorySessionRepository's pagination so both backends behave identically.
-	 */
-	private static List<SessionEvent> applyInMemoryPagination(List<SessionEvent> matched, EventFilter filter) {
-		if (filter.lastN() != null) {
-			if (matched.size() > filter.lastN()) {
-				return new ArrayList<>(matched.subList(matched.size() - filter.lastN(), matched.size()));
-			}
-			return matched;
-		}
-		if (filter.pageSize() != null) {
-			int page = filter.page() != null ? filter.page() : 0;
-			long fromIndexLong = (long) page * filter.pageSize();
-			if (fromIndexLong >= matched.size()) {
-				return new ArrayList<>();
-			}
-			int fromIndex = (int) fromIndexLong;
-			int toIndex = (int) Math.min(fromIndexLong + filter.pageSize(), matched.size());
-			return new ArrayList<>(matched.subList(fromIndex, toIndex));
-		}
-		return matched;
+	/** Turns {@code "a, b"} into {@code "a DESC, b DESC"}. */
+	private static String descending(String order) {
+		return Arrays.stream(order.split(",")).map(column -> column.trim() + " DESC").collect(Collectors.joining(", "));
 	}
 
 	// -------------------------------------------------------------------------
@@ -577,27 +554,30 @@ public final class JdbcSessionRepository implements SessionRepository {
 	}
 
 	private void insertEvent(SessionEvent event) {
-		Message msg = event.getMessage();
+		SessionEventCodec.EncodedMessage msg = this.codec.encode(event.getMessage());
 		this.jdbcTemplate.update(INSERT_EVENT, event.getId(), event.getSessionId(), toUtc(event.getTimestamp()),
-				msg.getMessageType().name(), msg.getText(), messageDataToJson(msg), event.isSynthetic(),
-				event.isArchived(), toJson(event.getMetadata()));
+				msg.type().name(), msg.text(), msg.data(), event.isSynthetic(), event.isArchived(),
+				this.codec.toJson(event.getMetadata()));
 	}
 
 	/**
 	 * Inserts the supplied events using a JDBC batch operation.
 	 */
 	private void batchInsertEvents(List<SessionEvent> events) {
+		if (events.isEmpty()) {
+			return;
+		}
 		this.jdbcTemplate.batchUpdate(INSERT_EVENT, events, events.size(), (ps, event) -> {
-			Message msg = event.getMessage();
+			SessionEventCodec.EncodedMessage msg = this.codec.encode(event.getMessage());
 			ps.setString(1, event.getId());
 			ps.setString(2, event.getSessionId());
 			ps.setObject(3, toUtc(event.getTimestamp()));
-			ps.setString(4, msg.getMessageType().name());
-			ps.setString(5, msg.getText());
-			ps.setString(6, messageDataToJson(msg));
+			ps.setString(4, msg.type().name());
+			ps.setString(5, msg.text());
+			ps.setString(6, msg.data());
 			ps.setBoolean(7, event.isSynthetic());
 			ps.setBoolean(8, event.isArchived());
-			ps.setString(9, toJson(event.getMetadata()));
+			ps.setString(9, this.codec.toJson(event.getMetadata()));
 		});
 	}
 
@@ -623,93 +603,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 		return value != null ? value.toInstant(ZoneOffset.UTC) : null;
 	}
 
-	@Nullable private String toJson(@Nullable Object value) {
-		if (value == null) {
-			return null;
-		}
-		try {
-			return this.jsonMapper.writeValueAsString(value);
-		}
-		catch (JacksonException ex) {
-			throw new IllegalStateException("Failed to serialize value to JSON", ex);
-		}
-	}
-
-	private Map<String, Object> fromJsonMap(@Nullable String json) {
-		if (json == null || json.isBlank()) {
-			return Map.of();
-		}
-		try {
-			return this.jsonMapper.readValue(json, new TypeReference<Map<String, Object>>() {
-			});
-		}
-		catch (JacksonException ex) {
-			logger.warn("Failed to deserialize metadata JSON; returning empty map", ex);
-			return new HashMap<>();
-		}
-	}
-
-	/**
-	 * Serializes type-specific {@link Message} payload to JSON:
-	 * <ul>
-	 * <li>{@link AssistantMessage} with tool calls → JSON array of tool calls</li>
-	 * <li>{@link ToolResponseMessage} → JSON array of tool responses</li>
-	 * <li>All other types → {@code null}</li>
-	 * </ul>
-	 */
-	@Nullable private String messageDataToJson(Message message) {
-		if (message instanceof AssistantMessage am && am.hasToolCalls()) {
-			return toJson(am.getToolCalls());
-		}
-		if (message instanceof ToolResponseMessage trm) {
-			return toJson(trm.getResponses());
-		}
-		return null;
-	}
-
-	private Message toMessage(MessageType type, @Nullable String content, @Nullable String messageData) {
-		return switch (type) {
-			case USER -> new UserMessage(content != null ? content : "");
-			case SYSTEM -> new SystemMessage(content != null ? content : "");
-			case ASSISTANT -> {
-				if (messageData != null && !messageData.isBlank()) {
-					List<AssistantMessage.ToolCall> toolCalls = parseToolCalls(messageData);
-					yield AssistantMessage.builder().content(content).toolCalls(toolCalls).build();
-				}
-				yield new AssistantMessage(content != null ? content : "");
-			}
-			case TOOL -> {
-				if (messageData != null && !messageData.isBlank()) {
-					List<ToolResponseMessage.ToolResponse> responses = parseToolResponses(messageData);
-					yield ToolResponseMessage.builder().responses(responses).build();
-				}
-				yield ToolResponseMessage.builder().responses(List.of()).build();
-			}
-		};
-	}
-
-	private List<AssistantMessage.ToolCall> parseToolCalls(String json) {
-		try {
-			return this.jsonMapper.readValue(json, new TypeReference<List<AssistantMessage.ToolCall>>() {
-			});
-		}
-		catch (JacksonException ex) {
-			logger.warn("Failed to deserialize tool calls from JSON; returning empty list", ex);
-			return List.of();
-		}
-	}
-
-	private List<ToolResponseMessage.ToolResponse> parseToolResponses(String json) {
-		try {
-			return this.jsonMapper.readValue(json, new TypeReference<List<ToolResponseMessage.ToolResponse>>() {
-			});
-		}
-		catch (JacksonException ex) {
-			logger.warn("Failed to deserialize tool responses from JSON; returning empty list", ex);
-			return List.of();
-		}
-	}
-
 	/** Returns a new {@link Builder}. */
 	public static Builder builder() {
 		return new Builder();
@@ -728,7 +621,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 				.id(rs.getString("id"))
 				.userId(rs.getString("user_id"))
 				.createdAt(Objects.requireNonNull(fromUtc(rs, "created_at")))
-				.metadata(fromJsonMap(rs.getString("metadata")));
+				.metadata(JdbcSessionRepository.this.codec.fromJsonMap(rs.getString("metadata")));
 			if (expiresAt != null) {
 				builder.expiresAt(expiresAt);
 			}
@@ -742,11 +635,13 @@ public final class JdbcSessionRepository implements SessionRepository {
 		@Override
 		public SessionEvent mapRow(ResultSet rs, int rowNum) throws SQLException {
 			MessageType messageType = MessageType.valueOf(rs.getString("message_type"));
-			Message message = toMessage(messageType, rs.getString("message_content"), rs.getString("message_data"));
+			Message message = JdbcSessionRepository.this.codec.decode(new SessionEventCodec.EncodedMessage(messageType,
+					rs.getString("message_content"), rs.getString("message_data")));
 
 			// Merge the dedicated synthetic column back into the metadata map so that
 			// SessionEvent.isSynthetic() returns the correct value.
-			Map<String, Object> metadata = new HashMap<>(fromJsonMap(rs.getString("metadata")));
+			Map<String, Object> metadata = new HashMap<>(
+					JdbcSessionRepository.this.codec.fromJsonMap(rs.getString("metadata")));
 			if (rs.getBoolean("synthetic")) {
 				metadata.put(SessionEvent.METADATA_SYNTHETIC, true);
 			}
@@ -833,7 +728,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 					: JdbcSessionRepositoryDialect.from(ds);
 			PlatformTransactionManager txm = this.transactionManager != null ? this.transactionManager
 					: new DataSourceTransactionManager(ds);
-			return new JdbcSessionRepository(jt, d, txm, this.jsonMapper);
+			return new JdbcSessionRepository(jt, d, txm, new SessionEventCodec(this.jsonMapper));
 		}
 
 		private DataSource resolveDataSource() {

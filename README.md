@@ -25,6 +25,7 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
 | **Session JDBC Starter** | `spring-ai-starter-session-jdbc` | Spring Boot starter — pulls in the JDBC repository, auto-configurations, and `spring-boot-starter-jdbc` |
+| **Session Test** | `spring-ai-session-test` | `AbstractSessionRepositoryContractTests`: the repository contract tests, for custom backends |
 | **Session BOM** | `spring-ai-session-bom` | Bill of Materials for managing all module versions together |
 
 ## Quick Start

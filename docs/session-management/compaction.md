@@ -40,7 +40,7 @@ service.compact(sessionId, req -> true, SlidingWindowCompactionStrategy.builder(
 - **Concurrent writes are safe.** The write is version-checked: if another writer changed
   the log during the pass, compaction is silently skipped, and a no-op result skips the
   write entirely. See the [compaction pass sequence](compaction-internals.md#2-sequence-a-compaction-pass-end-to-end)
-  and the [JDBC concurrency diagram](compaction-internals.md#5-sequence-jdbc-compactevents-and-a-concurrent-append).
+  and the [JDBC concurrency diagram](compaction-internals.md#5-sequence-jdbc-applycompaction-and-a-concurrent-append).
 - **Stored system messages are configuration.** If you store them (opt-in), the latest one
   is always kept where it was stored, never summarized and not counted against `maxEvents` /
   `maxTurns` / `maxEventsToKeep`; earlier ones are archived on every pass. See
