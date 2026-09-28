@@ -43,7 +43,7 @@ service.compact(sessionId, req -> true, SlidingWindowCompactionStrategy.builder(
 - **Concurrent writes are safe.** The write is version-checked: if another writer changed
   the log during the pass, compaction is silently skipped, and a no-op result skips the
   write entirely. See the [compaction pass sequence](compaction-internals.md#2-sequence-a-compaction-pass-end-to-end)
-  and the [JDBC concurrency diagram](compaction-internals.md#5-sequence-jdbc-applycompaction-and-a-concurrent-append).
+  and the [JDBC concurrency diagram](compaction-internals.md#6-sequence-jdbc-applycompaction-and-a-concurrent-append).
 - **Stored system messages are configuration.** If you store them (opt-in), the latest one
   is always kept where it was stored, never summarized and not counted against `maxEvents` /
   `maxTurns` / `maxEventsToKeep`; earlier ones are archived on every pass. See
@@ -202,7 +202,7 @@ The preserved events that are sent with the conversation take their tokens off
 remainingBudget = maxTokens − tokens(kept system message + synthetic summary events)
 ```
 
-[Worked example 6](compaction-internals.md#6-worked-examples-of-the-tricky-cases) walks
+[Worked example 6](compaction-internals.md#7-worked-examples-of-the-tricky-cases) walks
 through a budget with a stored system prompt.
 
 If the deducted events use up the whole budget (`remainingBudget ≤ 0`), for example a

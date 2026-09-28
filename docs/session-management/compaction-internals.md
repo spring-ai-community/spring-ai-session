@@ -1,8 +1,8 @@
 # Compaction Internals
 
 This page explains **how** compaction works: the CAS write, turn snapping, recursive
-summarization, stored system messages and concurrent JDBC appends, with diagrams and
-worked examples. For **using** compaction, see [Context Compaction](compaction.md).
+summarization, stored system messages, the `CompactionPlan` the repository applies and
+concurrent JDBC appends, with diagrams and worked examples. For **using** compaction, see [Context Compaction](compaction.md).
 
 One word is used precisely throughout: an event is **archived** when compaction flags it
 and it stays in the log (searchable through Recall Storage). Compaction never deletes an
@@ -95,10 +95,8 @@ classDiagram
   `archivedEvents` are the events to archive: they stay in the log and remain searchable
   through Recall Storage. Every active event not in `compactedEvents` is archived, whether
   or not the strategy listed it.
-- **The service turns the result into a `CompactionPlan`.** `CompactionPlan.of(sessionId,
-  activeEvents, result)` computes the ids to archive and the new events to insert, each
-  group keyed by the existing event it goes in front of (`null` to append). The repository applies the plan without interpreting the result;
-  `CompactionPlan.applyTo(log)` is the reference merge for a log held as a list.
+- **The service turns the result into a `CompactionPlan`.** The repository applies the
+  plan without interpreting the result. §5 explains how the plan is derived and applied.
 
 ### 1b. Triggers
 
@@ -371,7 +369,94 @@ that alternation valid; a lone assistant summary would not.
 
 ---
 
-## 5. Sequence: JDBC `applyCompaction` and a concurrent append
+## 5. CompactionPlan: from result to write
+
+A strategy answers one question: what should the active window look like now? A
+repository needs a different one: which rows do I touch? `CompactionPlan` is the
+translation between the two. `DefaultSessionService` derives it from the active log the
+strategy saw and the strategy's result, and passes it to `applyCompaction` (§2, step 3).
+The plan has two parts:
+
+- `archiveIds`: the existing events to flag archived, in place;
+- `inserts`: groups of new events, each with the id of the existing event it goes in
+  front of (`Insert.before`), or with no anchor when it goes at the end (`Insert.atEnd`).
+
+Nothing else is expressible: an existing event can only stay or be archived, never move or
+disappear.
+
+### 5a. Deriving the plan: `CompactionPlan.of(sessionId, activeEvents, result)`
+
+```mermaid
+flowchart LR
+    subgraph existing["1. Every active event"]
+        direction TB
+        e1{"in the result's<br/>compactedEvents?"}
+        e1 -- yes --> e2["untouched"]
+        e1 -- no --> e3["archiveIds"]
+    end
+    subgraph fresh["2. Every run of result events<br/>that are not in the active log"]
+        direction TB
+        n1{"does an existing event<br/>follow the run in the result?"}
+        n1 -- yes --> n2["Insert.before(that event)"]
+        n1 -- no --> n3["Insert.atEnd"]
+    end
+    existing ~~~ fresh
+```
+
+- **Archive everything the result does not keep.** This includes what the strategy listed
+  in `archivedEvents` and anything else it left out, such as the summary a recursive pass
+  replaces. The two are the same set for the built-in strategies; the rule just does not
+  depend on it.
+- **New events are anchored on what follows them.** Compaction never reorders the log, and
+  since #56 the log order is the prompt order, so a new summary turn has to be *placed*,
+  not appended. The result already says where: the first existing event after it. A run of
+  new events at the very end of the result has nothing to anchor on and is appended.
+- **New events must belong to the session.** A result that contains an event of another
+  session is rejected with `IllegalArgumentException` before anything is written.
+
+### 5b. Applying the plan: `CompactionPlan.applyTo(log)`
+
+The reference implementation walks the log once. `InMemorySessionRepository` calls it
+directly; `JdbcSessionRepository` implements the same rules in SQL (§6).
+
+```mermaid
+flowchart TD
+    v["validate: every archive id and every anchor id is in the log,<br/>otherwise IllegalArgumentException and nothing changes"]
+    v --> each([for each event in the log, oldest first])
+    each --> g{"an insert group is<br/>anchored on this event?"}
+    g -- yes --> emit["emit the group's events"] --> a
+    g -- no --> a{"id in archiveIds?"}
+    a -- yes --> flag["emit event.asArchived()"] --> more
+    a -- no --> keep["emit the event unchanged"] --> more
+    more{"more events?"} -- yes --> each
+    more -- no --> tail["emit the anchor-less groups"]
+```
+
+### 5c. Worked example
+
+A recursive pass with `maxEventsToKeep = 2` on a log that already holds a summary
+(`Σold`) from an earlier pass, in front of the turns that were appended after it. `*`
+marks the archived flag.
+
+```
+active log      Σold  U1  A1  U2  A2  U3  A3
+result          compactedEvents = [Σnew U3 A3]    archivedEvents = [Σold U1 A1 U2 A2]
+
+plan            archiveIds = {Σold U1 A1 U2 A2}   active, not in compactedEvents
+                inserts    = [Σnew before U3]     new, followed by the existing U3
+
+applyTo         Σold* U1* A1* U2* A2* Σnew U3 A3
+active view                          Σnew U3 A3
+```
+
+Every existing event keeps its position. `Σold` stays where it was, flagged, so the log
+still shows what the model was told before this pass and Recall Storage can still find it.
+The new turn lands in front of `U3` because that is where the prompt needs it; an
+append-only write would have put the summary *after* the events it summarizes.
+
+---
+
+## 6. Sequence: JDBC `applyCompaction` and a concurrent append
 
 On JDBC the CAS is a row-level lock on the session row. Both writers take that lock
 *before* touching events. An append must also lock the row before it inserts; otherwise
@@ -422,12 +507,11 @@ sequenceDiagram
 
 **In-memory equivalent:** `InMemorySessionRepository` does the same inside a single
 `ConcurrentHashMap.compute`. It checks the version, calls `CompactionPlan.applyTo(log)`
-(which flags the archive ids in place, inserts each group before its anchor and appends
-the anchor-less group), and bumps the version.
+(§5b), and bumps the version.
 
 ---
 
-## 6. Worked examples of the tricky cases
+## 7. Worked examples of the tricky cases
 
 Each example gives the active events before compaction and the resulting
 `compactedEvents` / `archivedEvents`. `S:` is a stored system message, `U`/`A` are user
@@ -459,7 +543,7 @@ and assistant messages, and `Σ` is the synthetic summary turn.
    would fit in 45.
 7. The LLM receives `Σold`'s text as the prior summary plus `U1 A1 U2 A2` (and the overlap
    `U3`). `Σold` is archived in place like the turns it summarized; its content lives on
-   in `Σnew`.
+   in `Σnew`. §5c shows the same case as a plan.
 
 ---
 

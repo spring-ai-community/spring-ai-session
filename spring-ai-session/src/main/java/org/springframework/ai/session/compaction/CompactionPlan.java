@@ -45,13 +45,13 @@ import org.springframework.util.Assert;
  * ({@code Σold}) and folds two more turns into the new one ({@code Σnew}):
  *
  * <pre>
- * active log:      U1 A1 U2 A2 Σold U3 A3
- * strategy result: compactedEvents = [Σnew U3 A3]      archivedEvents = [U1 A1 U2 A2]
+ * active log:      Σold U1 A1 U2 A2 U3 A3
+ * strategy result: compactedEvents = [Σnew U3 A3]      archivedEvents = [Σold U1 A1 U2 A2]
  *
- * plan:            archiveIds = {U1 A1 U2 A2 Σold}   every active event the result does not keep
+ * plan:            archiveIds = {Σold U1 A1 U2 A2}   every active event the result does not keep
  *                  inserts    = [Σnew before U3]      in the result, but not in the active log
  *
- * applyTo:         U1* A1* U2* A2* Σold* Σnew U3 A3   (* = flagged archived)
+ * applyTo:         Σold* U1* A1* U2* A2* Σnew U3 A3   (* = flagged archived)
  * </pre>
  *
  * {@link #applyTo(List)} is the reference implementation of those rules for a log held as
