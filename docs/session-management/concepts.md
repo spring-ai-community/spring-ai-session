@@ -180,7 +180,7 @@ unit.
 ## Architecture Overview
 
 The core model and API. Compaction types are covered separately in
-[Compaction Internals](compaction-internals.md#1-class-diagrams).
+[How Compaction Works](compaction-internals.md#1-class-diagrams).
 
 ```mermaid
 classDiagram

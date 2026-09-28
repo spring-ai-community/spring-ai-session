@@ -44,7 +44,7 @@ nav:
       - Session Concepts: session-management/concepts.md
       - Event Filtering: session-management/event-filtering.md
       - Context Compaction: session-management/compaction.md
-      - Compaction Internals: session-management/compaction-internals.md
+      - How Compaction Works: session-management/compaction-internals.md
       - System Messages: session-management/system-messages.md
       - Multi-Agent: session-management/multi-agent.md
   - Recall Memory:

@@ -5,9 +5,10 @@ reduces the session's event history to fit within that window while preserving
 conversational coherence. It is driven by two composable abstractions: **triggers** (when
 to compact) and **strategies** (how to compact).
 
-!!! tip "How it works internally"
-    For class, sequence and activity diagrams of the compaction algorithms, and worked
-    examples of the tricky cases, see [Compaction Internals](compaction-internals.md).
+!!! tip "How it works"
+    This page is about choosing and configuring compaction. For what happens when a pass
+    runs, with class, sequence and activity diagrams and worked examples of the tricky
+    cases, see [How Compaction Works](compaction-internals.md).
 
 ---
 
@@ -238,19 +239,16 @@ RecursiveSummarizationCompactionStrategy strategy =
     The summarization call has no session ID in its advisor context, so the advisor would
     reject it with `IllegalStateException`. Build a plain `ChatClient` for the summarizer.
 
-**Algorithm**
+**What the LLM sees, and what happens to its answer**
 
-1. Compute the cut so that the newest `maxEventsToKeep` real events form the
-   active window, and snap it to a turn boundary. If that leaves nothing to summarize,
-   stop without calling the LLM.
-2. Feed `[prior synthetic summaries] + [events to archive] + [overlap events]` to the LLM.
-   Stored system messages are never included.
-3. Archive the summarized events and the prior summaries, and insert a new synthetic
-   summary turn `[USER shadow, ASSISTANT summary]` right before the active window.
-
-The **recursive** property: the `ASSISTANT` text from any prior synthetic summary is fed
-back to the LLM as `=== PRIOR SUMMARY ===` context, so each summary builds on its
-predecessors without starting from scratch.
+The summarizer is given the previous summary (if any), the events being archived, and the
+first `overlapSize` events of the kept window for continuity; stored system messages are
+never included. The answer is stored as a synthetic summary turn, `[USER shadow prompt,
+ASSISTANT summary]`, inserted right before the kept window. Because the previous summary
+is part of the input, each summary builds on its predecessors, and the previous summary
+turn is archived in place like the events it summarized. The step-by-step, including when
+no LLM call is made, is in
+[How Compaction Works](compaction-internals.md#4-sequence-recursivesummarizationcompactionstrategy).
 
 **LLM failure handling**
 
@@ -298,35 +296,21 @@ RecursiveSummarizationCompactionStrategy strategy =
 
 ## Turn-boundary Safety
 
-All four strategies share a common safety rule: the kept window always starts at a
-`USER` message (apart from `TurnWindowCompactionStrategy`'s preamble, see above). The
-sliding-window, token-count and recursive-summarization strategies snap their cut point
-forward to the next such message (package-private `CompactionUtils.snapToTurnStart`);
-`TurnWindowCompactionStrategy` gets the same result by grouping events into turns. This
-prevents keeping a tool result or assistant reply without the user message that started
-its turn.
+Every strategy gives two guarantees, whatever its budget:
+
+- **The kept window starts at a turn.** A cut that lands inside a turn moves forward to
+  the next `USER` message, so a tool result or an assistant reply is never kept without
+  the user message that started its turn. (`TurnWindowCompactionStrategy`'s preamble,
+  events before the first `USER` message, is the one exception: it is kept verbatim.)
+- **The most recent turn is always kept.** When the newest turn alone exceeds the budget,
+  a long tool-calling loop for example, it stays active anyway, so compaction never
+  archives the turn in progress. When there is no turn boundary to cut at, nothing is
+  archived and the summarizing strategy makes no LLM call.
 
 ```
-Before snap:  [u1, a1, u2, a2a, | a2b, u3, a3]   ← cut lands on a2b (middle of turn 2)
-After snap:   [u1, a1, u2, a2a, a2b, | u3, a3]   ← cut moved to u3 (turn start)
+Budget: 3 events   [u1, a1, u2, a2a, | a2b, u3, a3]   cut lands inside turn 2
+Kept:              [u1, a1, u2, a2a, a2b, | u3, a3]   moved to the next turn start
 ```
 
-The full cut-point pipeline and seven worked examples are in
-[Compaction Internals](compaction-internals.md#3-activity-how-a-strategy-chooses-what-to-archive).
-
-### The most recent turn is always kept
-
-If there is no later turn start to snap to, the cut is moved back to the start of the
-most recent turn instead. This happens when the newest turn alone exceeds the budget, for
-example a long tool-calling loop or a very large tool result. That turn stays active even
-though it goes over `maxEvents` / `maxTokens` / `maxEventsToKeep`, so compaction never
-archives the turn in progress. When the whole history is a single oversize turn, nothing
-is archived (and `RecursiveSummarizationCompactionStrategy` makes no LLM call). The same
-holds when the active window has no `USER` message at all: there is no turn boundary to
-cut at, so nothing is archived.
-
-```
-Budget: 2 events   [u1, a1, u2, a2, a3, a4]
-Forward snap:      no USER after the cut → would archive everything
-Kept instead:      [u1, a1, | u2, a2, a3, a4]   ← last turn kept, over budget
-```
+How the cut is computed, and seven worked examples of the tricky cases, are in
+[How Compaction Works](compaction-internals.md#3-activity-how-a-strategy-chooses-what-to-archive).
