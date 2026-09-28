@@ -113,7 +113,10 @@ A **turn** is the atomic unit of conversation:
 
 Working with turns rather than raw message counts prevents compaction from splitting a
 tool-call/result pair, or from removing an assistant reply while keeping the user question
-that prompted it.
+that prompted it. Reads follow the same rule: a `lastN` window is extended back to the start
+of the turn it lands in (`SessionEvent.isTurnStart()` marks the `USER` events), so a prompt
+built from a window never begins mid-turn either. See
+[Windows keep turns whole](event-filtering.md#windows-keep-turns-whole).
 
 ```
 Turn 1: [USER "What is Spring AI?"]  [ASSISTANT "Spring AI is..."]
@@ -342,9 +345,13 @@ log for a `lastN` or a page. Evaluate `excludeArchived`, `excludeSynthetic`,
 keywords in the query itself. `EventFilter.apply(List)` is the reference implementation of
 the read contract for a log held as a list; use it only for what the store cannot express,
 as the JDBC repository does for `pattern` (a Java regex cannot be translated to portable
-SQL). `findEventsByUserId(userId, filter)` has a default that loops over the user's
-sessions and windows the union in memory; a store that can join sessions and events should
-override it with one sorted, paged query.
+SQL). A `lastN` window must keep turns whole: when its oldest event is not a `USER` event,
+extend it back to the nearest preceding one among the matching events, unless the filter
+searches text or no such event exists (`EventFilter.applyTurnAwareWindow` spells out the
+rule; the JDBC repository does it with one bounded extra query). The contract kit checks
+this on every store. `findEventsByUserId(userId, filter)` has a default that loops over
+the user's sessions and windows the union in memory; a store that can join sessions and
+events should override it with one sorted, paged query.
 
 **Messages have one persisted shape.** `SessionEventCodec` encodes a `Message` into its
 type, text and a JSON `data` payload (tool calls or tool responses), and decodes it back.

@@ -153,9 +153,18 @@ public interface SessionRepository {
 	long getEventVersion(String sessionId);
 
 	/**
-	 * Returns events for the given session that match the provided filter. If
-	 * {@link EventFilter#lastN()} is set, only the most recent N matching events are
-	 * returned. Events are always returned in chronological order (oldest first).
+	 * Returns events for the given session that match the provided filter. Events are
+	 * always returned in chronological order (oldest first).
+	 * <p>
+	 * <strong>Windows keep turns whole.</strong> If {@link EventFilter#lastN()} is set,
+	 * the most recent N matching events are returned, extended back to the start of the
+	 * turn the window lands in (the nearest preceding {@link SessionEvent#isTurnStart()
+	 * USER event} among the matching events), so a tool call is never returned without
+	 * its results. The extension is skipped when the filter
+	 * {@link EventFilter#hasTextCriteria() searches text} and when no turn start precedes
+	 * the window. Pages are plain. {@link EventFilter#applyTurnAwareWindow(List)} is the
+	 * reference implementation; {@code JdbcSessionRepository} pushes it down as one
+	 * bounded extra query when the window lands mid-turn.
 	 * <p>
 	 * <strong>Push the filter down.</strong> The cost of a read must not grow with the
 	 * size of the whole log: an implementation is expected to evaluate
@@ -179,7 +188,7 @@ public interface SessionRepository {
 	 * Returns the events of <em>every</em> session of the given user that match the
 	 * filter, ordered by timestamp across sessions (ties broken in a stable, store-defined
 	 * order), with the filter's {@link EventFilter#lastN()} or page applied to that
-	 * combined order.
+	 * combined order as a plain window (turns do not exist across sessions).
 	 * <p>
 	 * The default runs the filter without its window over each session of the user,
 	 * sorts the union and applies the window in memory, which costs the total number of

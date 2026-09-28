@@ -37,6 +37,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventFilter.MatchMode;
@@ -69,8 +70,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Every test creates its own sessions with random ids, so {@link #createRepository()} may
  * return a shared store. The tests cover session lifecycle, idempotent append, the read
  * contract of {@link SessionRepository#findEvents} (pushdown or
- * {@link EventFilter#apply(List)} must give the same result), cross-session reads, and the
- * ordering rules of {@link SessionRepository#applyCompaction}.
+ * {@link EventFilter#apply(List)} must give the same result, including a {@code lastN}
+ * window that keeps turns whole), cross-session reads, and the ordering rules of
+ * {@link SessionRepository#applyCompaction}.
  *
  * @author Christian Tzolov
  * @since 0.10.0
@@ -421,6 +423,82 @@ public abstract class AbstractSessionRepositoryContractTests {
 		assertThat(this.repository.findEvents(session.id(), filter)).isEmpty();
 	}
 
+	// --- Windows keep turns whole ---
+
+	@Test
+	void lastNNeverSplitsAToolCallFromItsResults() {
+		Session session = newSession("user-tool-window");
+		append(session.id(), user("u1"), assistant("a1"), user("u2"), toolCall("call-1", "get_weather"),
+				toolResponse("call-1", "get_weather", "22C"), assistant("a2"));
+
+		// The cut lands on the tool result, the tool call, or the final reply: the whole
+		// turn comes back every time, so a tool call is never returned without its result
+		assertThat(labels(this.repository.findEvents(session.id(), EventFilter.lastN(1))))
+			.containsExactly("u2", "A[get_weather]", "T[get_weather]", "a2");
+		assertThat(labels(this.repository.findEvents(session.id(), EventFilter.lastN(2))))
+			.containsExactly("u2", "A[get_weather]", "T[get_weather]", "a2");
+		assertThat(labels(this.repository.findEvents(session.id(), EventFilter.lastN(3))))
+			.containsExactly("u2", "A[get_weather]", "T[get_weather]", "a2");
+		assertThat(labels(this.repository.findEvents(session.id(), EventFilter.lastN(4))))
+			.containsExactly("u2", "A[get_weather]", "T[get_weather]", "a2");
+		assertThat(labels(this.repository.findEvents(session.id(), EventFilter.lastN(5))))
+			.containsExactly("u1", "a1", "u2", "A[get_weather]", "T[get_weather]", "a2");
+	}
+
+	@Test
+	void lastNNeverSplitsASummaryPair() {
+		Session session = newSession("user-summary-window");
+		String id = session.id();
+		summaryTurn(id, "summary").forEach(this.repository::appendEvent);
+		append(id, user("u3"), assistant("a3"));
+
+		assertThat(labels(this.repository.findEvents(id, EventFilter.lastN(3)))).containsExactly("Σ?", "Σ:summary",
+				"u3", "a3");
+	}
+
+	@Test
+	void lastNLandingOnAnAssistantExtendsToTheTurnStart() {
+		Session session = newSession("user-assistant-cut");
+		append(session.id(), user("u1"), assistant("a1"), user("u2"), assistant("a2"));
+
+		assertThat(texts(session.id(), EventFilter.lastN(1))).containsExactly("u2", "a2");
+		assertThat(texts(session.id(), EventFilter.lastN(2))).containsExactly("u2", "a2");
+		assertThat(texts(session.id(), EventFilter.lastN(3))).containsExactly("u1", "a1", "u2", "a2");
+	}
+
+	@Test
+	void lastNWithNoTurnStartBeforeTheCutIsPlain() {
+		Session session = newSession("user-preamble");
+		append(session.id(), system("s1"), system("s2"), user("u1"), assistant("a1"));
+
+		// The cut lands in the preamble of stored system messages: nothing to extend to
+		assertThat(texts(session.id(), EventFilter.lastN(3))).containsExactly("s2", "u1", "a1");
+		// A filter that hides USER events has no turn start to extend to
+		EventFilter assistantsOnly = EventFilter.builder().messageTypes(Set.of(MessageType.ASSISTANT)).lastN(1).build();
+		assertThat(texts(session.id(), assistantsOnly)).containsExactly("a1");
+	}
+
+	@Test
+	void lastNWithTextCriteriaAndPagesArePlain() {
+		Session session = newSession("user-search-window");
+		append(session.id(), user("u1 x"), assistant("a1 x"), user("u2 x"), assistant("a2 x"));
+
+		EventFilter search = EventFilter.builder().keyword("x").lastN(1).build();
+		assertThat(texts(session.id(), search)).containsExactly("a2 x");
+		assertThat(texts(session.id(), EventFilter.builder().page(1).pageSize(1).build())).containsExactly("a1 x");
+	}
+
+	@Test
+	void findEventsByUserIdWindowsArePlain() {
+		String userId = "user-cross-window-" + UUID.randomUUID();
+		Session session = newSession(userId);
+		append(session.id(), user("u1"), assistant("a1"));
+
+		assertThat(this.repository.findEventsByUserId(userId, EventFilter.lastN(1)))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("a1");
+	}
+
 	@Test
 	void findEventsByUserIdOrdersByTimestampAcrossSessionsAndPages() {
 		String userId = "user-cross-" + UUID.randomUUID();
@@ -672,13 +750,22 @@ public abstract class AbstractSessionRepositoryContractTests {
 				synthetic(sessionId, new AssistantMessage(summary)));
 	}
 
-	/** Event labels: the text, "Σ?" for a synthetic shadow prompt, "Σ:text" for a summary. */
+	/**
+	 * Event labels: the text, "Σ?" for a synthetic shadow prompt, "Σ:text" for a summary,
+	 * "A[name]" for an assistant tool call and "T[name]" for a tool result.
+	 */
 	protected static List<String> labels(List<SessionEvent> events) {
 		return events.stream().map(e -> {
-			if (!e.isSynthetic()) {
-				return e.getMessage().getText();
+			if (e.isSynthetic()) {
+				return (e.getMessageType() == MessageType.USER) ? "Σ?" : "Σ:" + e.getMessage().getText();
 			}
-			return (e.getMessageType() == MessageType.USER) ? "Σ?" : "Σ:" + e.getMessage().getText();
+			if (e.getMessage() instanceof AssistantMessage assistant && assistant.hasToolCalls()) {
+				return "A[" + assistant.getToolCalls().get(0).name() + "]";
+			}
+			if (e.getMessage() instanceof ToolResponseMessage responses) {
+				return "T[" + responses.getResponses().get(0).name() + "]";
+			}
+			return e.getMessage().getText();
 		}).toList();
 	}
 
@@ -711,6 +798,20 @@ public abstract class AbstractSessionRepositoryContractTests {
 
 	protected static Message system(String text) {
 		return new SystemMessage(text);
+	}
+
+	/** An assistant message that calls one tool. */
+	protected static Message toolCall(String callId, String toolName) {
+		return AssistantMessage.builder()
+			.toolCalls(List.of(new AssistantMessage.ToolCall(callId, "function", toolName, "{}")))
+			.build();
+	}
+
+	/** The result of one tool call. */
+	protected static Message toolResponse(String callId, String toolName, String data) {
+		return ToolResponseMessage.builder()
+			.responses(List.of(new ToolResponseMessage.ToolResponse(callId, toolName, data)))
+			.build();
 	}
 
 }

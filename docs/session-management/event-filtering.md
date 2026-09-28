@@ -11,7 +11,7 @@ non-null conditions must match for an event to be included.
 // All events (default — no filtering applied)
 service.getEvents(id, EventFilter.all());
 
-// Most recent N events
+// Most recent N events, extended to the start of the turn the window lands in
 service.getEvents(id, EventFilter.lastN(20));
 
 // Exclude synthetic summary events — only real conversation turns
@@ -58,7 +58,7 @@ EventFilter filter = EventFilter.builder()
     .messageTypes(Set.of(MessageType.USER,
                          MessageType.ASSISTANT))           // keep only these types
     .excludeSynthetic(true)                                // exclude summary events
-    .lastN(50)                                             // keep newest 50 matches
+    .lastN(50)                                             // newest 50 matches, whole turns
     .keyword("Spring AI")                                  // case-insensitive substring
     .keywords(List.of("no,", "actually"))                  // multi-term substring match
     .matchMode(MatchMode.ANY)                               // ANY (default) or ALL of keywords
@@ -79,7 +79,7 @@ than one and an event must satisfy all of them. In practice, callers set exactly
 | `to` | `Instant` | Exclude events after this instant |
 | `messageTypes` | `Set<MessageType>` | Keep only events of these message types |
 | `excludeSynthetic` | `boolean` | When `true`, synthetic summary events are excluded |
-| `lastN` | `Integer` | Keep only the most recent N matching events (must be > 0) |
+| `lastN` | `Integer` | The most recent N matching events (must be > 0), extended back to the start of the turn the window lands in; see [Windows keep turns whole](#windows-keep-turns-whole) |
 | `keyword` | `String` | Case-insensitive substring match on `message.getText()` |
 | `keywords` | `List<String>` | Multiple case-insensitive substring terms, combined per `matchMode` |
 | `matchMode` | `EventFilter.MatchMode` | `ANY` (at least one term present) or `ALL` (every term present) — only meaningful when `keywords` is set. Import `org.springframework.ai.session.EventFilter.MatchMode` |
@@ -87,6 +87,36 @@ than one and an event must satisfy all of them. In practice, callers set exactly
 | `page` | `Integer` | Zero-indexed page in chronological order (oldest first, page 0 = oldest) |
 | `pageSize` | `Integer` | Results per page. Unset means no pagination; the `*Search` factories use 10. Must be > 0 if set |
 | `excludeArchived` | `boolean` | When `true`, archived (compacted-out) events are excluded — used by `EventFilter.active()` |
+
+---
+
+## Windows keep turns whole
+
+A `lastN` window on one session is a lower bound. If its oldest event is not a
+[turn start](concepts.md#turn) (a `USER` event, real or synthetic), the window is extended
+back to the nearest turn start before it, so the result never begins with an assistant reply
+whose question was cut off, a tool result without its tool call, or a summary without its
+shadow prompt. A tool call is therefore never returned without its results, and a prompt
+built from the window is one every provider accepts.
+
+```
+log:          U1 A1 U2 A2[tool call] T2[result] A2'
+lastN(2):     U2 A2[tool call] T2[result] A2'      extended from "T2 A2'" to the turn start
+lastN(5):     U1 A1 U2 A2[tool call] T2[result] A2'
+```
+
+The extension is bounded by one turn and skipped when it cannot apply:
+
+- **Text searches are plain.** A filter with `keyword`, `keywords` or `pattern` returns
+  exactly the newest N matches; a search result is not a prompt.
+- **No turn start before the window.** A window that lands in a preamble of stored
+  system messages, or a `messageTypes` filter that hides `USER` events, returns the plain
+  window.
+- **Pages are plain**, and so are cross-session reads (`findEventsByUserId`), where turns
+  do not exist.
+
+`EventFilter.apply(List)` is the reference implementation; the JDBC repository pushes the
+same rule down as one bounded extra query when the window lands mid-turn.
 
 ---
 

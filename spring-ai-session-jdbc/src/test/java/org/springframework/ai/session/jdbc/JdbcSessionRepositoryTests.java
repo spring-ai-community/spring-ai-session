@@ -25,8 +25,10 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -47,6 +49,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
@@ -188,6 +191,48 @@ class JdbcSessionRepositoryTests {
 	@Test
 	void repeatedRecursiveSummarizationNeverReordersTheLog() {
 		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
+	}
+
+	@Test
+	void lastNIssuesTheTurnExtensionQueryOnlyWhenTheWindowLandsMidTurn() {
+		JdbcTemplate spy = Mockito.spy(this.jdbcTemplate);
+		JdbcSessionRepository repository = JdbcSessionRepository.builder()
+			.jdbcTemplate(spy)
+			.dialect(new H2JdbcSessionRepositoryDialect())
+			.build();
+		Session session = buildSession("user-window-queries");
+		repository.save(session);
+		for (Message message : List.of(new UserMessage("u1"), new AssistantMessage("a1"), new UserMessage("u2"),
+				new AssistantMessage("a2"))) {
+			repository.appendEvent(SessionEvent.builder().sessionId(session.id()).message(message).build());
+		}
+
+		// The window starts on a user message: one query
+		Mockito.clearInvocations(spy);
+		assertThat(repository.findEvents(session.id(), EventFilter.lastN(2))).hasSize(2);
+		assertThat(selectCount(spy)).isEqualTo(1);
+
+		// Fewer rows than N: the whole log is in hand, one query
+		Mockito.clearInvocations(spy);
+		assertThat(repository.findEvents(session.id(), EventFilter.lastN(10))).hasSize(4);
+		assertThat(selectCount(spy)).isEqualTo(1);
+
+		// The window lands on an assistant reply: one more query extends it to its turn
+		Mockito.clearInvocations(spy);
+		assertThat(repository.findEvents(session.id(), EventFilter.lastN(1))).extracting(e -> e.getMessage().getText())
+			.containsExactly("u2", "a2");
+		assertThat(selectCount(spy)).isEqualTo(2);
+	}
+
+	/** Counts the repository's {@code query(sql, rowMapper, args...)} calls, not the template's internal delegation. */
+	private static long selectCount(JdbcTemplate spy) {
+		return Mockito.mockingDetails(spy)
+			.getInvocations()
+			.stream()
+			.filter(invocation -> invocation.getMethod().getName().equals("query")
+					&& invocation.getMethod().getParameterCount() == 3
+					&& invocation.getMethod().getParameterTypes()[1] == RowMapper.class)
+			.count();
 	}
 
 	@Test

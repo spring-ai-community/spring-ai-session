@@ -30,12 +30,14 @@ import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.session.DefaultSessionService;
+import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
@@ -55,6 +57,8 @@ class SessionMemoryAdvisorJdbcTests {
 
 	private EmbeddedDatabase database;
 
+	private SessionService sessionService;
+
 	private SessionMemoryAdvisor advisor;
 
 	private String sessionId;
@@ -67,13 +71,13 @@ class SessionMemoryAdvisorJdbcTests {
 			.setType(EmbeddedDatabaseType.H2)
 			.addScript("classpath:org/springframework/ai/session/jdbc/schema-h2.sql")
 			.build();
-		SessionService sessionService = DefaultSessionService.builder()
+		this.sessionService = DefaultSessionService.builder()
 			.sessionRepository(JdbcSessionRepository.builder()
 				.dataSource(this.database)
 				.dialect(new H2JdbcSessionRepositoryDialect())
 				.build())
 			.build();
-		this.advisor = SessionMemoryAdvisor.builder(sessionService).build();
+		this.advisor = SessionMemoryAdvisor.builder(this.sessionService).build();
 		this.sessionId = UUID.randomUUID().toString();
 	}
 
@@ -138,6 +142,39 @@ class SessionMemoryAdvisorJdbcTests {
 		assertThat(round1).extracting(Message::getText)
 			.containsExactly("Hello", "Bonjour !", "What is the weather in Paris?");
 		assertThat(round2).containsExactlyElementsOf(round2Input);
+	}
+
+	@Test
+	void lastNWindowReloadedFromJdbcKeepsTheToolTurnWhole() {
+		AssistantMessage toolCallMessage = AssistantMessage.builder()
+			.toolCalls(
+					List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"city\":\"Paris\"}")))
+			.build();
+		ToolResponseMessage toolResponse = ToolResponseMessage.builder()
+			.responses(
+					List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "15 degrees and sunny")))
+			.build();
+		before(List.of(new UserMessage("What is the weather in Paris?")));
+		after(toolCallMessage);
+		before(List.of(toolResponse));
+		after(AssistantMessage.builder().content("Sunny.").build());
+		SessionMemoryAdvisor windowed = SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.lastN(2))
+			.build();
+
+		// The window lands on the tool result; the JDBC repository extends it to the
+		// user message that started the turn, so the tool call is answered
+		List<Message> prompt = windowed
+			.before(ChatClientRequest.builder()
+				.prompt(new Prompt(List.of(new UserMessage("And tomorrow?"))))
+				.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+				.build(), this.chain)
+			.prompt()
+			.getInstructions();
+
+		assertThat(prompt).extracting(Message::getMessageType)
+			.containsExactly(MessageType.USER, MessageType.ASSISTANT, MessageType.TOOL, MessageType.ASSISTANT,
+					MessageType.USER);
 	}
 
 	private List<Message> before(List<Message> messages) {
