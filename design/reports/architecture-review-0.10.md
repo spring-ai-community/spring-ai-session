@@ -20,7 +20,9 @@ prompt inside a tool loop without touching the log.
 
 Recommended order: §3.1 (backend kit) and §3.3 (tool-group atomicity) first, because they
 affect the open community PRs and issue #44; §3.2, §3.4 and §3.5 are pre-1.0 API cleanups
-that fit one refactoring release; §3.6 and §3.7 are small and can go anytime.
+that fit one refactoring release; §3.6 and §3.7 are small and can go anytime. §5 weighs the
+data-path cost of each item under one rule: backends own *selection*, core owns
+*interpretation*.
 
 ## 2. What to keep
 
@@ -70,9 +72,16 @@ events, and the MongoDB PR assumes the prefix.
    - `SessionEventCodec`: the persisted shape of a message (type, text, tool calls, tool
      responses; later metadata and media, see #53). One place to decide what every backend
      stores.
-   - `EventFilter.apply(List<SessionEvent>)`: match, then `lastN` / `page` slicing.
-     Document that a backend may push any subset of the filter down to its query and must
-     finish with `apply`, which is what the JDBC repository already does for `pattern`.
+   - `EventFilter.apply(List<SessionEvent>)`: match, then `lastN` / `page` slicing. This
+     is a safety net for what a store cannot express, not a substitute for pushdown: a
+     backend is expected to push `excludeArchived`, `messageTypes`, the time range,
+     `lastN`, `page` and, where it can, the keywords down to its query, and to finish with
+     `apply` only for the rest, which is what the JDBC repository already does for
+     `pattern` (see §5).
+   - `findEventsByUserId(userId, filter)`: a default that loops over the user's sessions,
+     which backends override to sort and page in the store. `CrossSessionRecallTools`
+     today runs one query per session and pages in memory, so every page costs the total
+     number of matches.
    - The log merge as a public helper, e.g. `SessionEventLog.applyCompaction(log,
      archived, retained)`.
 2. **A precomputed compaction plan.** `DefaultSessionService` already holds the active
@@ -96,7 +105,8 @@ events, and the MongoDB PR assumes the prefix.
    rules, insert-before placement, `saveIfAbsent` atomicity, expiry, keyword escaping.
    The in-memory, H2, PostgreSQL and MySQL tests each subclass it, which also removes the
    one-line delegating tests in the two Testcontainers ITs. The Claude Agent SDK ships
-   exactly this for its `SessionStore` adapters.
+   exactly this for its `SessionStore` adapters. The kit should also check that the cheap
+   reads stay cheap: `lastN` and a page must not read the whole log (§5).
 4. **Contract trimming.** Make `saveIfAbsent` and `deleteExpiredSessions` abstract before
    1.0 (their non-atomic defaults invite wrong implementations); drop
    `findExpiredSessionIds`, which has no caller left; consider paging `findByUserId`.
@@ -133,7 +143,10 @@ final class WindowedCompactionStrategy implements CompactionStrategy {
 ```
 
 Keep the four classes as thin deprecated factories for one release. Make
-`tokensEstimatedSaved` optional or lazy so a plain window needs no estimator.
+`tokensEstimatedSaved` optional or lazy so a plain window needs no estimator. Cache token
+counts: `TokenCountTrigger` and `TokenCountCompactionStrategy` re-estimate every active
+event after every turn, twice; storing the count in the event's metadata at append time
+(or once per pass) makes that proportional to the new events.
 
 ### 3.3 Tool-group atomicity and in-flight pruning (high value, medium cost)
 
@@ -153,7 +166,10 @@ compaction now waits for the turn to end (#58).
 **Changes.**
 
 1. A shared `TurnGroups` primitive (user turn, tool-call group, summary pair) used by the
-   window strategies **and** by `lastN`, so no read or cut splits a group.
+   window strategies **and** by `lastN`, so no read or cut splits a group. A group-aware
+   `lastN` cannot be a plain `LIMIT`: the store over-fetches (`lastN` plus a bounded
+   slack, or up to the previous user message) and core snaps to the group boundary, or a
+   dialect uses a window function. The over-fetch is bounded and cheap for typical N.
 2. A cheap strategy that replaces old tool-call groups with a stub line
    (`[Tool calls: get_weather]`), as MAF's `ToolResultCompactionStrategy` does, and a
    pipeline that runs gentle → summarize → window with an early stop.
@@ -171,7 +187,10 @@ exist only for the window fields.
 
 **Sketch.** A sealed retrieval window `All | Last(n) | Page(p, size)`; `keyword` folded into
 `keywords`; `pattern` applied in the service as a post-filter (or dropped from the
-repository contract). Also reconsider the default view: `getEvents(id)` and
+repository contract). That changes nothing in cost, since today's JDBC path already
+filters the SQL-selected set in memory. Regex pushdown is possible on all three databases
+(`~`, `REGEXP`), but with dialects that differ from Java's, so it could only be an
+optional per-dialect capability with documented semantics. Also reconsider the default view: `getEvents(id)` and
 `getMessages(id)` return **all** events, archived included; the active view is the safer
 default, with recall callers asking for "all" explicitly.
 
@@ -210,7 +229,10 @@ assembly, the tool-loop check, persistence and compaction. Changes:
 - **Schema:** consider a composite event key `(session_id, id)` plus a per-session `seq`
   assigned under the session row lock. That gives one DDL shape (no `IDENTITY` /
   `AUTO_INCREMENT` differences), keeps the id contract per session, and with strided
-  values would let a summary be inserted without re-inserting the tail. Drop the unused
+  values would let a summary be inserted without deleting and re-inserting the tail,
+  which is today's main write amplification. The version bump already locks the session
+  row, so the counter can ride on the same `UPDATE`; on MySQL, without `RETURNING`,
+  reading it back costs one more round trip. Measure before committing. Drop the unused
   `branch` column in a later release.
 - **Auto-configuration:** let backends order themselves with
   `@AutoConfiguration(before = SessionServiceAutoConfiguration.class)` instead of every
@@ -279,6 +301,38 @@ leave retention to the store).
 **What matches good practice:** append-only with soft archive (ADK, Letta, Claude Code),
 turn-boundary cutting (Spring AI, MAF, LangChain), trigger + strategy (MAF, LangChain),
 moving system messages first and deduping history in tool loops (Spring AI upstream).
+
+## 5. Performance: what belongs in the backend and what in core
+
+The rule: push **selection** to the backend (filtering, paging, searching, counting:
+anything whose cost grows with the size of the log), and keep **interpretation** in core
+(turn boundaries, tool-group atomicity, ordering rules, what a summary replaces). The
+first is where the data volume is; the second is where the community backends went wrong,
+and duplicating it per backend buys nothing. The table weighs each recommendation against
+that rule.
+
+| Recommendation | Data-path effect | Verdict |
+|---|---|---|
+| `EventFilter.apply` in core (§3.1) | Neutral as a safety net after a pushed-down query. Harmful if a backend loads the whole log and filters in memory: `lastN` then costs the size of the log. | Keep, with pushdown required for the fields a store can express; the test kit checks that `lastN` and a page don't read the whole log. |
+| `CompactionPlan` (§3.1) | Better. The service already loads the active window to run the strategy, so computing the plan there moves no extra data, and the JDBC re-read of active ids disappears. The backend runs id-keyed writes only. | Keep. |
+| `findEventsByUserId` pushdown (§3.1) | The largest win in the list: cross-session recall goes from one query per session plus in-memory paging to one sorted, paged query. | Add. |
+| Window + summarizer (§3.2) | Neutral in the data path. The cost is token counting, done twice per pass over the whole active window; a cached count per event makes it proportional to the new events. | Add the cache. |
+| Group-aware `lastN` (§3.3) | Conflicts with a plain `LIMIT`; needs a bounded over-fetch and a snap in core, or a window function. | Accept the over-fetch; it is bounded by the size of one turn. |
+| In-flight pruning (§3.3) | Linear work over the in-flight prompt, no storage access. | Fine. |
+| `pattern` as a post-filter (§3.4) | No change from today. Optional regex pushdown per dialect, with the caveat that database regex dialects are not Java's. | Optional. |
+| Provenance stamping (§3.5) | Replaces the subsequence match (history × prompt) with a linear marker check. | Fine. |
+| Per-session `seq` with strided values (§3.6) | Avoids the tail delete and re-insert on every summary; costs at most one extra round trip per append on MySQL. | Net positive for summarizing setups; measure. |
+| `SELECT … FOR UPDATE` in `appendEvent` (§3.6) | One statement fewer per append. | Fine. |
+| Test kit, Javadoc and API cleanups | No runtime cost. | — |
+
+**Two costs not covered by the recommendations:**
+
+- **Recall search over the archived history.** The active window is bounded by compaction,
+  but the archived log grows without limit, and keyword search is `LIKE '%term%'`, which no
+  B-tree index can serve. At scale this needs a trigram index on PostgreSQL (`pg_trgm`) or
+  a `FULLTEXT` index on MySQL, as an optional dialect feature with its own DDL.
+- **The in-memory repository** scans all event ids on every append and copies the event
+  list. Fine for a test and demo store; a custom backend must not copy that shape.
 
 ## Appendix: sources
 
