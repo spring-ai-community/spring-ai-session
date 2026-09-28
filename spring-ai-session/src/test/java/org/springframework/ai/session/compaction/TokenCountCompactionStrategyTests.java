@@ -72,7 +72,7 @@ class TokenCountCompactionStrategyTests {
 		CompactionResult result = strategy.compact(request);
 
 		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.eventsRemoved()).isEqualTo(0);
+		assertThat(result.archivedEventCount()).isEqualTo(0);
 		assertThat(result.compactedEvents()).hasSize(2);
 	}
 

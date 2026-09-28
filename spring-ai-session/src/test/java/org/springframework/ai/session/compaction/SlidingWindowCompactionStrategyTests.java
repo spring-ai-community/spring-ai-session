@@ -48,7 +48,7 @@ class SlidingWindowCompactionStrategyTests {
 
 		assertThat(result.compactedEvents()).hasSize(3);
 		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.eventsRemoved()).isEqualTo(0);
+		assertThat(result.archivedEventCount()).isEqualTo(0);
 	}
 
 	@Test
@@ -60,7 +60,7 @@ class SlidingWindowCompactionStrategyTests {
 		CompactionResult result = strategy.compact(context);
 
 		assertThat(result.compactedEvents()).hasSize(3);
-		assertThat(result.eventsRemoved()).isEqualTo(0);
+		assertThat(result.archivedEventCount()).isEqualTo(0);
 	}
 
 	@Test
@@ -73,7 +73,7 @@ class SlidingWindowCompactionStrategyTests {
 
 		assertThat(result.compactedEvents()).hasSize(3);
 		assertThat(result.archivedEvents()).hasSize(2);
-		assertThat(result.eventsRemoved()).isEqualTo(2);
+		assertThat(result.archivedEventCount()).isEqualTo(2);
 
 		assertThat(result.compactedEvents().get(0).getMessage().getText()).isEqualTo("msg-3");
 		assertThat(result.compactedEvents().get(1).getMessage().getText()).isEqualTo("msg-4");
@@ -120,14 +120,14 @@ class SlidingWindowCompactionStrategyTests {
 	}
 
 	@Test
-	void eventsRemovedCountIsCorrect() {
+	void archivedEventCountIsCorrect() {
 		SlidingWindowCompactionStrategy strategy = SlidingWindowCompactionStrategy.builder().maxEvents(2).build();
 		List<SessionEvent> events = buildRealEvents(7);
 		CompactionRequest context = contextFor(events);
 
 		CompactionResult result = strategy.compact(context);
 
-		assertThat(result.eventsRemoved()).isEqualTo(5);
+		assertThat(result.archivedEventCount()).isEqualTo(5);
 		assertThat(result.archivedEvents()).hasSize(5);
 		assertThat(result.compactedEvents()).hasSize(2);
 	}

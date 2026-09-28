@@ -239,7 +239,7 @@ class DefaultSessionServiceTests {
 		CompactionResult result = this.service.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
-		assertThat(result.eventsRemoved()).isEqualTo(3);
+		assertThat(result.archivedEventCount()).isEqualTo(3);
 		assertThat(result.compactedEvents()).hasSize(2);
 
 		// Active window keeps only the last two events
@@ -288,7 +288,7 @@ class DefaultSessionServiceTests {
 				SlidingWindowCompactionStrategy.builder().maxEvents(10).build());
 
 		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.eventsRemoved()).isZero();
+		assertThat(result.archivedEventCount()).isZero();
 		assertThat(this.service.getEvents(session.id())).hasSize(1);
 	}
 
@@ -302,7 +302,7 @@ class DefaultSessionServiceTests {
 				SlidingWindowCompactionStrategy.builder().maxEvents(10).build());
 
 		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.eventsRemoved()).isZero();
+		assertThat(result.archivedEventCount()).isZero();
 		assertThat(this.service.getEvents(session.id())).hasSize(1);
 	}
 
@@ -319,7 +319,7 @@ class DefaultSessionServiceTests {
 		CompactionResult result = this.service.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
-		assertThat(result.eventsRemoved()).isEqualTo(3);
+		assertThat(result.archivedEventCount()).isEqualTo(3);
 		assertThat(result.compactedEvents()).hasSize(2);
 
 		List<SessionEvent> active = this.service.getEvents(session.id(), EventFilter.active());
@@ -377,7 +377,7 @@ class DefaultSessionServiceTests {
 		assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
 
 		// Exactly one compaction must have removed 3 events; the other is a no-op.
-		int totalRemoved = results[0].eventsRemoved() + results[1].eventsRemoved();
+		int totalRemoved = results[0].archivedEventCount() + results[1].archivedEventCount();
 		assertThat(totalRemoved).isEqualTo(3);
 
 		// The surviving active window must be exactly the last 2 messages.

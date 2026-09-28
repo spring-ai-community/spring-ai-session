@@ -183,7 +183,7 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(4).build());
 
-		assertThat(result.eventsRemoved()).isPositive();
+		assertThat(result.archivedEventCount()).isPositive();
 		assertThat(result.compactedEvents()).hasSizeLessThanOrEqualTo(4);
 
 		// The active window is trimmed to the kept events...
@@ -227,7 +227,7 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				TurnWindowCompactionStrategy.builder().maxTurns(2).build());
 
-		assertThat(result.eventsRemoved()).isPositive();
+		assertThat(result.archivedEventCount()).isPositive();
 
 		// Active window: 2 turns × 2 messages per turn = 4 messages
 		List<SessionEvent> active = this.sessionService.getEvents(session.id(), EventFilter.active());
@@ -255,7 +255,7 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				TokenCountCompactionStrategy.builder().maxTokens(20).build());
 
-		assertThat(result.eventsRemoved()).isPositive();
+		assertThat(result.archivedEventCount()).isPositive();
 		assertThat(result.compactedEvents().size()).isLessThan(10);
 		// Kept window must start on a user message (turn boundary)
 		if (!result.compactedEvents().isEmpty()) {
@@ -274,7 +274,7 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(100).build());
 
-		assertThat(result.eventsRemoved()).isEqualTo(0);
+		assertThat(result.archivedEventCount()).isEqualTo(0);
 		assertThat(result.compactedEvents()).hasSize(2);
 	}
 

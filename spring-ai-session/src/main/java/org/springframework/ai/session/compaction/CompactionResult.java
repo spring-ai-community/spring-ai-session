@@ -45,8 +45,12 @@ public record CompactionResult(List<SessionEvent> compactedEvents, List<SessionE
 		archivedEvents = List.copyOf(archivedEvents);
 	}
 
-	/** Returns the number of events removed, derived from {@link #archivedEvents()}. */
-	public int eventsRemoved() {
+	/**
+	 * Returns the number of events this pass archived, i.e. {@code archivedEvents().size()}.
+	 * Archived events stay in the log; the only events compaction removes are superseded
+	 * synthetic summaries, which are not counted here.
+	 */
+	public int archivedEventCount() {
 		return this.archivedEvents.size();
 	}
 

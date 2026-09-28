@@ -26,7 +26,7 @@ CompactionResult result = service.compact(
     SlidingWindowCompactionStrategy.builder().maxEvents(10).build()
 );
 
-System.out.println(result.eventsRemoved());        // derived: archivedEvents().size()
+System.out.println(result.archivedEventCount());   // derived: archivedEvents().size()
 System.out.println(result.compactedEvents());      // the new active window, in log order
 System.out.println(result.archivedEvents());       // the archived (not deleted) events
 System.out.println(result.tokensEstimatedSaved()); // rough token saving estimate

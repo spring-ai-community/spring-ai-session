@@ -46,7 +46,7 @@ class TurnWindowCompactionStrategyTests {
 		CompactionResult result = strategy.compact(request);
 
 		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.eventsRemoved()).isEqualTo(0);
+		assertThat(result.archivedEventCount()).isEqualTo(0);
 		assertThat(result.compactedEvents()).hasSize(6); // 3 turns × 2 events each
 	}
 
@@ -58,7 +58,7 @@ class TurnWindowCompactionStrategyTests {
 		CompactionResult result = strategy.compact(request);
 
 		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.eventsRemoved()).isEqualTo(0);
+		assertThat(result.archivedEventCount()).isEqualTo(0);
 	}
 
 	@Test
@@ -72,7 +72,7 @@ class TurnWindowCompactionStrategyTests {
 		// kept: turns 3 and 4 (4 events)
 		assertThat(result.compactedEvents()).hasSize(4);
 		assertThat(result.archivedEvents()).hasSize(4); // 2 archived turns × 2 events
-		assertThat(result.eventsRemoved()).isEqualTo(4);
+		assertThat(result.archivedEventCount()).isEqualTo(4);
 
 		// First kept event must be the user message of turn 3
 		assertThat(result.compactedEvents().get(0).getMessage().getText()).isEqualTo("q3");
@@ -213,7 +213,7 @@ class TurnWindowCompactionStrategyTests {
 
 		assertThat(result.compactedEvents()).isEmpty();
 		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.eventsRemoved()).isEqualTo(0);
+		assertThat(result.archivedEventCount()).isEqualTo(0);
 	}
 
 	@Test

@@ -19,6 +19,9 @@ compaction settings, and pass only the task in and the result back. See
 
 ### Behavior changes
 
+- **`CompactionResult.eventsRemoved()` is renamed to `archivedEventCount()`.** The events it
+  counts are archived, not removed; the superseded summaries that compaction does remove
+  were never counted. No deprecated alias.
 - **Every `USER` event starts a turn.** Turn counting (`TurnCountTrigger`) and every
   strategy's turn boundaries now use all non-synthetic `USER` events, and the event-count
   strategies (`maxEvents`, `maxEventsToKeep`) count all real events. Events that were

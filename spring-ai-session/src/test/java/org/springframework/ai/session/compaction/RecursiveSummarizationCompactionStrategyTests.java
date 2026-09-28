@@ -80,7 +80,7 @@ class RecursiveSummarizationCompactionStrategyTests {
 
 		assertThat(result.compactedEvents()).hasSize(5);
 		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.eventsRemoved()).isEqualTo(0);
+		assertThat(result.archivedEventCount()).isEqualTo(0);
 		verifyNoMoreInteractions(this.chatClient);
 	}
 
@@ -97,7 +97,7 @@ class RecursiveSummarizationCompactionStrategyTests {
 		CompactionResult result = strategy.compact(context);
 
 		assertThat(result.compactedEvents()).hasSize(5);
-		assertThat(result.eventsRemoved()).isEqualTo(0);
+		assertThat(result.archivedEventCount()).isEqualTo(0);
 		verifyNoMoreInteractions(this.chatClient);
 	}
 
@@ -144,7 +144,7 @@ class RecursiveSummarizationCompactionStrategyTests {
 		assertThat(result.archivedEvents()).hasSize(3);
 		assertThat(result.archivedEvents().stream().map(e -> e.getMessage().getText()).toList())
 			.containsExactly("msg-1", "msg-2", "msg-3");
-		assertThat(result.eventsRemoved()).isEqualTo(3);
+		assertThat(result.archivedEventCount()).isEqualTo(3);
 	}
 
 	@Test
@@ -331,7 +331,7 @@ class RecursiveSummarizationCompactionStrategyTests {
 		CompactionResult result = strategy.compact(contextFor(events));
 
 		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.eventsRemoved()).isZero();
+		assertThat(result.archivedEventCount()).isZero();
 		assertThat(result.compactedEvents()).hasSize(5);
 	}
 
@@ -394,7 +394,7 @@ class RecursiveSummarizationCompactionStrategyTests {
 		CompactionResult result = strategy.compact(contextFor(events));
 
 		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.eventsRemoved()).isZero();
+		assertThat(result.archivedEventCount()).isZero();
 	}
 
 	@Test
