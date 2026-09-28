@@ -1721,8 +1721,8 @@ computed, and in two more places:</p>
 <li><strong>The newest turn is never archived.</strong> Step 5 keeps it even when it alone exceeds the
   budget.</li>
 <li><strong>At most one stored system message stays active,</strong> and it is never
-  summarized. Superseded ones are archived on every pass, even when no cut is needed,
-  except a recursive pass skipped because the summarizer returned a blank summary.</li>
+  summarized. Superseded ones are archived on every pass, even when no cut is needed or
+  the summarizer returned a blank summary.</li>
 <li><strong>Synthetic summaries survive</strong> the sliding-window, turn-window and token-count
   strategies. The recursive strategy replaces them (see section 4).</li>
 </ul>
@@ -1759,7 +1759,7 @@ and has to keep system messages out of the summary.</p>
             alt blank or null summary
                 LLM--&gt;&gt;R: "" or null
                 R-&gt;&gt;R: log WARN, then onSummarizationFailure(request) if set
-                R--&gt;&gt;Caller: CompactionResult(events, [], 0)
+                R--&gt;&gt;Caller: unchangedExceptSuperseded(events, superseded)
             else summary text
                 LLM--&gt;&gt;R: summary
                 R-&gt;&gt;R: summaryTurn = [USER shadowPrompt, ASSISTANT summary]&lt;br/&gt;(both synthetic, same timestamp)

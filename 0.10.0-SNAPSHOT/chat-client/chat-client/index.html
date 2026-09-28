@@ -1418,9 +1418,11 @@ no manual history loading or appending required in application code.</p>
    assistant messages (blank text, no tool calls, and no media) are skipped — some
    models (e.g. Bedrock Converse) emit an empty <code>end_turn</code> frame after tool use that
    would otherwise be replayed and rejected on the next request.</li>
-<li>If a trigger fires, runs compaction <strong>synchronously</strong> before returning — the full turn
-   (user + assistant) is already written at this point, so there is no race between
-   compaction and message appending.</li>
+<li>If a trigger fires, runs compaction <strong>synchronously</strong> before returning, once the turn
+   is complete: a reply that still requests tool calls means the turn is in progress, so
+   inside a tool-calling loop compaction waits for the final reply. The full turn is
+   already written at that point, so there is no race between compaction and message
+   appending.</li>
 </ol>
 <p>The diagram below shows the round-trip: the <strong>before</strong> phase loads history and builds the
 expanded prompt, the <strong>after</strong> phase appends the assistant message and compacts on trigger.</p>

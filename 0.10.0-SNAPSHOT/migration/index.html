@@ -1194,6 +1194,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#custom-implementers-sessionrepositorydeleteexpiredsessionsinstant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom implementers: SessionRepository.deleteExpiredSessions(Instant)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1622,6 +1633,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#custom-implementers-sessionrepositorydeleteexpiredsessionsinstant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom implementers: SessionRepository.deleteExpiredSessions(Instant)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2003,7 +2025,16 @@ compaction settings, and pass only the task in and the result back. See
   the next compaction. The kept system message counts fully toward the
   <code>TokenCountCompactionStrategy</code> budget and the <code>TokenCountTrigger</code> threshold.</li>
 <li><strong><code>SessionMemoryAdvisor</code></strong> no longer reads or writes by branch: it records every user and
-  assistant event as an ordinary event and uses the latest stored system message.</li>
+  assistant event as an ordinary event and uses the latest stored system message. It also
+  compacts only once a turn is complete: inside a tool-calling loop it no longer compacts
+  after a reply that requests tool calls. Compacting in the middle of a turn with a
+  summarizing strategy made the next round re-send the whole history.</li>
+<li><strong><code>RecursiveSummarizationCompactionStrategy</code>:</strong> when the summarizer returns a blank
+  summary, superseded stored system messages are still archived, and
+  <code>tokensEstimatedSaved</code> is now net of the new summary turn's tokens.</li>
+<li><strong><code>compactEvents</code> validates new events:</strong> a new event in <code>retainedEvents</code> that belongs to
+  another session is rejected with <code>IllegalArgumentException</code> (in-memory and JDBC), and
+  <code>InMemorySessionRepository</code> now also rejects archived events that are not in the log.</li>
 <li><strong>Compaction never reorders the log.</strong> A kept system message stays where it was stored
   instead of moving to the front of the active window, and archived events stay where they
   were. <code>getEvents(...)</code> therefore returns events in the order they were appended, plus
@@ -2011,6 +2042,10 @@ compaction settings, and pass only the task in and the result back. See
   still puts system messages first in the prompt. A custom loop that reads the active
   window must put the system message first itself (see
   <a href="../session-management/system-messages/">System Messages</a>).</li>
+<li><strong>JDBC idempotent replay works inside a caller's transaction.</strong> <code>appendEvent</code> now looks
+  the event id up before inserting instead of catching the duplicate-key error. A retried
+  append inside an application-managed transaction no longer marks it rollback-only (or,
+  on PostgreSQL, aborts it).</li>
 </ul>
 <h3 id="jdbc-the-branch-column-is-unused">JDBC: the <code>branch</code> column is unused<a class="headerlink" href="#jdbc-the-branch-column-is-unused" title="Permanent link">&para;</a></h3>
 <p><code>JdbcSessionRepository</code> no longer reads or writes <code>AI_SESSION_EVENT.branch</code>. The column
@@ -2039,6 +2074,13 @@ position of new events. Existing events are kept as they are stored, so returnin
 modified copy of an existing event (same id, e.g. with a truncated tool result) or a
 different order for existing events no longer has any effect. To change an event's
 content, archive it and add a new event instead.</p>
+<h3 id="custom-implementers-sessionrepositorydeleteexpiredsessionsinstant">Custom implementers: <code>SessionRepository.deleteExpiredSessions(Instant)</code><a class="headerlink" href="#custom-implementers-sessionrepositorydeleteexpiredsessionsinstant" title="Permanent link">&para;</a></h3>
+<p><code>SessionService.deleteExpiredSessions</code> now delegates to a new <code>SessionRepository</code> method,
+<code>deleteExpiredSessions(Instant before)</code>. Its default implementation keeps the previous
+behavior (<code>findExpiredSessionIds</code>, then <code>delete</code> for each), which can delete a session
+whose TTL was extended in between. Override it to check the expiry and delete in one
+atomic step, as the built-in repositories do (JDBC: a single
+<code>DELETE … WHERE expires_at &lt; ?</code>).</p>
 <h3 id="custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed">Custom implementers: <code>JdbcSessionRepositoryDialect.getBranchFilterFragment()</code> removed<a class="headerlink" href="#custom-implementers-jdbcsessionrepositorydialectgetbranchfilterfragment-removed" title="Permanent link">&para;</a></h3>
 <p>The method is gone from the dialect contract. A custom dialect that overrides it no longer
 compiles because of its <code>@Override</code>; delete the method.</p>

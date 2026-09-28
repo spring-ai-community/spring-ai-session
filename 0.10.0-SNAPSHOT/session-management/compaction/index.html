@@ -1794,7 +1794,8 @@ back to the LLM as <code>=== PRIOR SUMMARY ===</code> context, so each summary b
 predecessors without starting from scratch.</p>
 <p><strong>LLM failure handling</strong></p>
 <p>If the LLM returns a null or blank summary, the strategy logs a <code>WARN</code> and skips
-compaction, leaving the history unchanged. If the LLM call throws, the exception propagates
+summarization, leaving the conversation unchanged (superseded stored system messages are
+still archived). If the LLM call throws, the exception propagates
 out of <code>SessionService.compact(...)</code>. <code>SessionMemoryAdvisor</code> catches and logs it, so the
 user's chat call still succeeds; if you call <code>compact(...)</code> yourself, handle it there.
 Register a callback to react to a blank summary:</p>
