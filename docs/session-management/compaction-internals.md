@@ -4,6 +4,10 @@ This page explains **how** compaction works: the CAS write, turn snapping, recur
 summarization, stored system messages and concurrent JDBC appends, with diagrams and
 worked examples. For **using** compaction, see [Context Compaction](compaction.md).
 
+Two words are used precisely throughout: an event is **archived** when compaction flags it
+and it stays in the log (searchable through Recall Storage); an event is **deleted** when
+it leaves the log. Compaction deletes only superseded synthetic summaries.
+
 !!! note "Implementation details"
     This page describes the current implementation. Package-private helpers such as
     `CompactionUtils` and the exact SQL used by `JdbcSessionRepository` are not public API
@@ -61,6 +65,14 @@ classDiagram
         archivedEvents
         tokensEstimatedSaved
     }
+    class CompactionPlan {
+        <<record>>
+        archiveIds
+        deleteIds
+        inserts
+        +of(sessionId, activeEvents, result)$ CompactionPlan
+        +applyTo(log) List
+    }
 
     SessionService <|.. DefaultSessionService
     DefaultSessionService --> SessionRepository : version, active events, CAS write
@@ -68,8 +80,10 @@ classDiagram
     SessionRepository <|.. JdbcSessionRepository
     DefaultSessionService --> CompactionTrigger : 1. shouldCompact
     DefaultSessionService --> CompactionStrategy : 2. compact
+    DefaultSessionService ..> CompactionPlan : 3. of(result)
     CompactionTrigger ..> CompactionRequest
     CompactionStrategy ..> CompactionResult
+    SessionRepository ..> CompactionPlan : applyCompaction
 ```
 
 - **Triggers are cheap; strategies can be expensive.** The service always runs the trigger
@@ -79,9 +93,9 @@ classDiagram
   events) and return a `CompactionResult`. They never touch the repository; the service
   writes the result.
 - **`CompactionResult` has two lists.** `compactedEvents` is the new active window.
-  `archivedEvents` are the events to mark archived: they stay in the log and remain
-  searchable through Recall Storage. An event in neither list is deleted; the only such
-  events are superseded synthetic summaries.
+  `archivedEvents` are the events to archive: they stay in the log and remain searchable
+  through Recall Storage. An active event in neither list is deleted; the only such events
+  are superseded synthetic summaries.
 - **The service turns the result into a `CompactionPlan`.** `CompactionPlan.of(sessionId,
   activeEvents, result)` computes the ids to archive, the ids to delete, and the new
   events to insert, each group keyed by the existing event it goes in front of (`null` to
@@ -272,10 +286,10 @@ flowchart TB
     snap --> end1{"cut == real.size()?<br/>(no later turn start)"}
     end1 -- no --> cut
     end1 -- yes --> retain["5. retainLastTurn: move the cut BACK to the<br/>last USER event, so the newest turn is kept<br/>even if it exceeds the budget (no USER at all:<br/>cut = 0, nothing is archived)"]
-    retain --> cut["kept = real[cut..]<br/>removed = real[..cut)"]
-    cut --> empty{"removed empty?<br/>(whole history is one turn)"}
+    retain --> cut["kept = real[cut..]<br/>toArchive = real[..cut)"]
+    cut --> empty{"toArchive empty?<br/>(whole history is one turn)"}
     empty -- yes --> noop
-    empty -- no --> r2(["6. Result: every other event, in log order<br/>archived = removed + superseded (log order)"])
+    empty -- no --> r2(["6. Result: every other event, in log order<br/>archived = toArchive + superseded (log order)"])
 ```
 
 **Invariants the pipeline guarantees:**
@@ -322,7 +336,7 @@ sequenceDiagram
             R-->>Caller: unchangedExceptSuperseded (no LLM call)
         else something to summarize
             R->>R: overlap = first overlapSize events of activeWindow
-            R->>R: drop every SYSTEM event from toArchive and overlap<br/>(system messages are never summarized)
+            R->>R: leave every SYSTEM event out of the summarization input<br/>(system messages are never summarized)
             R->>R: prompt = PRIOR SUMMARY (text of prior synthetic ASSISTANT events)<br/>+ CONVERSATION TO SUMMARIZE + UPCOMING CONTEXT (overlap)
             R->>LLM: prompt().system(systemPrompt).user(prompt).call().content()
             alt blank or null summary
@@ -348,7 +362,7 @@ sequenceDiagram
 
 **What makes it "recursive".** Each pass feeds the previous summary's text back to the
 LLM as `=== PRIOR SUMMARY ===`. The new summary therefore builds on the old one, and the
-old synthetic events are dropped rather than archived. The resulting active window holds
+old synthetic events are deleted rather than archived. The resulting active window holds
 the latest stored system message (if any, where it was stored), one summary turn right
 before the kept conversation, and the recent real events, all in log order.
 
@@ -387,6 +401,7 @@ sequenceDiagram
             C->>DB: SELECT seq of each anchor event
             C->>DB: DELETE FROM AI_SESSION_EVENT<br/>WHERE session_id = ? AND seq >= smallest anchor seq
             C->>DB: INSERT that tail again with each group<br/>placed before its anchor (batch, new seq values)
+            Note over C,DB: the tail rows are moved, not deleted:<br/>every event, archived flag included, is re-inserted
         end
         opt insert group without an anchor
             C->>DB: INSERT the group at the end (batch, no DELETE)
@@ -410,8 +425,8 @@ sequenceDiagram
 
 **In-memory equivalent:** `InMemorySessionRepository` does the same inside a single
 `ConcurrentHashMap.compute`. It checks the version, calls `CompactionPlan.applyTo(log)`
-(which flags the archive ids in place, drops the delete ids, inserts each group before its
-anchor and appends the anchor-less group), and bumps the version.
+(which flags the archive ids in place, deletes the delete ids, inserts each group before
+its anchor and appends the anchor-less group), and bumps the version.
 
 ---
 
@@ -437,7 +452,7 @@ and assistant messages, and `Σ` is the synthetic summary turn.
    archived whole instead of being split.
 2. The raw cut lands inside the last turn, and snapping forward finds no later turn.
    `retainLastTurn` keeps turn 2 even though it exceeds `maxEvents`.
-3. Snapping and retaining leave nothing to remove, so the pass is a no-op.
+3. Snapping and retaining leave nothing to archive, so the pass is a no-op.
 4. The budget needs no cut, but the superseded `S:v1` is still archived. `S:v2` stays
    where it was stored; the advisor puts it first in the prompt.
 5. The system prompt was stored in turn 1. Turn 1 is archived, but the latest stored
