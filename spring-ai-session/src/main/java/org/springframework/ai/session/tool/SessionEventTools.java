@@ -30,6 +30,7 @@ import org.springframework.ai.session.SessionService;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.ai.util.json.JsonParser;
+import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 
 /**
@@ -157,18 +158,21 @@ public class SessionEventTools {
 	 * <li>{@code text} — verbatim message text</li>
 	 * </ul>
 	 * @param innerThought agent's private reasoning (not returned to the user)
-	 * @param query case-insensitive keyword to search for
+	 * @param query case-insensitive keyword to search for; must contain non-whitespace
+	 * text
 	 * @param page zero-indexed page of results; omit or pass {@code 0} for the first page
 	 * @param toolContext Spring AI tool context carrying the session ID
 	 * @return JSON array of matching events, {@code "No results found."} if empty, or an
 	 * error message if the tool context carries no session ID
+	 * @throws IllegalArgumentException if the query is null or blank
 	 */
 	@Tool(name = "conversation_search",
 			description = "Search the full prior conversation history using case-insensitive keyword matching. "
 					+ "Returns paginated results ordered chronologically.")
 	public String conversationSearch(
 			@ToolParam(description = "Deep inner monologue private to you only.") String innerThought,
-			@ToolParam(description = "Keyword to search for in the conversation history.") String query,
+			@ToolParam(description = "Keyword to search for in the conversation history. Must contain non-whitespace "
+					+ "text.") String query,
 			@ToolParam(description = "Page of results to retrieve (0-indexed). Omit or use 0 for the first page.",
 					required = false) Integer page,
 			ToolContext toolContext) {
@@ -184,6 +188,8 @@ public class SessionEventTools {
 					SESSION_ID_CONTEXT_KEY);
 			return MISSING_SESSION_ID_RESULT;
 		}
+
+		Assert.hasText(query, "query must contain at least one search term");
 
 		// Synthetic summaries paraphrase the real events, which are still in the log, so
 		// searching them too would only return the same facts twice.
