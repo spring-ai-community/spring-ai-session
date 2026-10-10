@@ -28,10 +28,13 @@ how the main types fit together.
 |--------|----------|-------------|
 | **Session Management** | `spring-ai-session` | Core SPI: `Session`, `SessionEvent`, `SessionService`, `SessionRepository`, compaction framework, `SessionMemoryAdvisor` |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
+| **Session Redis** | `spring-ai-session-redis` | Redis-backed `SessionRepository` — no schema, no Redis modules required |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
+| **Session Redis Auto-configuration** | `spring-ai-autoconfigure-session-redis` | Spring Boot auto-configuration for the Redis repository |
 | **Session JDBC Starter** | `spring-ai-starter-session-jdbc` | Spring Boot starter — one dependency for a fully wired JDBC session setup |
 | **Session Test** | `spring-ai-session-test` | `AbstractSessionRepositoryContractTests`: the repository contract tests, for custom backends |
+| **Session Redis Starter** | `spring-ai-starter-session-redis` | Spring Boot starter — one dependency for a fully wired Redis session setup |
 | **Session BOM** | `spring-ai-session-bom` | Bill of Materials for managing all module versions together |
 
 ---
