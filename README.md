@@ -98,7 +98,7 @@ Full reference documentation: **[spring-ai-community.github.io/spring-ai-session
 ## Requirements
 
 - Java 17+
-- Spring AI `2.0.1+`
+- Spring AI `2.1.0-SNAPSHOT+`
 - Spring Boot `4.1.1+`
 - Maven 3.6+
 

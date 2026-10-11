@@ -1,5 +1,15 @@
 # Migration Guide
 
+## Upgrading to 0.11.0
+
+### Dependency baseline: Spring AI 2.1.0-SNAPSHOT, Spring Boot 4.1.1
+
+0.11.0 builds against Spring AI 2.1.0-SNAPSHOT and Spring Boot 4.1.1 (previously 2.0.1 / 4.1.1).
+Spring AI 2.1 is where messages carry their content as ordered `MessagePart`s, which the
+0.11.0 event log stores. Until Spring AI 2.1.0 is released, add the Spring snapshot
+repository to your build (see [Maven Repositories](getting-started.md#maven-repositories))
+and align your application's Spring AI BOM version accordingly.
+
 ## Upgrading to 0.10.0
 
 ### Breaking: branch-based multi-agent isolation removed

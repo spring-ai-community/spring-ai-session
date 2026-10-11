@@ -97,7 +97,7 @@ String answer = chatClient.prompt()
 See [Getting Started](getting-started.md) for the full setup, including manual JDBC and
 in-memory setups.
 
-**Requirements:** Java 17+, Spring AI `2.0.1+`, Spring Boot `4.1.1+`.
+**Requirements:** Java 17+, Spring AI `2.1.0-SNAPSHOT+`, Spring Boot `4.1.1+`.
 
 ---
 

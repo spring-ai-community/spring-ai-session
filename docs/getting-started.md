@@ -3,7 +3,7 @@
 ## Requirements
 
 - Java 17+
-- Spring AI `2.0.1+`
+- Spring AI `2.1.0-SNAPSHOT+`
 - Spring Boot `4.1.1+`
 
 ---
@@ -169,13 +169,21 @@ If no session exists for the given ID, the advisor creates one automatically.
 Released versions are published to **Maven Central**, so no extra repository
 configuration is needed.
 
-To use a `-SNAPSHOT` version, add the Central Portal snapshot repository:
+To use a `-SNAPSHOT` version of Spring AI Session, add the Central Portal snapshot repository.
+Spring AI `2.1.0-SNAPSHOT`, which 0.11.0 builds against, is published to the Spring snapshot
+repository, so add that one too until Spring AI 2.1.0 is released:
 
 ```xml
 <repositories>
     <repository>
         <id>central-portal-snapshots</id>
         <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        <snapshots><enabled>true</enabled></snapshots>
+        <releases><enabled>false</enabled></releases>
+    </repository>
+    <repository>
+        <id>spring-snapshots</id>
+        <url>https://repo.spring.io/snapshot</url>
         <snapshots><enabled>true</enabled></snapshots>
         <releases><enabled>false</enabled></releases>
     </repository>
