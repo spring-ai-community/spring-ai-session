@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -246,6 +247,223 @@ class DefaultSessionServiceTests {
 
 		assertThat(session.metadata()).isEmpty();
 		assertThat(SessionAttributes.principalName(session)).isNull();
+	}
+
+	// --- Session tree ---
+
+	private Session root() {
+		return this.service.create(CreateSessionRequest.builder()
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "alice")
+			.metadata("tenant", "acme")
+			.timeToLive(Duration.ofHours(3))
+			.build());
+	}
+
+	@Test
+	void createChildLinksTheChildToItsParentAndRootAndInheritsScopeAndExpiry() {
+		Session root = root();
+
+		Session child = this.service.createChild(root.id(), "researcher");
+
+		assertThat(child.parentSessionId()).isEqualTo(root.id());
+		assertThat(child.rootSessionId()).isEqualTo(root.id());
+		assertThat(SessionAttributes.agentName(child)).isEqualTo("researcher");
+		assertThat(child.isChild()).isTrue();
+		assertThat(root.isRoot()).isTrue();
+		assertThat(root.rootSessionId()).isEqualTo(root.id());
+		// The links are fields, not metadata
+		assertThat(child.metadata()).doesNotContainKeys("parentSessionId", "rootSessionId");
+		assertThat(SessionAttributes.principalName(child)).isEqualTo("alice");
+		assertThat(child.expiresAt()).isEqualTo(root.expiresAt());
+		// Only the inherited attributes come from the parent
+		assertThat(child.metadata()).doesNotContainKey("tenant");
+		assertThat(this.service.findById(child.id())).isNotNull();
+	}
+
+	@Test
+	void createChildHonoursTheRequestsIdAndMetadata() {
+		Session root = root();
+
+		Session child = this.service.createChild(root.id(), CreateSessionRequest.builder()
+			.id(root.id() + ":researcher")
+			.metadata(SessionAttributes.AGENT_NAME, "researcher")
+			.metadata("task", "cite sources")
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "alice")
+			.build());
+
+		assertThat(child.id()).isEqualTo(root.id() + ":researcher");
+		assertThat(child.metadata()).containsEntry("task", "cite sources");
+		assertThatIllegalStateException().isThrownBy(() -> this.service.createChild(root.id(),
+				CreateSessionRequest.builder().id(root.id() + ":researcher").build()));
+	}
+
+	@Test
+	void createChildRecordsAMarkerOnTheParentsLog() {
+		Session root = root();
+
+		Session child = this.service.createChild(root.id(), "researcher");
+
+		List<SessionEvent> markers = this.service.getEvents(root.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.CHILD_CREATED)).build());
+		assertThat(markers).hasSize(1);
+		assertThat(markers.get(0).getPayload()).containsEntry(SessionTreeEvents.PAYLOAD_SESSION_ID, child.id())
+			.containsEntry(SessionTreeEvents.PAYLOAD_AGENT_NAME, "researcher");
+		// The marker is not conversation: the active view ignores it
+		assertThat(this.service.getActiveMessages(root.id())).isEmpty();
+		assertThat(this.service.getEvents(child.id())).isEmpty();
+	}
+
+	@Test
+	void createChildRejectsADivergingInheritedAttributeOrExpiry() {
+		Session root = root();
+
+		assertThatIllegalArgumentException().isThrownBy(() -> this.service.createChild(root.id(),
+				CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "mallory").build()))
+			.withMessageContaining(SessionAttributes.PRINCIPAL_NAME);
+		assertThatIllegalArgumentException().isThrownBy(() -> this.service.createChild(root.id(),
+				CreateSessionRequest.builder().timeToLive(Duration.ofMinutes(1)).build()))
+			.withMessageContaining("timeToLive");
+		assertThat(this.service.findChildren(root.id())).isEmpty();
+	}
+
+	@Test
+	void createChildRejectsAnUnknownParentAndTheDepthLimit() {
+		Session root = root();
+		Session child = this.service.createChild(root.id(), "researcher");
+
+		assertThatIllegalArgumentException().isThrownBy(() -> this.service.createChild("missing", "x"))
+			.withMessageContaining("not found");
+		// Default depth 1: a child of a child is rejected
+		assertThatIllegalArgumentException().isThrownBy(() -> this.service.createChild(child.id(), "deeper"))
+			.withMessageContaining("depth");
+
+		SessionService deeper = DefaultSessionService.builder()
+			.sessionRepository(InMemorySessionRepository.builder().build())
+			.maxTreeDepth(2)
+			.build();
+		Session r = deeper.create(CreateSessionRequest.builder().build());
+		Session t1 = deeper.createChild(r.id(), "one");
+		Session t2 = deeper.createChild(t1.id(), "two");
+		assertThat(t2.parentSessionId()).isEqualTo(t1.id());
+		assertThat(t2.rootSessionId()).isEqualTo(r.id());
+		assertThat(deeper.findTree(r.id())).extracting(Session::id).containsExactly(r.id(), t1.id(), t2.id());
+		assertThatIllegalArgumentException().isThrownBy(() -> deeper.createChild(t2.id(), "three"));
+	}
+
+	@Test
+	void inheritedAttributesCanBeExtended() {
+		SessionService tenantAware = DefaultSessionService.builder()
+			.sessionRepository(InMemorySessionRepository.builder().build())
+			.inheritedAttributes(Set.of("tenant"))
+			.build();
+		Session root = tenantAware.create(CreateSessionRequest.builder()
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "alice")
+			.metadata("tenant", "acme")
+			.build());
+
+		Session child = tenantAware.createChild(root.id(), "researcher");
+
+		assertThat(child.metadata()).containsEntry("tenant", "acme")
+			.containsEntry(SessionAttributes.PRINCIPAL_NAME, "alice");
+	}
+
+	@Test
+	void findChildrenListsTheDirectChildren() {
+		Session root = root();
+		Session first = this.service.createChild(root.id(), "a");
+		Session second = this.service.createChild(root.id(), "b");
+
+		// Oldest first is the repository's order (tested in the contract kit with explicit
+		// timestamps); two creates may share an instant here
+		assertThat(this.service.findChildren(root.id())).extracting(Session::id)
+			.containsExactlyInAnyOrder(first.id(), second.id());
+		assertThat(this.service.findChildren(first.id())).isEmpty();
+		// The tree is the root and its children
+		assertThat(this.service.findTree(root.id())).extracting(Session::id)
+			.containsExactlyInAnyOrder(root.id(), first.id(), second.id());
+		assertThat(this.service.findTree(first.id())).isEmpty();
+	}
+
+	@Test
+	void deleteCascadesToChildrenButNotToTheParent() {
+		Session root = root();
+		Session child = this.service.createChild(root.id(), "researcher");
+		this.service.appendMessage(child.id(), new UserMessage("child work"));
+		Session other = this.service.createChild(root.id(), "writer");
+
+		this.service.delete(child.id());
+		assertThat(this.service.findById(child.id())).isNull();
+		assertThat(this.service.findById(root.id())).isNotNull();
+
+		this.service.delete(root.id());
+		assertThat(this.service.findById(root.id())).isNull();
+		assertThat(this.service.findById(other.id())).isNull();
+		assertThat(this.service.findTree(root.id())).isEmpty();
+	}
+
+	@Test
+	void aHandMadeMetadataLinkIsPlainMetadataAndTheSessionStaysARoot() {
+		// The convention the 0.10 guide suggested (a "parentSessionId" metadata key) is
+		// just metadata now: the links are fields that only createChild sets
+		InMemorySessionRepository repository = InMemorySessionRepository.builder().build();
+		SessionService service = DefaultSessionService.builder().sessionRepository(repository).build();
+		Session parent = service.create(CreateSessionRequest.builder().build());
+		Session legacy = repository.save(Session.builder()
+			.id("legacy")
+			.metadata("parentSessionId", parent.id())
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "alice")
+			.build());
+
+		assertThat(legacy.isRoot()).isTrue();
+		assertThat(legacy.parentSessionId()).isNull();
+		assertThat(legacy.rootSessionId()).isEqualTo("legacy");
+		assertThat(service.findChildren(parent.id())).isEmpty();
+		assertThat(service.findTree(parent.id())).extracting(Session::id).containsExactly(parent.id());
+		assertThat(SessionSelector.principal("alice").select(service)).containsExactly("legacy");
+		service.delete(parent.id());
+		assertThat(service.findById("legacy")).isNotNull();
+	}
+
+	@Test
+	void aChildOfAParentWithoutAPrincipalMayNotNameOneButTheResolverMay() {
+		Session unowned = this.service.create(CreateSessionRequest.builder().build());
+
+		assertThatIllegalArgumentException().isThrownBy(() -> this.service.createChild(unowned.id(),
+				CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "mallory").build()))
+			.withMessageContaining("has none");
+		assertThat(SessionAttributes.principalName(this.service.createChild(unowned.id(), "x"))).isNull();
+
+		SessionService resolving = DefaultSessionService.builder()
+			.sessionRepository(InMemorySessionRepository.builder().build())
+			.scopeResolver(SessionScopeResolver.fixed(Map.of(SessionAttributes.PRINCIPAL_NAME, "caller")))
+			.build();
+		Session owned = resolving.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
+		Session orphanParent = resolving.create(CreateSessionRequest.builder().metadata(Map.of()).build());
+		// The parent's principal wins over the resolver's; a parent without one lets the
+		// resolver fill it
+		assertThat(SessionAttributes.principalName(resolving.createChild(owned.id(), "a"))).isEqualTo("alice");
+		assertThat(SessionAttributes.principalName(orphanParent)).isEqualTo("caller");
+	}
+
+	@Test
+	void maxChildDepthZeroDisablesChildrenAndAnOrphanChildKeepsItsDepth() {
+		SessionService flat = DefaultSessionService.builder()
+			.sessionRepository(InMemorySessionRepository.builder().build())
+			.maxTreeDepth(0)
+			.build();
+		Session r = flat.create(CreateSessionRequest.builder().build());
+		assertThatIllegalArgumentException().isThrownBy(() -> flat.createChild(r.id(), "x"))
+			.withMessageContaining("depth");
+
+		InMemorySessionRepository repository = InMemorySessionRepository.builder().build();
+		SessionService service = DefaultSessionService.builder().sessionRepository(repository).build();
+		Session root = service.create(CreateSessionRequest.builder().build());
+		Session child = service.createChild(root.id(), "researcher");
+		repository.delete(root.id()); // out of band: the child is orphaned, still at depth 1
+		assertThat(service.findById(child.id())).isNotNull();
+		assertThatIllegalArgumentException().isThrownBy(() -> service.createChild(child.id(), "deeper"))
+			.withMessageContaining("depth");
+		assertThat(service.findChildren(child.id())).isEmpty();
 	}
 
 	@Test

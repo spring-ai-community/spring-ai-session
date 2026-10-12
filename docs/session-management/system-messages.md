@@ -129,10 +129,10 @@ combining several instructions into it is the integration's responsibility. Ever
 - it doesn't use `maxEvents` / `maxTurns` / `maxEventsToKeep` slots.
   `TokenCountCompactionStrategy` subtracts its tokens from the budget, because it is sent
   with the conversation;
-- earlier ones are **superseded**: they are covered with the turns around them when a
-  compaction cuts, never summarized, and still searchable through
-  [Recall Storage](../recall-memory/recall-storage.md). A compaction that needs no cut
-  leaves them in the view; the integration uses only the latest one anyway.
+- earlier ones are **superseded**: the next compaction that cuts covers them wherever they
+  sit, even inside the window it keeps, never summarizes them, and they stay searchable
+  through [Recall Storage](../recall-memory/recall-storage.md). A compaction that needs no
+  cut leaves them in the view; the integration uses only the latest one anyway.
 
 At most one stored system message is ever active, so an integration that stores one per
 turn cannot grow the active window.
@@ -151,9 +151,10 @@ Whatever builds the prompt sent to the model owns these steps:
    `Session.metadata`. Don't append it to the session.
 2. **Load only the active history**: `getActiveMessages(...)` or
    `getEvents(..., EventFilter.active())`.
-3. **Use only the latest stored system message** from the loaded history. Earlier ones are
-   superseded (they may still be active until the next compaction). Put system messages
-   first: many models reject or ignore a system message that is not at the start.
+3. **Use only the latest stored system message** from the loaded history: the last one in
+   the order the active view returns. Earlier ones are superseded (they may still be in
+   the view until the next compaction cuts). Put system messages first: many models reject
+   or ignore a system message that is not at the start.
 4. **Drop exact duplicates**, for example a stored system message that is also supplied
    with the request. Don't merge or rewrite texts, so the prompt stays byte-stable for
    prompt caching.

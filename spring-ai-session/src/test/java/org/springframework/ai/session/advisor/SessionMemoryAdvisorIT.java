@@ -505,6 +505,27 @@ class SessionMemoryAdvisorIT {
 	}
 
 	@Test
+	void onlyTheLatestStoredSystemMessageSurvivesACompactionThatKeepsAnOlderOneInItsWindow() {
+		// sys-old sits inside the window the compaction keeps; it is superseded by sys-new,
+		// so the compaction covers it and the advisor sends sys-new alone
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("q1"));
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("a1"));
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("q2"));
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("sys-old"));
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("a2"));
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("q3"));
+		this.sessionService.appendMessage(this.sessionId, new SystemMessage("sys-new"));
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("a3"));
+		this.sessionService.compact(this.sessionId, request -> true,
+				SlidingWindowCompactionStrategy.builder().maxEvents(4).build());
+
+		List<Message> instructions = beforeWithPrompt(new UserMessage("q4"));
+
+		assertThat(instructions).extracting(Message::getText)
+			.containsExactly("sys-new", "q2", "a2", "q3", "a3", "q4");
+	}
+
+	@Test
 	void systemMessageInsideTheActiveWindowIsSentFirst() {
 		// Compaction keeps the system message where it was stored, in the middle of the
 		// active window; the advisor still sends it first.

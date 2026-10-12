@@ -4,6 +4,11 @@ CREATE TABLE IF NOT EXISTS AI_SESSION (
     -- 'principalName' (AI_SESSION_INDEX). Still written with that attribute, and read as it
     -- for rows whose metadata has none, so existing databases keep working
     user_id       VARCHAR(255)  NOT NULL DEFAULT '',
+    -- Session tree (0.11.0): the parent a thread was created from (NULL for a root) and
+    -- the root of the tree (the session's own id for a root). No foreign key: the service
+    -- deletes a thread with its parent, and an orphan still reads
+    parent_session_id VARCHAR(255),
+    root_session_id   VARCHAR(255),
     created_at    TIMESTAMP     NOT NULL,
     expires_at    TIMESTAMP,
     metadata      LONGVARCHAR,
@@ -15,6 +20,15 @@ CREATE INDEX IF NOT EXISTS idx_ai_session_user_id
 
 CREATE INDEX IF NOT EXISTS idx_ai_session_expires_at
     ON AI_SESSION (expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_ai_session_parent
+    ON AI_SESSION (parent_session_id);
+
+CREATE INDEX IF NOT EXISTS idx_ai_session_root
+    ON AI_SESSION (root_session_id);
+
+-- Sessions written before 0.11.0 have no tree columns: they are roots. Safe to re-run.
+UPDATE AI_SESSION SET root_session_id = id WHERE root_session_id IS NULL;
 
 -- Indexed metadata attributes: one row per session and indexed attribute name (by
 -- default the principal name). findByIndex(name, value) is one query over this table.

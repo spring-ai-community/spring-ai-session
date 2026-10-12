@@ -22,8 +22,6 @@ import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.security.AuthorizingSessionService;
 import org.springframework.ai.session.security.PrincipalSessionAuthorizationManager;
 import org.springframework.ai.session.security.SecurityContextScopeResolver;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -35,8 +33,10 @@ import org.springframework.security.core.context.SecurityContextHolder;
 /**
  * Scopes and authorizes sessions with Spring Security when it is on the classpath:
  * registers a {@link SecurityContextScopeResolver} so every created session carries the
- * caller's principal name, a {@link PrincipalSessionAuthorizationManager}, and wraps
- * every {@link SessionService} bean in an {@link AuthorizingSessionService}. Disable with
+ * caller's principal name, a {@link PrincipalSessionAuthorizationManager}, and a
+ * {@link SessionServiceDecorator} that wraps the auto-configured {@link SessionService} in
+ * an {@link AuthorizingSessionService}. A {@code SessionService} bean the application
+ * defines itself is not wrapped. Disable with
  * {@code spring.ai.session.security.enabled=false}; replace the
  * {@code AuthorizationManager<Session>} bean to change who may use which session.
  *
@@ -64,17 +64,8 @@ public class SessionSecurityAutoConfiguration {
 	}
 
 	@Bean
-	static BeanPostProcessor authorizingSessionServicePostProcessor(
-			ObjectProvider<AuthorizationManager<Session>> authorizationManager) {
-		return new BeanPostProcessor() {
-			@Override
-			public Object postProcessAfterInitialization(Object bean, String beanName) {
-				if (bean instanceof SessionService service && !(bean instanceof AuthorizingSessionService)) {
-					return new AuthorizingSessionService(service, authorizationManager.getObject());
-				}
-				return bean;
-			}
-		};
+	SessionServiceDecorator authorizingSessionServiceDecorator(AuthorizationManager<Session> authorizationManager) {
+		return service -> new AuthorizingSessionService(service, authorizationManager);
 	}
 
 }

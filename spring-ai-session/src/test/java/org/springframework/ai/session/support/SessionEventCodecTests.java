@@ -183,6 +183,34 @@ class SessionEventCodecTests {
 	}
 
 	@Test
+	void aTreeMarkerRoundTripsItsMessageAndItsPayload() {
+		SessionEvent event = SessionEvent.builder()
+			.sessionId("s")
+			.type(EventType.MESSAGE_RECEIVED)
+			.payload(Map.of("sessionId", "child-1", "agentName", "reviewer"))
+			.message(AssistantMessage.builder().content("Historic").properties(Map.of("model", "m")).build())
+			.build();
+		EncodedEvent encoded = this.codec.encode(event);
+
+		assertThat(encoded.type()).isEqualTo(EventType.MESSAGE_RECEIVED);
+		assertThat(encoded.messageType()).isEqualTo(MessageType.ASSISTANT);
+		assertThat(encoded.text()).isEqualTo("Historic");
+
+		SessionEvent decoded = this.codec.decode(encoded).sessionId("s").build();
+		assertThat(decoded.getType()).isEqualTo(EventType.MESSAGE_RECEIVED);
+		assertThat(decoded.getMessage().getText()).isEqualTo("Historic");
+		assertThat(decoded.getMessage().getMetadata()).containsEntry("model", "m");
+		assertThat(decoded.getPayload()).containsEntry("sessionId", "child-1").containsEntry("agentName", "reviewer");
+		assertThat(decoded.isTurnStart()).isFalse();
+
+		// A marker written without a message is still a plain payload event
+		SessionEvent bare = SessionEvent.builder().sessionId("s").type(EventType.MESSAGE_SENT).payload("sessionId", "t").build();
+		SessionEvent bareDecoded = this.codec.decode(this.codec.encode(bare)).sessionId("s").build();
+		assertThat(bareDecoded.hasMessage()).isFalse();
+		assertThat(bareDecoded.getPayload()).containsEntry("sessionId", "t");
+	}
+
+	@Test
 	@SuppressWarnings("deprecation")
 	void thePreZeroElevenShapeIsStillRead() {
 		String toolCalls = "[{\"id\":\"c1\",\"type\":\"function\",\"name\":\"get_weather\",\"arguments\":\"{}\"}]";

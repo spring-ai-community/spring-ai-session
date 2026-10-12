@@ -138,8 +138,9 @@ final class DialectScenarios {
 		List<SessionEvent> log = service.getEvents(id);
 		assertThat(labels(log)).startsWith(afterPass2.toArray(String[]::new))
 			.endsWith("u8", "sys-2", "a8", "u9", "sys-3", "a9", "⊥", "Σ?", "Σ:summary 3");
+		// sys-2 is superseded by sys-3 and covered even though it sits in the kept window
 		assertThat(labels(service.getEvents(id, EventFilter.active()))).containsExactly("sys-3", "Σ?",
-				"Σ:summary 3", "u8", "sys-2", "a8", "u9", "a9");
+				"Σ:summary 3", "u8", "a8", "u9", "a9");
 	}
 
 	/**

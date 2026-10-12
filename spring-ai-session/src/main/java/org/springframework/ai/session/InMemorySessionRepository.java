@@ -70,6 +70,8 @@ public final class InMemorySessionRepository implements SessionRepository {
 				.id(session.id())
 				.createdAt(existing.session().createdAt())
 				.expiresAt(session.expiresAt())
+				.parentSessionId(session.parentSessionId())
+				.rootSessionId(session.rootSessionId())
 				.metadata(session.metadata())
 				.build();
 			return new SessionData(updated, existing.events(), existing.version());
@@ -98,6 +100,28 @@ public final class InMemorySessionRepository implements SessionRepository {
 			.stream()
 			.map(SessionData::session)
 			.filter(s -> s.metadata().containsKey(name) && value.equals(String.valueOf(s.metadata().get(name))))
+			.sorted(Comparator.comparing(Session::createdAt).thenComparing(Session::id))
+			.toList();
+	}
+
+	@Override
+	public List<Session> findByParentSessionId(String parentSessionId) {
+		Assert.hasText(parentSessionId, "parentSessionId must not be null or empty");
+		return this.store.values()
+			.stream()
+			.map(SessionData::session)
+			.filter(s -> parentSessionId.equals(s.parentSessionId()))
+			.sorted(Comparator.comparing(Session::createdAt).thenComparing(Session::id))
+			.toList();
+	}
+
+	@Override
+	public List<Session> findByRootSessionId(String rootSessionId) {
+		Assert.hasText(rootSessionId, "rootSessionId must not be null or empty");
+		return this.store.values()
+			.stream()
+			.map(SessionData::session)
+			.filter(s -> rootSessionId.equals(s.rootSessionId()))
 			.sorted(Comparator.comparing(Session::createdAt).thenComparing(Session::id))
 			.toList();
 	}

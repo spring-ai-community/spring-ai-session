@@ -19,14 +19,16 @@ package org.springframework.ai.session;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Well-known {@link Session#metadata() metadata} keys.
+ * The well-known metadata attributes of a {@link Session}, and the accessors that read
+ * them.
  *
  * <p>
- * The session model has no notion of ownership or scope. Who a session belongs to is an
- * attribute the application puts into the metadata, typically through a
- * {@link SessionScopeResolver}, and reads back through an index lookup
- * ({@link SessionRepository#findByIndex}). This class names the attributes the library
- * itself understands, the way Spring Session names its principal index.
+ * A session has no owner field. Who it belongs to is the {@link #PRINCIPAL_NAME} attribute,
+ * in the shape of Spring Session's principal-name index: the store indexes it
+ * ({@link SessionRepository#findByIndex}), a {@link SessionScopeResolver} fills it, and an
+ * authorization layer decides what the caller may see. The {@link #AGENT_NAME} names the
+ * agent a child runs. The links of a session tree are fields of {@link Session}
+ * ({@link Session#parentSessionId()}, {@link Session#rootSessionId()}), not attributes.
  *
  * @author Christian Tzolov
  * @since 0.11.0
@@ -34,10 +36,13 @@ import org.jspecify.annotations.Nullable;
 public final class SessionAttributes {
 
 	/**
-	 * The name of the principal a session belongs to, as {@code Authentication.getName()}
+	 * The name of the principal a session belongs to, as {@code Principal.getName()}
 	 * returns it in Spring Security. Indexed by every repository.
 	 */
 	public static final String PRINCIPAL_NAME = "principalName";
+
+	/** The name of the agent a child runs; absent unless set at creation. */
+	public static final String AGENT_NAME = "agentName";
 
 	private SessionAttributes() {
 	}
@@ -47,7 +52,16 @@ public final class SessionAttributes {
 	 * the session has none.
 	 */
 	public static @Nullable String principalName(Session session) {
-		Object value = session.metadata().get(PRINCIPAL_NAME);
+		return text(session, PRINCIPAL_NAME);
+	}
+
+	/** The agent name of a child, or {@code null} when none was set. */
+	public static @Nullable String agentName(Session session) {
+		return text(session, AGENT_NAME);
+	}
+
+	private static @Nullable String text(Session session, String key) {
+		Object value = session.metadata().get(key);
 		return (value != null) ? String.valueOf(value) : null;
 	}
 

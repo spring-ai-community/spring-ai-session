@@ -44,6 +44,7 @@ import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionTreeEvents;
 import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.test.AbstractSessionRepositoryContractTests;
@@ -281,8 +282,8 @@ class JdbcSessionRepositoryTests {
 			.dialect(new H2JdbcSessionRepositoryDialect())
 			.indexedAttributes(Set.of("tenant"))
 			.build();
-		assertThat(tenantAware.getIndexedAttributes()).containsExactlyInAnyOrder("tenant",
-				SessionAttributes.PRINCIPAL_NAME);
+		assertThat(tenantAware.getIndexedAttributes()).contains("tenant")
+			.containsAll(JdbcSessionRepository.DEFAULT_INDEXED_ATTRIBUTES);
 		String tenant = "acme-" + UUID.randomUUID();
 		Session indexed = tenantAware.save(Session.builder()
 			.id(UUID.randomUUID().toString())
@@ -322,6 +323,65 @@ class JdbcSessionRepositoryTests {
 			.containsExactly(session.id());
 		// The stored metadata keeps the full value
 		assertThat(SessionAttributes.principalName(this.repository.findById(session.id()))).isEqualTo(value);
+	}
+
+	@Test
+	void aSessionTreeRoundTripsThroughTheStoreAndIsDeletedTogether() {
+		DefaultSessionService service = DefaultSessionService.builder().sessionRepository(this.repository).build();
+		Session root = service.create(CreateSessionRequest.builder()
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "alice")
+			.timeToLive(java.time.Duration.ofHours(2))
+			.build());
+
+		Session child = service.createChild(root.id(), "researcher");
+		service.appendMessage(child.id(), new UserMessage("child work"));
+
+		// The links are columns, the marker's payload round-trips through the codec
+		assertThat(service.findChildren(root.id())).extracting(Session::id).containsExactly(child.id());
+		assertThat(service.findTree(root.id())).extracting(Session::id).containsExactly(root.id(), child.id());
+		assertThat(this.jdbcTemplate.queryForObject("SELECT root_session_id FROM AI_SESSION WHERE id = ?",
+				String.class, root.id())).isEqualTo(root.id());
+		assertThat(this.jdbcTemplate.queryForObject("SELECT parent_session_id FROM AI_SESSION WHERE id = ?",
+				String.class, child.id())).isEqualTo(root.id());
+		// Only the principal is indexed; the links need no index rows
+		assertThat(this.jdbcTemplate.queryForObject("SELECT COUNT(*) FROM AI_SESSION_INDEX WHERE session_id = ?",
+				Integer.class, child.id())).isEqualTo(1);
+		Session stored = this.repository.findById(child.id());
+		assertThat(stored.parentSessionId()).isEqualTo(root.id());
+		assertThat(stored.rootSessionId()).isEqualTo(root.id());
+		assertThat(SessionAttributes.principalName(stored)).isEqualTo("alice");
+		assertThat(SessionAttributes.agentName(stored)).isEqualTo("researcher");
+		assertThat(stored.expiresAt()).isEqualTo(root.expiresAt());
+		List<SessionEvent> markers = this.repository.findEvents(root.id(),
+				EventFilter.builder().eventTypes(java.util.Set.of(EventType.CHILD_CREATED)).build());
+		assertThat(markers).hasSize(1);
+		assertThat(markers.get(0).getPayload()).containsEntry(SessionTreeEvents.PAYLOAD_SESSION_ID, child.id())
+			.containsEntry(SessionTreeEvents.PAYLOAD_AGENT_NAME, "researcher");
+
+		// Deleting the root removes the child, its events and its index rows
+		service.delete(root.id());
+		assertThat(this.repository.findById(child.id())).isNull();
+		assertThat(this.jdbcTemplate.queryForObject("SELECT COUNT(*) FROM AI_SESSION_EVENT WHERE session_id = ?",
+				Integer.class, child.id())).isZero();
+		assertThat(this.jdbcTemplate.queryForObject("SELECT COUNT(*) FROM AI_SESSION_INDEX WHERE session_id = ?",
+				Integer.class, child.id())).isZero();
+	}
+
+	@Test
+	void aRowWrittenBeforeTheTreeColumnsReadsAsARoot() {
+		// A 0.10 row has NULL links (the bundled script backfills root_session_id, a schema
+		// managed outside it may not)
+		this.jdbcTemplate.update("INSERT INTO AI_SESSION (id, user_id, created_at, metadata, event_version)"
+				+ " VALUES (?, 'alice', ?, '{}', 0)", "legacy-row", java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+
+		Session legacy = this.repository.findById("legacy-row");
+		assertThat(legacy.isRoot()).isTrue();
+		assertThat(legacy.parentSessionId()).isNull();
+		assertThat(legacy.rootSessionId()).isEqualTo("legacy-row");
+		// Its tree is itself, backfill or not
+		assertThat(this.repository.findByRootSessionId("legacy-row")).extracting(Session::id)
+			.containsExactly("legacy-row");
+		assertThat(this.repository.findByParentSessionId("legacy-row")).isEmpty();
 	}
 
 	// -------------------------------------------------------------------------

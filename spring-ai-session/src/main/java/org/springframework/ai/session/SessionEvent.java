@@ -46,7 +46,7 @@ import org.springframework.util.Assert;
  * <p>
  * Every other event type records runtime state in the same log (a status change, an
  * interrupt, a tool-call confirmation, token usage, a compaction, the lifecycle of a
- * delegated thread) and carries its data in {@link #getPayload()} instead of a message.
+ * delegated child session) and carries its data in {@link #getPayload()} instead of a message.
  * {@link #getMessage()} throws for such an event; test with {@link #hasMessage()} first
  * when the type is not known.
  *
@@ -131,17 +131,19 @@ public final class SessionEvent {
 	}
 
 	/**
-	 * Returns {@code true} when this is a {@link EventType#MESSAGE} event, so that
-	 * {@link #getMessage()} can be called.
+	 * Returns {@code true} when this event carries a message, so that
+	 * {@link #getMessage()} can be called: always for a {@link EventType#MESSAGE} event,
+	 * and for a tree marker that records the message exchanged with a child (see
+	 * {@link EventType#canCarryMessage()}).
 	 */
 	public boolean hasMessage() {
 		return this.message != null;
 	}
 
 	/**
-	 * The wrapped Spring AI message of a {@link EventType#MESSAGE} event — no duplication
-	 * of content.
-	 * @throws IllegalStateException if this is not a message event; see
+	 * The wrapped Spring AI message of a {@link EventType#MESSAGE} event, or the message a
+	 * tree marker records — no duplication of content.
+	 * @throws IllegalStateException if this event carries no message; see
 	 * {@link #hasMessage()}
 	 */
 	public Message getMessage() {
@@ -173,7 +175,7 @@ public final class SessionEvent {
 	/**
 	 * Convenience accessor — delegates to the wrapped message. No need to unwrap for
 	 * common type-switch operations.
-	 * @throws IllegalStateException if this is not a message event; see
+	 * @throws IllegalStateException if this event carries no message; see
 	 * {@link #hasMessage()}
 	 */
 	public MessageType getMessageType() {
@@ -194,10 +196,12 @@ public final class SessionEvent {
 	 * (assistant replies, tool calls and their results), so it is the unit no read or
 	 * compaction cut may split. A synthetic shadow prompt is a USER event too, so a summary
 	 * turn starts at its shadow prompt and is never separated from its summary. An event
-	 * that is not a message never starts a turn.
+	 * that is not a {@link EventType#MESSAGE} never starts a turn, not even a tree marker
+	 * that carries a user message.
 	 */
 	public boolean isTurnStart() {
-		return this.message != null && this.message.getMessageType() == MessageType.USER;
+		return this.type == EventType.MESSAGE && this.message != null
+				&& this.message.getMessageType() == MessageType.USER;
 	}
 
 	/**
@@ -328,7 +332,7 @@ public final class SessionEvent {
 			if (resolvedType == EventType.MESSAGE) {
 				Assert.notNull(this.message, "message must not be null for a MESSAGE event");
 			}
-			else {
+			else if (!resolvedType.canCarryMessage()) {
 				Assert.isNull(this.message, "a " + resolvedType + " event must not carry a message");
 			}
 			return new SessionEvent(this.id, this.sessionId, this.timestamp, resolvedType, this.message, this.payload,

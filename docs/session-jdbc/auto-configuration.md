@@ -67,7 +67,7 @@ Boot's `DatabaseInitializationProperties` and inherits these:
 | `schema` | `classpath:org/springframework/ai/session/jdbc/schema-@@platform@@.sql` | DDL script location; `@@platform@@` is resolved to the detected database platform |
 | `platform` | _(auto-detected)_ | Overrides platform detection used to resolve `@@platform@@` in `schema` |
 | `continue-on-error` | `true` | Whether to continue startup if the DDL script fails (Spring Boot's default for these properties) |
-| `indexed-attributes` | _(empty)_ | Metadata keys to index in `AI_SESSION_INDEX` besides `principalName`, so `findByIndex` can answer for them |
+| `indexed-attributes` | _(empty)_ | Metadata keys to index in `AI_SESSION_INDEX` besides the default (`principalName`), so `findByIndex` can answer for them |
 
 ### Service: `spring.ai.session`
 

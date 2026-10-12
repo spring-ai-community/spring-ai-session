@@ -69,8 +69,9 @@ Add the security module:
 ```
 
 With Spring Boot nothing else is needed. The auto-configuration registers a
-`SecurityContextScopeResolver`, a `PrincipalSessionAuthorizationManager` and wraps the
-`SessionService` bean in an `AuthorizingSessionService`:
+`SecurityContextScopeResolver`, a `PrincipalSessionAuthorizationManager` and a
+`SessionServiceDecorator` that wraps the auto-configured `SessionService` in an
+`AuthorizingSessionService` (a `SessionService` bean you define yourself is yours to wrap):
 
 - every session created through the service carries the caller's principal name;
 - a caller who is not that principal gets `AccessDeniedException` from `findById`,
@@ -123,7 +124,7 @@ with method security if needed. A session the caller is not granted is reported 
 !!! warning "Streaming calls"
     `ChatClient.stream()` runs the advisor's `before()` on the advisor's scheduler
     (bounded-elastic by default) and its `after()` on the thread that emits the model's
-    response. `SecurityContextHolder` is thread-local, so on those threads there is no
+    response. `SecurityContextHolder` is child-local, so on those children there is no
     authentication: the resolver stores no principal, and the authorizing service denies
     the advisor's reads and writes. Blocking calls (`.call()`) run both hooks on the
     caller's thread and are not affected.
@@ -144,7 +145,19 @@ with method security if needed. A session the caller is not granted is reported 
     ```
 
     `Schedulers.immediate()` on the advisor makes `before()` see the context, but
-    `after()` still runs on the response thread, so it is not enough on its own.
+    `after()` still runs on the response child, so it is not enough on its own.
+
+---
+
+## Child sessions
+
+A child created with `SessionService.createChild` inherits its parent's principal (and
+any other key named in `DefaultSessionService.builder().inheritedAttributes(...)`) and may
+not diverge from it, so the parent's owner owns the whole tree. A request may not name a
+principal the parent lacks; a child of a parent without one gets the caller's from the
+resolver, as any created session does. `AuthorizingSessionService` checks the parent for
+`createChild`, and `findChildren` and `findTree` are narrowed like any listing. See
+[Multi-Agent](multi-agent.md).
 
 ---
 
@@ -158,6 +171,9 @@ CrossSessionRecallTools tools = CrossSessionRecallTools
     .builder(sessionService, SessionSelector.principal("alice"))   // or .builder(sessionService, "alice")
     .build();
 ```
+
+`principal(...)` selects the root sessions; `principalWithChildren(...)` includes the
+sub-agent sessions.
 
 Behind an `AuthorizingSessionService` the selection is narrowed to the caller's sessions
 whatever the selector asks for.

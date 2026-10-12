@@ -32,10 +32,12 @@ import org.springframework.context.annotation.Bean;
  * Auto-configuration for {@link DefaultSessionService}.
  *
  * <p>
- * Creates a {@link DefaultSessionService} bean whenever a single (or primary)
- * {@link SessionRepository} bean is present in the application context and no {@link SessionService} bean has been
- * declared by the application. This applies regardless of which {@link SessionRepository}
- * implementation is in use — in-memory, JDBC, Redis, etc.
+ * Creates a {@link SessionService} bean, a {@link DefaultSessionService} wrapped by every
+ * {@link SessionServiceDecorator} bean in order, whenever a single (or primary)
+ * {@link SessionRepository} bean is present in the application context and no
+ * {@link SessionService} bean has been declared by the application. This applies
+ * regardless of which {@link SessionRepository} implementation is in use — in-memory,
+ * JDBC, Redis, etc.
  *
  * <p>
  * The auto-configuration is ordered after the JDBC repository auto-configuration so that
@@ -53,14 +55,18 @@ import org.springframework.context.annotation.Bean;
 public class SessionServiceAutoConfiguration {
 
 	@Bean
-	DefaultSessionService sessionService(SessionRepository sessionRepository, SessionServiceProperties properties,
-			ObjectProvider<SessionScopeResolver> scopeResolver) {
-		return DefaultSessionService.builder()
+	SessionService sessionService(SessionRepository sessionRepository, SessionServiceProperties properties,
+			ObjectProvider<SessionScopeResolver> scopeResolver, ObjectProvider<SessionServiceDecorator> decorators) {
+		SessionService service = DefaultSessionService.builder()
 			.sessionRepository(sessionRepository)
 			.defaultTimeToLive(properties.getTimeToLive())
 			.allowSystemMessages(properties.isAllowSystemMessages())
 			.scopeResolver(scopeResolver.getIfAvailable(SessionScopeResolver::none))
 			.build();
+		for (SessionServiceDecorator decorator : decorators.orderedStream().toList()) {
+			service = decorator.decorate(service);
+		}
+		return service;
 	}
 
 }

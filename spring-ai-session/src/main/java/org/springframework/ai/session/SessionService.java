@@ -38,8 +38,9 @@ public interface SessionService {
 	// Sessions
 
 	/**
-	 * Creates a new session. Uses {@link CreateSessionRequest#id()} when set, otherwise a
-	 * random UUID.
+	 * Creates a new root session. Uses {@link CreateSessionRequest#id()} when set,
+	 * otherwise a random UUID. A child of an existing session is created with
+	 * {@link #createChild}.
 	 * @throws IllegalStateException if a session with the requested id already exists
 	 */
 	Session create(CreateSessionRequest request);
@@ -53,6 +54,46 @@ public interface SessionService {
 	 */
 	List<Session> findByIndex(String name, String value);
 
+	// Session tree
+
+	/**
+	 * Creates a child session: a session that belongs to the tree of
+	 * {@code parentSessionId}, for a sub-agent delegated to from the parent. The child has
+	 * its own log and compaction.
+	 * It names the parent ({@link Session#parentSessionId()}) and the tree's root
+	 * ({@link Session#rootSessionId()}), inherits the parent's scope attributes
+	 * (the principal, and whatever else the service is configured to pass down) and the
+	 * parent's expiry, and may not diverge from them: a request that sets an inherited
+	 * attribute to another value, or its own time to live, is rejected. The request's id and
+	 * other metadata are honoured as in {@link #create}; put
+	 * {@link SessionAttributes#AGENT_NAME} there to name the agent. The depth of the tree
+	 * is limited (one level by default). A {@link EventType#CHILD_CREATED} marker is
+	 * appended to the parent's log.
+	 * @throws IllegalArgumentException if the parent does not exist, the depth limit is
+	 * reached, or the request diverges from the inherited attributes or expiry
+	 * @throws IllegalStateException if a session with the requested id already exists
+	 */
+	Session createChild(String parentSessionId, CreateSessionRequest request);
+
+	/** Creates a child session for the named agent; see {@link #createChild(String, CreateSessionRequest)}. */
+	default Session createChild(String parentSessionId, String agentName) {
+		return createChild(parentSessionId,
+				CreateSessionRequest.builder().metadata(SessionAttributes.AGENT_NAME, agentName).build());
+	}
+
+	/** The children created directly from the given session, oldest first. */
+	List<Session> findChildren(String parentSessionId);
+
+	/**
+	 * Every session of the tree rooted at the given id, the root itself included, oldest
+	 * first. A root with no children is a tree of one.
+	 */
+	List<Session> findTree(String rootSessionId);
+
+	/**
+	 * Deletes the session, its events and, when it has children, the children and their
+	 * events. Deleting a child never affects its parent.
+	 */
 	void delete(String sessionId);
 
 	/**

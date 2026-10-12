@@ -42,27 +42,29 @@ public interface JdbcSessionRepositoryDialect {
 
 	/**
 	 * Upsert a row in {@code AI_SESSION}. The statement must insert a new row or update
-	 * an existing one. On update only {@code user_id}, {@code expires_at} and
-	 * {@code metadata} are refreshed — {@code created_at} keeps its original value and
-	 * {@code event_version} must <em>not</em> be modified.
+	 * an existing one. On update only {@code user_id}, {@code parent_session_id},
+	 * {@code root_session_id}, {@code expires_at} and {@code metadata} are refreshed —
+	 * {@code created_at} keeps its original value and {@code event_version} must
+	 * <em>not</em> be modified.
 	 *
 	 * <p>
 	 * Parameters (in order): {@code id}, {@code user_id} (the 0.10 owner column, written
-	 * with the principal name or an empty string), {@code created_at}, {@code expires_at},
-	 * {@code metadata}.
+	 * with the principal name or an empty string), {@code parent_session_id},
+	 * {@code root_session_id}, {@code created_at}, {@code expires_at}, {@code metadata}.
 	 */
 	String getUpsertSessionSql();
 
 	/**
 	 * Inserts a row into {@code AI_SESSION} only if its {@code id} does not exist yet.
-	 * Same five parameters as {@link #getUpsertSessionSql()}. Must update one row on
+	 * Same seven parameters as {@link #getUpsertSessionSql()}. Must update one row on
 	 * insert and either update zero rows or fail with a duplicate-key error when the id
 	 * exists. The default is a plain {@code INSERT} (duplicate key error); dialects whose
 	 * failed statements abort the enclosing transaction (PostgreSQL) should use a
 	 * conflict-ignoring form instead.
 	 */
 	default String getInsertSessionIfAbsentSql() {
-		return "INSERT INTO AI_SESSION (id, user_id, created_at, expires_at, metadata) VALUES (?, ?, ?, ?, ?)";
+		return "INSERT INTO AI_SESSION (id, user_id, parent_session_id, root_session_id, created_at, expires_at,"
+				+ " metadata) VALUES (?, ?, ?, ?, ?, ?, ?)";
 	}
 
 	/**

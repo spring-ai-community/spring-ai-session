@@ -45,10 +45,12 @@ import org.springframework.util.Assert;
  * that touches a session, with the caller taken from the security context.
  *
  * <p>
- * Reads, appends, compaction and delete of a session are allowed only when the manager
- * grants the caller that session; otherwise an {@link AccessDeniedException} is thrown.
- * Listings ({@link #findByIndex}) and cross-session reads ({@link #findEvents(Collection,
- * EventFilter)}) are narrowed to the sessions the caller is granted. A
+ * Reads, appends, compaction, delete and the creation of a child are allowed only when
+ * the manager grants the caller that session (the parent, for a child); otherwise an
+ * {@link AccessDeniedException} is thrown.
+ * Listings ({@link #findByIndex}, {@link #findChildren}, {@link #findTree}) and
+ * cross-session reads ({@link #findEvents(Collection, EventFilter)}) are narrowed to the
+ * sessions the caller is granted. A
  * {@link #create(CreateSessionRequest) create} whose request names a principal is checked
  * as if that session existed, so a caller cannot create a session for someone else unless
  * the manager allows it; a request without one gets the caller's own scope from the
@@ -109,6 +111,25 @@ public class AuthorizingSessionService implements SessionService {
 	@Override
 	public List<Session> findByIndex(String name, String value) {
 		return this.delegate.findByIndex(name, value).stream().filter(this::isGranted).toList();
+	}
+
+	@Override
+	public List<Session> findChildren(String parentSessionId) {
+		return this.delegate.findChildren(parentSessionId).stream().filter(this::isGranted).toList();
+	}
+
+	@Override
+	public List<Session> findTree(String rootSessionId) {
+		return this.delegate.findTree(rootSessionId).stream().filter(this::isGranted).toList();
+	}
+
+	@Override
+	public Session createChild(String parentSessionId, CreateSessionRequest request) {
+		Assert.notNull(request, "request must not be null");
+		// The child inherits the parent's principal, so being granted the parent is the
+		// check; the delegate rejects a request that tries to diverge from it.
+		authorized(parentSessionId);
+		return this.delegate.createChild(parentSessionId, request);
 	}
 
 	@Override

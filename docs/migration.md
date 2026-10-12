@@ -13,7 +13,7 @@ and align your application's Spring AI BOM version accordingly.
 ### Breaking: `SessionEvent` has a type, and not every event is a message
 
 `SessionEvent` gains `getType()` (an `EventType`: `MESSAGE`, `STATUS`, `INTERRUPT`,
-`TOOL_CONFIRMATION`, `USAGE`, `COMPACTION`, `THREAD_CREATED`, `MESSAGE_SENT`,
+`TOOL_CONFIRMATION`, `USAGE`, `COMPACTION`, `CHILD_CREATED`, `MESSAGE_SENT`,
 `MESSAGE_RECEIVED`), `hasMessage()` and `getPayload()`. A builder without `type(...)` still
 builds a `MESSAGE` event, so existing code that creates events is unchanged. What changes
 is reading: `getMessage()` and `getMessageType()` throw `IllegalStateException` for an event
@@ -85,8 +85,8 @@ What changes in behaviour:
   system message is now first in the view, which is where `SessionMemoryAdvisor` put it
   anyway.
 - **A pass that needs no cut writes nothing.** Superseded stored system messages used to be
-  archived on every pass; now they are covered with the turns around them when a pass cuts,
-  and stay in the view until then. `SessionMemoryAdvisor` uses only the latest one, so the
+  archived on every pass; now the next pass that cuts covers them, wherever they sit, and
+  they stay in the view until then. `SessionMemoryAdvisor` uses only the latest one, so the
   prompt is unchanged. `TurnWindowCompactionStrategy`'s preamble is pinned rather than
   preserved.
 - **Logs written by 0.10.0 keep working.** The JDBC repository no longer writes the
@@ -141,6 +141,41 @@ name (a database that declares it `NOT NULL` keeps working), and the schema scri
 `user_id` into `AI_SESSION_INDEX` once (`INSERT … SELECT … WHERE NOT EXISTS`, safe to
 re-run). Databases managed outside the bundled script need the new table and that copy.
 
+### New: session trees for sub-agents
+
+`SessionService.createChild(parentId, request)` (and `createChild(parentId, agentName)`)
+creates a session that belongs to the parent's tree, what Claude Managed Agents calls a
+thread. `Session` gains two fields for it:
+`parentSessionId()` (`null` on a root) and `rootSessionId()` (the root of the tree; a
+root's own id on a root, so it is never `null`), with `isRoot()` and `isChild()`. The
+child inherits the parent's principal and expiry (and any key named in
+`DefaultSessionService.builder().inheritedAttributes(...)`) and may not diverge from them,
+carries `SessionAttributes.AGENT_NAME` when given, and appends a `CHILD_CREATED` marker
+to the parent's log. The depth is limited to one level by default (`maxTreeDepth`).
+`findChildren(parentId)` lists a session's direct children and `findTree(rootId)` the root
+with every child of its tree; `SessionRepository` gains `findByParentSessionId` and
+`findByRootSessionId` for them. `SessionTreeEvents` builds the `CHILD_CREATED`,
+`MESSAGE_SENT` and `MESSAGE_RECEIVED` markers; the two message markers carry the exchanged
+message next to their payload, so `hasMessage()` is true for them too
+(`EventType.canCarryMessage()`), text searches find their text, and `isTurnStart()` is
+false for them. See [Multi-Agent](session-management/multi-agent.md).
+
+Two behaviour changes come with it:
+
+- **`delete(sessionId)` cascades to the session's children.** A session created before
+  0.11.0 has no children, so nothing changes for it.
+- **`SessionSelector.principal(name)` selects root sessions only**, so
+  `CrossSessionRecallTools.builder(service, "alice")` no longer searches sub-agent sessions;
+  `SessionSelector.principalWithChildren(name)` does.
+
+The JDBC `AI_SESSION` table gains the `parent_session_id` and `root_session_id` columns
+(see the schema section below). `AuthorizingSessionService.createChild` requires the
+caller to be granted the parent, and narrows `findChildren` and `findTree` like any
+listing. The metadata convention the 0.10 multi-agent guide suggested (`parentSessionId`
+and `agent` keys set by hand) is replaced by the API: those keys are plain metadata now,
+so a session written that way stays a root, and `findChildren`, the cascade and the
+selectors leave it alone.
+
 ### Breaking: `SessionEventCodec` encodes events, not messages
 
 Custom `SessionRepository` implementations that use the shared codec: `encode(Message)` and
@@ -170,8 +205,21 @@ ALTER TABLE AI_SESSION_EVENT ADD COLUMN payload LONGTEXT;
 ALTER TABLE AI_SESSION_EVENT MODIFY message_type VARCHAR(20) NULL;
 ```
 
-`AI_SESSION` gains the `AI_SESSION_INDEX` table for indexed metadata attributes (see the
-scope section above). `user_id` is kept and still written on every save; the default
+`AI_SESSION` gains the `parent_session_id` and `root_session_id` columns of the session
+tree, each indexed; existing rows are roots, so the bundled script sets their
+`root_session_id` to their id (safe to re-run):
+
+```sql
+-- PostgreSQL, H2 and MySQL
+ALTER TABLE AI_SESSION ADD COLUMN parent_session_id VARCHAR(255);
+ALTER TABLE AI_SESSION ADD COLUMN root_session_id VARCHAR(255);
+CREATE INDEX idx_ai_session_parent ON AI_SESSION (parent_session_id);
+CREATE INDEX idx_ai_session_root ON AI_SESSION (root_session_id);
+UPDATE AI_SESSION SET root_session_id = id WHERE root_session_id IS NULL;
+```
+
+`AI_SESSION` also gains the `AI_SESSION_INDEX` table for indexed metadata attributes (see
+the scope section above). `user_id` is kept and still written on every save; the default
 only matches the bundled script:
 
 ```sql

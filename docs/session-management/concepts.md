@@ -15,12 +15,18 @@ The event log is stored separately in the repository and fetched on demand.
 |-------|-------------|
 | `id` | Unique session identifier |
 | `createdAt` | Creation timestamp |
-| `expiresAt` | Expiry instant. Sessions created through `SessionService.create` always get one: the request's `timeToLive`, or the service's default (60 days, configurable). `null` (no expiry) is only possible for a `Session` built directly with `Session.builder().expiresAt(null)`. |
+| `expiresAt` | Expiry instant. Sessions created through `SessionService.create` always get one: the request's `timeToLive`, or the service's default (60 days, configurable); a child takes its parent's. `null` (no expiry) is only possible for a `Session` built directly with `Session.builder().expiresAt(null)`, and for the children of such a session. |
+| `parentSessionId` | The session a child was created from; `null` for a root session. Set by `SessionService.createChild` only. |
+| `rootSessionId` | The root of the session's tree: the session's own id for a root, the tree's root for a child. Never `null`, so the whole tree shares one key. |
 | `metadata` | Arbitrary key/value pairs: the scope attributes (`SessionAttributes.PRINCIPAL_NAME` for the owning principal), model info, tags, etc. |
 
 A session has no owner field. Who it belongs to is a metadata attribute, filled by a
 `SessionScopeResolver` and looked up with `findByIndex(name, value)`; see
-[Scope and Security](scope-and-security.md).
+[Scope and Security](scope-and-security.md). A session created with
+`SessionService.createChild` is a **child** of its parent (`isChild()`): it names the
+parent and the tree's root, inherits the parent's principal and expiry, and is deleted with
+the parent; `findChildren(parentId)` and `findTree(rootId)` walk the tree. See
+[Multi-Agent](multi-agent.md).
 
 Keeping `Session` metadata-only means it can be passed across boundaries cheaply and stays
 immutable: every event write goes through dedicated repository methods (`appendEvent`,
@@ -52,7 +58,8 @@ Session session = service.create(
 `SessionEvent` is an immutable value object with an `EventType`. A `MESSAGE` event wraps a Spring AI
 `Message` and adds only what `Message` intentionally omits: identity, ownership, ordering, and
 framework flags. Every other event type records runtime state in the same log and carries its data
-in a `payload` map instead of a message.
+in a `payload` map instead of a message; the two tree message markers carry both, the message
+that crossed between parent and child and the payload naming the child (`EventType.canCarryMessage()`).
 
 | Field | Description |
 |-------|-------------|
@@ -60,8 +67,8 @@ in a `payload` map instead of a message.
 | `sessionId` | Ownership / isolation |
 | `timestamp` | Chronological ordering (`Instant.now()` by default) |
 | `type` | What the event records; `MESSAGE` (the default) for a conversation message |
-| `message` | The Spring AI message of a `MESSAGE` event — no duplication of content. `getMessage()` throws for any other type; test with `hasMessage()` first |
-| `payload` | The JSON-serializable data of an event that is not a message; empty for a message event |
+| `message` | The Spring AI message of a `MESSAGE` event, or the message a `MESSAGE_SENT` / `MESSAGE_RECEIVED` marker records — no duplication of content. `getMessage()` throws for an event without one; test with `hasMessage()` first |
+| `payload` | The JSON-serializable data of an event that is not a message; empty for a message event. A tree marker names its child here |
 | `metadata` | Framework flags such as `METADATA_SYNTHETIC`, `METADATA_COMPACTION_SOURCE` and `METADATA_COMPACTION_ID` |
 
 An event is appended once and never changed. Compaction does not flag it: it appends a
@@ -78,7 +85,7 @@ An event is appended once and never changed. Compaction does not flag it: it app
 | `TOOL_CONFIRMATION` | A caller allowed or denied a tool call that was waiting for confirmation | no |
 | `USAGE` | Token usage of a model call, or a cumulative snapshot | no |
 | `COMPACTION` | A compaction boundary: which earlier events are pinned, which summary events stand in for the covered ones, and which recent events are preserved. The newest one defines the active view. Its payload is a `CompactionBoundary` | no |
-| `THREAD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED` | The lifecycle of a delegated child session and the messages exchanged with it | no |
+| `CHILD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED` | The lifecycle of a delegated child session and the messages exchanged with it. The payload names the child; the two message markers also carry the message that crossed the boundary, as a user message (the task) or an assistant message (the answer). Only `MESSAGE` events start turns and enter the prompt, but text searches find a marker's message | no |
 
 `EventFilter.active()` returns the active conversation: the `MESSAGE` events of the compacted
 view. `EventFilter.all()` returns every event of every type, boundaries included; use
@@ -232,6 +239,10 @@ classDiagram
         +create(request) Session
         +findById(id) Session
         +findByIndex(name, value) List
+        +createChild(parentId, request) Session
+        +findChildren(parentId) List
+        +findTree(rootId) List
+        +delete(id)  «cascades to children»
         +appendEvent(event)
         +getEvents(id, filter) List
         +findEvents(ids, filter) List

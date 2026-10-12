@@ -38,13 +38,29 @@ public interface SessionSelector {
 	 */
 	List<String> select(SessionService sessionService);
 
-	/** The sessions whose metadata holds {@code value} under {@code name}. */
+	/**
+	 * The sessions whose metadata holds {@code value} under {@code name}, children
+	 * included.
+	 */
 	static SessionSelector byIndex(String name, String value) {
 		return sessionService -> sessionService.findByIndex(name, value).stream().map(Session::id).toList();
 	}
 
-	/** The sessions of the given principal ({@link SessionAttributes#PRINCIPAL_NAME}). */
+	/**
+	 * The root sessions of the given principal ({@link SessionAttributes#PRINCIPAL_NAME}).
+	 * Children are left out: a sub-agent's log is not the principal's conversation. Use
+	 * {@link #principalWithChildren} to include them.
+	 */
 	static SessionSelector principal(String principalName) {
+		return sessionService -> sessionService.findByIndex(SessionAttributes.PRINCIPAL_NAME, principalName)
+			.stream()
+			.filter(Session::isRoot)
+			.map(Session::id)
+			.toList();
+	}
+
+	/** Every session of the given principal, children included. */
+	static SessionSelector principalWithChildren(String principalName) {
 		return byIndex(SessionAttributes.PRINCIPAL_NAME, principalName);
 	}
 

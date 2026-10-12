@@ -20,11 +20,13 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.EventFilter.MatchMode;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionSelector;
@@ -167,11 +169,13 @@ public class CrossSessionRecallTools {
 
 	private EventFilter buildFilter(String query, String matchMode, String since, int page) {
 		// Synthetic summaries paraphrase real events that are still in the log, so they are
-		// left out to avoid returning the same facts twice.
+		// left out to avoid returning the same facts twice. Only conversation is searched:
+		// a tree marker carries a child's message too, which the child's own log holds.
 		EventFilter.Builder builder = EventFilter.builder()
 			.page(page)
 			.pageSize(this.pageSize)
-			.excludeSynthetic(true);
+			.excludeSynthetic(true)
+			.eventTypes(Set.of(EventType.MESSAGE));
 
 		// A blank query would apply no keyword filter and return every event of every
 		// selected session — reject it rather than silently widening the search.

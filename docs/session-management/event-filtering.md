@@ -77,11 +77,11 @@ than one and an event must satisfy all of them. In practice, callers set exactly
 |-------|------|-------------|
 | `from` | `Instant` | Exclude events before this instant |
 | `to` | `Instant` | Exclude events after this instant |
-| `messageTypes` | `Set<MessageType>` | Keep only message events of these message types |
+| `messageTypes` | `Set<MessageType>` | Keep only events carrying a message of these message types. A `MESSAGE_SENT` / `MESSAGE_RECEIVED` tree marker carries one too; add `eventTypes` to narrow to `MESSAGE` |
 | `eventTypes` | `Set<EventType>` | Keep only events of these event types; unset means every type. `EventFilter.active()` sets `MESSAGE` |
 | `excludeSynthetic` | `boolean` | When `true`, synthetic summary events are excluded |
 | `lastN` | `Integer` | The most recent N matching events (must be > 0), extended back to the start of the turn the window lands in; see [Windows keep turns whole](#windows-keep-turns-whole) |
-| `keyword` | `String` | Case-insensitive substring match on `message.getText()` |
+| `keyword` | `String` | Case-insensitive substring match on `message.getText()`. The text criteria apply to every event that carries a message, tree markers included |
 | `keywords` | `List<String>` | Multiple case-insensitive substring terms, combined per `matchMode` |
 | `matchMode` | `EventFilter.MatchMode` | `ANY` (at least one term present) or `ALL` (every term present) — only meaningful when `keywords` is set. Import `org.springframework.ai.session.EventFilter.MatchMode` |
 | `pattern` | `Pattern` | Compiled regular expression matched against `message.getText()` via `Matcher.find()`. **Only ever pass a developer-authored `Pattern`** — see the ReDoS warning above |

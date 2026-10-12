@@ -76,6 +76,19 @@ public interface SessionRepository {
 	List<Session> findByIndex(String name, String value);
 
 	/**
+	 * Returns the children created directly from the given session, oldest first (creation
+	 * time, then id): the sessions whose {@link Session#parentSessionId()} is the id.
+	 */
+	List<Session> findByParentSessionId(String parentSessionId);
+
+	/**
+	 * Returns every session of the tree rooted at the given id, the root itself included
+	 * when it exists, oldest first: the sessions whose {@link Session#rootSessionId()} is
+	 * the id.
+	 */
+	List<Session> findByRootSessionId(String rootSessionId);
+
+	/**
 	 * Deletes the session with the given ID.
 	 */
 	void delete(String sessionId);

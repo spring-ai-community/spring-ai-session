@@ -65,7 +65,8 @@ import org.springframework.util.Assert;
  * <p>
  * Three tables are required:
  * <ul>
- * <li>{@code AI_SESSION} — session metadata (id, TTL, metadata JSON, event_version)</li>
+ * <li>{@code AI_SESSION} — session metadata (id, the parent and root links of a session
+ * tree, TTL, metadata JSON, event_version)</li>
  * <li>{@code AI_SESSION_INDEX} — the indexed metadata attributes of each session, one row
  * per attribute name (FK → AI_SESSION)</li>
  * <li>{@code AI_SESSION_EVENT} — append-only event log (FK → AI_SESSION)</li>
@@ -77,9 +78,13 @@ import org.springframework.util.Assert;
  * <p>
  * The repository has no notion of ownership. On every save it copies the metadata entries
  * whose keys are {@linkplain Builder#indexedAttributes(Set) configured as indexed} (by
- * default {@link SessionAttributes#PRINCIPAL_NAME}) into {@code AI_SESSION_INDEX}, and
- * {@link #findByIndex} is one query over that table. A value is indexed on its first
- * {@value #MAX_INDEXED_VALUE_LENGTH} characters. The {@code user_id} column of 0.10 is
+ * default the principal, {@link #DEFAULT_INDEXED_ATTRIBUTES}) into
+ * {@code AI_SESSION_INDEX}, and {@link #findByIndex} is one query over that table. A value
+ * is indexed on its first {@value #MAX_INDEXED_VALUE_LENGTH} characters. The links of a
+ * session tree are columns of {@code AI_SESSION}, each with its own index, so
+ * {@link #findByParentSessionId} and {@link #findByRootSessionId} are plain lookups; a row
+ * written before 0.11.0 has {@code NULL} links and reads as a root. The {@code user_id}
+ * column of 0.10 is
  * no longer part of the model: it still receives the principal name, so a database that
  * declares it {@code NOT NULL} keeps working, and a row without a principal attribute in
  * its metadata is read with {@code user_id} as the principal, so sessions written before
@@ -90,12 +95,13 @@ import org.springframework.util.Assert;
  * Each {@link SessionEvent} is stored across four columns:
  * <ul>
  * <li>{@code event_type} — the {@link org.springframework.ai.session.EventType} name</li>
- * <li>{@code message_type} — the {@link MessageType} name of a message event, else
- * {@code NULL}</li>
- * <li>{@code message_content} — the plain text of a message event
+ * <li>{@code message_type} — the {@link MessageType} name of an event that carries a
+ * message (a message event or a tree marker), else {@code NULL}</li>
+ * <li>{@code message_content} — the plain text of that message
  * ({@code message.getText()}), kept as its own column so keyword searches run in SQL</li>
- * <li>{@code payload} — JSON: the ordered message parts and metadata of a message event,
- * or the {@link SessionEvent#getPayload() payload} of any other event</li>
+ * <li>{@code payload} — JSON: the ordered message parts and metadata of a message event
+ * (plus the marker's own payload for a tree marker), or the
+ * {@link SessionEvent#getPayload() payload} of any other event</li>
  * </ul>
  * The columns are the persisted shape defined by {@link SessionEventCodec}. Rows written
  * before 0.11.0 hold their tool calls or tool responses in {@code message_data} and no
@@ -150,7 +156,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 	// @formatter:off
 
 	private static final String SELECT_SESSION_COLUMNS =
-		"SELECT s.id, s.user_id, s.created_at, s.expires_at, s.metadata, s.event_version FROM AI_SESSION s";
+		"SELECT s.id, s.user_id, s.parent_session_id, s.root_session_id, s.created_at, s.expires_at, s.metadata,"
+		+ " s.event_version FROM AI_SESSION s";
 
 	private static final String SELECT_SESSION_BY_ID =
 		SELECT_SESSION_COLUMNS + " WHERE s.id = ?";
@@ -159,6 +166,15 @@ public final class JdbcSessionRepository implements SessionRepository {
 		SELECT_SESSION_COLUMNS
 		+ " JOIN AI_SESSION_INDEX i ON i.session_id = s.id"
 		+ " WHERE i.attr_name = ? AND i.attr_value = ? ORDER BY s.created_at, s.id";
+
+	private static final String SELECT_SESSIONS_BY_PARENT =
+		SELECT_SESSION_COLUMNS + " WHERE s.parent_session_id = ? ORDER BY s.created_at, s.id";
+
+	// A row written before 0.11.0 has a NULL root and is its own root; the second branch
+	// keeps such a root in its tree on a schema that did not run the backfill
+	private static final String SELECT_SESSIONS_BY_ROOT =
+		SELECT_SESSION_COLUMNS + " WHERE s.root_session_id = ? OR (s.root_session_id IS NULL AND s.id = ?)"
+		+ " ORDER BY s.created_at, s.id";
 
 	private static final String DELETE_SESSION_INDEX =
 		"DELETE FROM AI_SESSION_INDEX WHERE session_id = ?";
@@ -235,6 +251,9 @@ public final class JdbcSessionRepository implements SessionRepository {
 	/** The number of leading characters of a metadata value that are indexed. */
 	public static final int MAX_INDEXED_VALUE_LENGTH = 512;
 
+	/** The metadata keys every repository indexes: the principal. */
+	public static final Set<String> DEFAULT_INDEXED_ATTRIBUTES = Set.of(SessionAttributes.PRINCIPAL_NAME);
+
 	private JdbcSessionRepository(JdbcTemplate jdbcTemplate, JdbcSessionRepositoryDialect dialect,
 			PlatformTransactionManager txManager, SessionEventCodec codec, Set<String> indexedAttributes) {
 		this.jdbcTemplate = jdbcTemplate;
@@ -258,7 +277,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 		Assert.notNull(session, "session must not be null");
 		this.transactionTemplate.executeWithoutResult(status -> {
 			this.jdbcTemplate.update(this.dialect.getUpsertSessionSql(), session.id(), legacyUserId(session),
-					toUtc(session.createdAt()), toUtc(session.expiresAt()), this.codec.toJson(session.metadata()));
+					session.parentSessionId(), session.rootSessionId(), toUtc(session.createdAt()),
+					toUtc(session.expiresAt()), this.codec.toJson(session.metadata()));
 			this.jdbcTemplate.update(DELETE_SESSION_INDEX, session.id());
 			insertIndexRows(session);
 		});
@@ -273,7 +293,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 		Boolean inserted = this.transactionTemplate.execute(status -> {
 			try {
 				if (this.jdbcTemplate.update(this.dialect.getInsertSessionIfAbsentSql(), session.id(),
-						legacyUserId(session), toUtc(session.createdAt()), toUtc(session.expiresAt()),
+						legacyUserId(session), session.parentSessionId(), session.rootSessionId(),
+						toUtc(session.createdAt()), toUtc(session.expiresAt()),
 						this.codec.toJson(session.metadata())) != 1) {
 					return false;
 				}
@@ -321,6 +342,18 @@ public final class JdbcSessionRepository implements SessionRepository {
 		Assert.hasText(name, "name must not be null or empty");
 		Assert.notNull(value, "value must not be null");
 		return this.jdbcTemplate.query(SELECT_SESSIONS_BY_INDEX, new SessionRowMapper(), name, indexValue(value));
+	}
+
+	@Override
+	public List<Session> findByParentSessionId(String parentSessionId) {
+		Assert.hasText(parentSessionId, "parentSessionId must not be null or empty");
+		return this.jdbcTemplate.query(SELECT_SESSIONS_BY_PARENT, new SessionRowMapper(), parentSessionId);
+	}
+
+	@Override
+	public List<Session> findByRootSessionId(String rootSessionId) {
+		Assert.hasText(rootSessionId, "rootSessionId must not be null or empty");
+		return this.jdbcTemplate.query(SELECT_SESSIONS_BY_ROOT, new SessionRowMapper(), rootSessionId, rootSessionId);
 	}
 
 	@Override
@@ -601,7 +634,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 		params.add(sessionId);
 		sql.append("AND e.seq >= (SELECT MAX(u.seq) FROM AI_SESSION_EVENT u WHERE u.session_id = ? ");
 		params.add(sessionId);
-		sql.append("AND u.message_type = ? ");
+		sql.append("AND u.event_type = ? AND u.message_type = ? ");
+		params.add(EventType.MESSAGE.name());
 		params.add(MessageType.USER.name());
 		sql.append("AND u.seq < (SELECT w.seq FROM AI_SESSION_EVENT w WHERE w.id = ? AND w.session_id = ?) ");
 		params.add(window.get(0).getId());
@@ -763,9 +797,12 @@ public final class JdbcSessionRepository implements SessionRepository {
 			if (legacyUserId != null && !legacyUserId.isEmpty()) {
 				metadata.putIfAbsent(SessionAttributes.PRINCIPAL_NAME, legacyUserId);
 			}
+			// A row written before 0.11.0 has no tree columns: NULLs make it a root
 			Session.Builder builder = Session.builder()
 				.id(rs.getString("id"))
 				.createdAt(Objects.requireNonNull(fromUtc(rs, "created_at")))
+				.parentSessionId(rs.getString("parent_session_id"))
+				.rootSessionId(rs.getString("root_session_id"))
 				.metadata(metadata);
 			if (expiresAt != null) {
 				builder.expiresAt(expiresAt);
@@ -839,20 +876,21 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 		private JsonMapper jsonMapper = JsonMapper.builder().build();
 
-		private Set<String> indexedAttributes = Set.of(SessionAttributes.PRINCIPAL_NAME);
+		private Set<String> indexedAttributes = DEFAULT_INDEXED_ATTRIBUTES;
 
 		private Builder() {
 		}
 
 		/**
 		 * The metadata keys to index in {@code AI_SESSION_INDEX}, so that
-		 * {@link #findByIndex} can answer for them. Defaults to
-		 * {@link SessionAttributes#PRINCIPAL_NAME} only; the principal is always indexed.
+		 * {@link #findByIndex} can answer for them. The
+		 * {@link #DEFAULT_INDEXED_ATTRIBUTES} (the principal) are always indexed; add a
+		 * tenant key or the like.
 		 */
 		public Builder indexedAttributes(Set<String> indexedAttributes) {
 			Assert.notNull(indexedAttributes, "indexedAttributes must not be null");
 			Set<String> keys = new HashSet<>(indexedAttributes);
-			keys.add(SessionAttributes.PRINCIPAL_NAME);
+			keys.addAll(DEFAULT_INDEXED_ATTRIBUTES);
 			this.indexedAttributes = keys;
 			return this;
 		}

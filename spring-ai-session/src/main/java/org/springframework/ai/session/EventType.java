@@ -22,8 +22,10 @@ package org.springframework.ai.session;
  * A {@link #MESSAGE} event wraps a Spring AI {@link org.springframework.ai.chat.messages.Message}
  * and is the only kind that takes part in prompt assembly and compaction. Every other kind
  * records runtime state in the same log — a status change, an interrupt, a tool-call
- * confirmation, token usage, a compaction, or the lifecycle of a delegated thread — and
- * carries its data in {@link SessionEvent#getPayload()}.
+ * confirmation, token usage, a compaction, or the lifecycle of a delegated child session
+ * — and carries its data in {@link SessionEvent#getPayload()}. The two tree message markers
+ * also carry the message that crossed between parent and child (see
+ * {@link #canCarryMessage()}).
  * <p>
  * The set mirrors the event families of an agent runtime's event stream, so that a session
  * log can serve as the durable record of a whole run, not only of its chat history.
@@ -55,13 +57,30 @@ public enum EventType {
 	 */
 	COMPACTION,
 
-	/** A child session (a delegated thread) was created from this session. */
-	THREAD_CREATED,
+	/** A child session (a delegated sub-agent's session) was created from this session. */
+	CHILD_CREATED,
 
-	/** This session sent a message to a child session. */
+	/**
+	 * This session sent a message to a child: the payload names the child, and the event
+	 * carries the message as the child receives it (a user message).
+	 */
 	MESSAGE_SENT,
 
-	/** This session received a message from a child session. */
-	MESSAGE_RECEIVED
+	/**
+	 * This session received a message from a child: the payload names the child, and
+	 * the event carries the message as the child produced it (an assistant message).
+	 */
+	MESSAGE_RECEIVED;
+
+	/**
+	 * Returns {@code true} when an event of this kind carries a Spring AI message: a
+	 * {@link #MESSAGE} event always does, and a {@link #MESSAGE_SENT} or
+	 * {@link #MESSAGE_RECEIVED} marker carries the message exchanged with the child next
+	 * to its payload. Only a {@code MESSAGE} event takes part in prompt assembly and
+	 * compaction.
+	 */
+	public boolean canCarryMessage() {
+		return this == MESSAGE || this == MESSAGE_SENT || this == MESSAGE_RECEIVED;
+	}
 
 }

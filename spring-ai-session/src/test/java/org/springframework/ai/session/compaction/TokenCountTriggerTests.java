@@ -25,6 +25,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.content.MediaContent;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionAttributes;
@@ -32,6 +33,8 @@ import org.springframework.ai.tokenizer.TokenCountEstimator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.turn;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.request;
 
 /**
  * Tests for {@link TokenCountTrigger}.
@@ -98,6 +101,15 @@ class TokenCountTriggerTests {
 		CompactionRequest request = requestWith(turn("hi", "ok"));
 
 		assertThat(trigger.shouldCompact(request)).isFalse();
+	}
+
+	@Test
+	void ignoresEventsThatAreNotMessages() {
+		List<SessionEvent> withStatus = new java.util.ArrayList<>(turn("hi", "hello"));
+		withStatus.add(SessionEvent.builder().sessionId(SESSION_ID).type(EventType.STATUS).payload("status", "IDLE").build());
+		TokenCountTrigger trigger = TokenCountTrigger.builder().threshold(1).tokenCountEstimator(CHAR_ESTIMATOR).build();
+
+		assertThat(trigger.shouldCompact(request(withStatus))).isTrue();
 	}
 
 	@Test

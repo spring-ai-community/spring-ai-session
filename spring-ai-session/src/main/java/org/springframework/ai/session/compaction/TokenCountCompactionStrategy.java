@@ -108,6 +108,12 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 			}
 		}
 
+		// Everything fits: nothing leaves the view and no boundary is written, even when
+		// the view starts mid-turn (snapping the cut would otherwise cover the preamble)
+		if (rawCutIndex == 0) {
+			return CompactionResult.unchanged();
+		}
+
 		// Snap the raw cut forward to the nearest USER event so the kept window always
 		// starts at a turn boundary.
 		// If no later turn start exists (the newest turn alone exceeds the budget), keep

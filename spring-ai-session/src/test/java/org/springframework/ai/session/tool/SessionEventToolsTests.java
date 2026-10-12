@@ -28,6 +28,7 @@ import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionTreeEvents;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.SessionAttributes;
@@ -158,6 +159,14 @@ class SessionEventToolsTests {
 		assertThat(result).contains("user"); // MessageType.getValue() returns lowercase
 												// role name
 		assertThat(result).contains("Spring AI is interesting");
+	}
+
+	@Test
+	void treeMarkersAreNotSearchHits() {
+		Session child = this.sessionService.createChild(this.sessionId, "reviewer");
+		this.sessionService.appendEvent(SessionTreeEvents.messageReceived(child, "Sofia is historic."));
+
+		assertThat(search("historic", 0)).isEqualTo("No results found.");
 	}
 
 	@Test

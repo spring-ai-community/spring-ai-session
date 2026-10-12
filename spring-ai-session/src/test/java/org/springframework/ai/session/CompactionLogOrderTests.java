@@ -82,8 +82,8 @@ class CompactionLogOrderTests {
 		assertThat(labels(this.service.getEvents(id, EventFilter.active()))).containsExactly("sys-1", "Σ?",
 				"Σ:summary 2", "u6", "a6", "u7", "a7");
 
-		// Pass 3: the latest stored system message is pinned; the one before the cut is
-		// covered, the one inside the kept window stays where it is
+		// Pass 3: the latest stored system message is pinned; the earlier ones are
+		// superseded and covered wherever they sit, before the cut or inside the kept window
 		append(id, user("u8"), system("sys-2"), assistant("a8"), user("u9"), system("sys-3"), assistant("a9"));
 		this.service.compact(id, request -> true, strategy);
 
@@ -91,13 +91,21 @@ class CompactionLogOrderTests {
 		assertThat(labels(log)).startsWith(logAfterPass2.toArray(String[]::new))
 			.endsWith("u8", "sys-2", "a8", "u9", "sys-3", "a9", "⊥", "Σ?", "Σ:summary 3");
 		assertThat(labels(this.service.getEvents(id, EventFilter.active()))).containsExactly("sys-3", "Σ?",
-				"Σ:summary 3", "u8", "sys-2", "a8", "u9", "a9");
+				"Σ:summary 3", "u8", "a8", "u9", "a9");
 
 		CompactionBoundary newest = CompactionBoundary.newest(log);
 		assertThat(newest).isNotNull();
 		assertThat(newest.strategy()).isEqualTo("recursive-summarization");
-		assertThat(newest.coveredEventCount()).isEqualTo(7); // sys-1, Σ?, Σ:summary 2, u6, a6, u7, a7
+		assertThat(newest.coveredEventCount()).isEqualTo(8); // sys-1, Σ?, Σ:summary 2, u6, a6, u7, a7, sys-2
 		assertThat(log.stream().filter(e -> e.getType() == EventType.COMPACTION)).hasSize(3);
+
+		// Pass 4: the pinned system message, now first in view order, is still the one kept
+		append(id, user("u10"), assistant("a10"), user("u11"), assistant("a11"), user("u12"), assistant("a12"));
+		given(chatClient.prompt().system(anyString()).user(anyString()).call().content()).willReturn("summary 4");
+		this.service.compact(id, request -> true, strategy);
+		assertThat(labels(this.service.getEvents(id, EventFilter.active()))).startsWith("sys-3", "Σ?",
+				"Σ:summary 4");
+		assertThat(labels(this.service.getEvents(id, EventFilter.active()))).doesNotContain("sys-2", "sys-1");
 	}
 
 	@Test

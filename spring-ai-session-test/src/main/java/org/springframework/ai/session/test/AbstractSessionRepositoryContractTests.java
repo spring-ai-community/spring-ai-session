@@ -51,6 +51,7 @@ import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
+import org.springframework.ai.session.SessionTreeEvents;
 import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.util.MimeTypeUtils;
 
@@ -141,6 +142,59 @@ public abstract class AbstractSessionRepositoryContractTests {
 		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "nobody-" + UUID.randomUUID()))
 			.isEmpty();
 		assertThat(this.repository.findByIndex("no-such-attribute", alice)).isEmpty();
+	}
+
+	@Test
+	void theTreeLinksRoundTripAndAreLookedUpByParentAndByRoot() {
+		Instant t0 = Instant.parse("2025-01-01T00:00:00Z");
+		Session root = this.repository.save(Session.builder().id(UUID.randomUUID().toString()).createdAt(t0).build());
+		Session first = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.createdAt(t0.plusSeconds(1))
+			.parentSessionId(root.id())
+			.rootSessionId(root.id())
+			.build());
+		Session second = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.createdAt(t0.plusSeconds(2))
+			.parentSessionId(root.id())
+			.rootSessionId(root.id())
+			.build());
+		Session grandchild = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.createdAt(t0.plusSeconds(3))
+			.parentSessionId(first.id())
+			.rootSessionId(root.id())
+			.build());
+
+		// The links are stored as such
+		Session stored = this.repository.findById(grandchild.id());
+		assertThat(stored.parentSessionId()).isEqualTo(first.id());
+		assertThat(stored.rootSessionId()).isEqualTo(root.id());
+		assertThat(stored.isChild()).isTrue();
+		Session storedRoot = this.repository.findById(root.id());
+		assertThat(storedRoot.isRoot()).isTrue();
+		assertThat(storedRoot.rootSessionId()).isEqualTo(root.id());
+
+		// Direct children by parent, the whole tree (root included) by root, oldest first
+		assertThat(this.repository.findByParentSessionId(root.id())).extracting(Session::id)
+			.containsExactly(first.id(), second.id());
+		assertThat(this.repository.findByParentSessionId(first.id())).extracting(Session::id)
+			.containsExactly(grandchild.id());
+		assertThat(this.repository.findByParentSessionId(second.id())).isEmpty();
+		assertThat(this.repository.findByRootSessionId(root.id())).extracting(Session::id)
+			.containsExactly(root.id(), first.id(), second.id(), grandchild.id());
+		assertThat(this.repository.findByRootSessionId(first.id())).isEmpty();
+
+		// An update keeps the links
+		this.repository.save(Session.builder()
+			.id(first.id())
+			.parentSessionId(root.id())
+			.rootSessionId(root.id())
+			.metadata("note", "updated")
+			.build());
+		assertThat(this.repository.findById(first.id()).parentSessionId()).isEqualTo(root.id());
+		assertThat(this.repository.findByParentSessionId(root.id())).hasSize(2);
 	}
 
 	@Test
@@ -920,6 +974,46 @@ public abstract class AbstractSessionRepositoryContractTests {
 			.containsExactly("u2", "a2");
 		assertThat(texts(session.id(), EventFilter.active().merge(EventFilter.lastN(1)))).containsExactly("u2",
 				"a2");
+	}
+
+	@Test
+	void aTreeMarkerCarriesItsMessageThroughTheStoreAndNeverStartsATurn() {
+		Session root = newSession("user-marker");
+		Session child = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.parentSessionId(root.id())
+			.rootSessionId(root.id())
+			.metadata(SessionAttributes.AGENT_NAME, "reviewer")
+			.build());
+		append(root.id(), user("u1"), assistant("a1"));
+		this.repository.appendEvent(SessionTreeEvents.messageSent(child, "review Sofia"));
+		this.repository.appendEvent(SessionTreeEvents.messageReceived(child, "Historic"));
+		append(root.id(), assistant("a2"));
+
+		List<SessionEvent> markers = this.repository.findEvents(root.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.MESSAGE_SENT, EventType.MESSAGE_RECEIVED)).build());
+		assertThat(markers).hasSize(2);
+		assertThat(markers.get(0).getMessageType()).isEqualTo(MessageType.USER);
+		assertThat(markers.get(0).getMessage().getText()).isEqualTo("review Sofia");
+		assertThat(markers.get(0).getPayload()).containsEntry(SessionTreeEvents.PAYLOAD_SESSION_ID, child.id())
+			.containsEntry(SessionTreeEvents.PAYLOAD_AGENT_NAME, "reviewer");
+		assertThat(markers.get(1).getMessageType()).isEqualTo(MessageType.ASSISTANT);
+		assertThat(markers.get(1).getMessage().getText()).isEqualTo("Historic");
+
+		// Text and message-type criteria see the marker's message; the active view does not
+		assertThat(this.repository.findEvents(root.id(), EventFilter.keywordSearch("historic")))
+			.extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE_RECEIVED);
+		assertThat(this.repository.findEvents(root.id(),
+				EventFilter.builder().messageTypes(Set.of(MessageType.USER)).build()))
+			.extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE, EventType.MESSAGE_SENT);
+		assertThat(texts(root.id(), EventFilter.active())).containsExactly("u1", "a1", "a2");
+
+		// A window extends to the real turn start, past the marker that carries a user message
+		assertThat(this.repository.findEvents(root.id(), EventFilter.lastN(1))).extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE, EventType.MESSAGE, EventType.MESSAGE_SENT,
+					EventType.MESSAGE_RECEIVED, EventType.MESSAGE);
 	}
 
 	// --- Helpers ---

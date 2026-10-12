@@ -47,12 +47,14 @@ import org.springframework.util.Assert;
  *
  * <p>
  * An event is stored as four fields: its {@link EventType}, the {@link MessageType} and
- * text of its message (a message event only; the text is kept as its own field so a store
- * can search it), and a JSON {@code payload}. For a message event the payload is the
- * message's ordered {@link MessagePart}s and its metadata, serialized with the parts' own
- * polymorphic JSON, so media, tool calls, tool results and provider-signed reasoning all
- * survive a round trip. For every other event type the payload is
- * {@link SessionEvent#getPayload()}. {@link #encode} and {@link #decode} convert between
+ * text of its message (when it carries one; the text is kept as its own field so a store
+ * can search it), and a JSON {@code payload}. For an event with a message the payload is
+ * the message's ordered {@link MessagePart}s and its metadata, serialized with the parts'
+ * own polymorphic JSON, so media, tool calls, tool results and provider-signed reasoning
+ * all survive a round trip; a tree marker that carries a message stores its own
+ * {@link SessionEvent#getPayload() payload} in the same JSON object. For every other
+ * event type the payload is {@link SessionEvent#getPayload()}. {@link #encode} and
+ * {@link #decode} convert between
  * the two, and {@link #toJson} / {@link #fromJsonMap} handle the metadata maps of sessions
  * and events.
  *
@@ -90,11 +92,11 @@ public final class SessionEventCodec {
 	/**
 	 * The persisted shape of an event.
 	 * @param type the event type
-	 * @param messageType the message type of a {@link EventType#MESSAGE} event, or
-	 * {@code null} for any other type
-	 * @param text the message text of a message event, or {@code null} when there is none
-	 * @param payload the JSON payload: the parts and metadata of a message, or the
-	 * {@link SessionEvent#getPayload() payload} of any other event
+	 * @param messageType the message type of an event that carries a message, or
+	 * {@code null} when it carries none
+	 * @param text the text of that message, or {@code null} when there is none
+	 * @param payload the JSON payload: the {@link MessageBody} of an event that carries a
+	 * message, or the {@link SessionEvent#getPayload() payload} of any other event
 	 */
 	public record EncodedEvent(EventType type, @Nullable MessageType messageType, @Nullable String text,
 			@Nullable String payload) {
@@ -114,12 +116,20 @@ public final class SessionEventCodec {
 	}
 
 	/**
-	 * The JSON payload of a message event.
+	 * The JSON payload of an event that carries a message.
 	 * @param parts the ordered parts of the message
 	 * @param metadata the message metadata, or an empty map when it could not be
 	 * serialized
+	 * @param payload the event's own {@link SessionEvent#getPayload() payload}: a child
+	 * marker names its child here; empty for a {@link EventType#MESSAGE} event
 	 */
-	public record MessageBody(List<MessagePart> parts, Map<String, Object> metadata) {
+	public record MessageBody(List<MessagePart> parts, Map<String, Object> metadata, Map<String, Object> payload) {
+
+		/** A body without an event payload, as a message event stores it. */
+		public MessageBody(List<MessagePart> parts, Map<String, Object> metadata) {
+			this(parts, metadata, Map.of());
+		}
+
 	}
 
 	/**
@@ -135,8 +145,8 @@ public final class SessionEventCodec {
 			return new EncodedEvent(event.getType(), null, null, toJson(event.getPayload()));
 		}
 		Message message = event.getMessage();
-		return new EncodedEvent(EventType.MESSAGE, message.getMessageType(), message.getText(),
-				encodeMessageBody(message));
+		return new EncodedEvent(event.getType(), message.getMessageType(), message.getText(),
+				encodeMessageBody(message, event.getPayload()));
 	}
 
 	/**
@@ -150,13 +160,13 @@ public final class SessionEventCodec {
 	public SessionEvent.Builder decode(EncodedEvent encoded) {
 		Assert.notNull(encoded, "encoded must not be null");
 		SessionEvent.Builder builder = SessionEvent.builder().type(encoded.type());
-		if (encoded.type() != EventType.MESSAGE) {
+		MessageType messageType = encoded.messageType();
+		if (!encoded.type().canCarryMessage() || (encoded.type() != EventType.MESSAGE && messageType == null)) {
 			return builder.payload(fromJsonMap(encoded.payload()));
 		}
-		MessageType messageType = encoded.messageType();
 		Assert.notNull(messageType, "messageType must not be null for a MESSAGE event");
 		MessageBody body = parseMessageBody(encoded.payload());
-		return builder.message(toMessage(messageType, encoded.text(), body));
+		return builder.message(toMessage(messageType, encoded.text(), body)).payload(body.payload());
 	}
 
 	/**
@@ -226,14 +236,14 @@ public final class SessionEventCodec {
 	 * model attached and is not guaranteed to be serializable; when it is not, the parts
 	 * are stored without it rather than failing the append.
 	 */
-	private String encodeMessageBody(Message message) {
+	private String encodeMessageBody(Message message, Map<String, Object> payload) {
 		List<MessagePart> parts = partsOf(message);
 		try {
-			return this.jsonMapper.writeValueAsString(new MessageBody(parts, message.getMetadata()));
+			return this.jsonMapper.writeValueAsString(new MessageBody(parts, message.getMetadata(), payload));
 		}
 		catch (JacksonException ex) {
 			logger.warn("Message metadata is not JSON-serializable; storing the message without it", ex);
-			return writeMessageBody(new MessageBody(parts, Map.of()));
+			return writeMessageBody(new MessageBody(parts, Map.of(), payload));
 		}
 	}
 
@@ -266,7 +276,8 @@ public final class SessionEventCodec {
 		try {
 			MessageBody body = this.jsonMapper.readValue(json, MessageBody.class);
 			return new MessageBody(body.parts() != null ? body.parts() : List.of(),
-					body.metadata() != null ? body.metadata() : Map.of());
+					body.metadata() != null ? body.metadata() : Map.of(),
+					body.payload() != null ? body.payload() : Map.of());
 		}
 		catch (JacksonException ex) {
 			logger.warn("Failed to deserialize message parts from JSON; returning the text only", ex);

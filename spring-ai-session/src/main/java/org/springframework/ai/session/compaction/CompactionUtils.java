@@ -57,7 +57,8 @@ final class CompactionUtils {
 	 * @return a non-null, non-empty string representing the event
 	 */
 	static String formatEvent(SessionEvent event) {
-		return formatMessage(event.getMessage());
+		// An event that is not a message is not sent to the model and costs nothing
+		return event.hasMessage() ? formatMessage(event.getMessage()) : "";
 	}
 
 	/** Renders a message the way {@link #formatEvent(SessionEvent)} renders its event. */
@@ -97,7 +98,7 @@ final class CompactionUtils {
 	 * {@code SYSTEM} summaries) keep their own handling.
 	 */
 	static boolean isStoredSystemEvent(SessionEvent event) {
-		return !event.isSynthetic() && event.getMessageType() == MessageType.SYSTEM;
+		return event.hasMessage() && !event.isSynthetic() && event.getMessageType() == MessageType.SYSTEM;
 	}
 
 	/**
@@ -110,9 +111,11 @@ final class CompactionUtils {
 	 * storing a new one replaces the previous one, and it is the integrator's
 	 * responsibility to put the complete intended content in it. Every strategy pins this
 	 * event, so it stays at the front of the view whatever the cut, and never summarizes
-	 * it. An earlier stored system message is covered when the cut passes it; one inside
-	 * the preserved window stays there, and readers such as {@code SessionMemoryAdvisor}
-	 * use only the latest one.
+	 * it. Every earlier stored system message is superseded and covered by a pass that
+	 * cuts, wherever it sits ({@link #cut}), so a compacted view holds at most one stored
+	 * system message and a reader such as {@code SessionMemoryAdvisor} can take the last
+	 * one in view order: before any compaction that is log order, after one the pinned
+	 * event is alone unless a newer one was stored since.
 	 * @param events the view, oldest first
 	 * @return the latest stored system event, or an empty list if there is none
 	 */
@@ -182,7 +185,9 @@ final class CompactionUtils {
 			if (pinnedSet.contains(event)) {
 				continue;
 			}
-			(i < preservedFrom ? covered : preserved).add(event);
+			// A stored system message that is not the pinned one is superseded: it leaves
+			// the view with this pass even when it sits inside the preserved window
+			(i < preservedFrom || isStoredSystemEvent(event) ? covered : preserved).add(event);
 		}
 		if (covered.isEmpty()) {
 			return CompactionResult.unchanged();

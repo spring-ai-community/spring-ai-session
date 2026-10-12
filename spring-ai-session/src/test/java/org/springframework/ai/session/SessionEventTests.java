@@ -83,6 +83,25 @@ class SessionEventTests {
 	}
 
 	@Test
+	void aTreeMarkerMayCarryAMessageButNeverStartsATurn() {
+		SessionEvent sent = SessionEvent.builder()
+			.sessionId("s")
+			.type(EventType.MESSAGE_SENT)
+			.payload("sessionId", "child")
+			.message(new UserMessage("task"))
+			.build();
+		SessionEvent bare = SessionEvent.builder().sessionId("s").type(EventType.MESSAGE_RECEIVED).build();
+
+		assertThat(sent.hasMessage()).isTrue();
+		assertThat(sent.getMessageType()).isEqualTo(MessageType.USER);
+		assertThat(sent.getPayload()).containsEntry("sessionId", "child");
+		assertThat(sent.isTurnStart()).isFalse();
+		assertThat(bare.hasMessage()).isFalse();
+		assertThat(EventType.MESSAGE.canCarryMessage()).isTrue();
+		assertThat(EventType.STATUS.canCarryMessage()).isFalse();
+	}
+
+	@Test
 	void payloadIsCopiedAndImmutable() {
 		Map<String, Object> payload = new java.util.HashMap<>(Map.of("a", 1));
 		SessionEvent event = SessionEvent.builder().sessionId("s").type(EventType.USAGE).payload(payload).build();

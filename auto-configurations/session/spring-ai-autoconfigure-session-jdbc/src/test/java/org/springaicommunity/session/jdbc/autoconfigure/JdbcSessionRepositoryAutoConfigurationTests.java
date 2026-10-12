@@ -124,13 +124,14 @@ class JdbcSessionRepositoryAutoConfigurationTests {
 	}
 
 	@Test
-	void indexedAttributesDefaultToThePrincipalAndAreBoundFromProperties() {
+	void indexedAttributesDefaultToTheLibrarysKeysAndAreBoundFromProperties() {
 		this.contextRunner.run(context -> assertThat(context.getBean(JdbcSessionRepository.class).getIndexedAttributes())
-			.containsExactly(SessionAttributes.PRINCIPAL_NAME));
+			.containsExactlyInAnyOrderElementsOf(JdbcSessionRepository.DEFAULT_INDEXED_ATTRIBUTES));
 		this.contextRunner
 			.withPropertyValues(JdbcSessionRepositoryProperties.CONFIG_PREFIX + ".indexed-attributes=tenant,team")
 			.run(context -> assertThat(context.getBean(JdbcSessionRepository.class).getIndexedAttributes())
-				.containsExactlyInAnyOrder("tenant", "team", SessionAttributes.PRINCIPAL_NAME));
+				.contains("tenant", "team")
+				.containsAll(JdbcSessionRepository.DEFAULT_INDEXED_ATTRIBUTES));
 	}
 
 	@Test

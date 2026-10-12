@@ -300,7 +300,7 @@ flowchart TB
         direction TB
         s1["pinned = latest stored SYSTEM event<br/>+ earlier summary turns (window strategies only)<br/>+ preamble (turn window only)"]
         s2["real = the conversation<br/>(compactableEvents: not SYSTEM, not synthetic)"]
-        s3["anything else, e.g. a superseded SYSTEM event,<br/>follows the cut: covered before it, preserved after it"]
+        s3["a superseded SYSTEM event is covered wherever it sits;<br/>anything else follows the cut: covered before it, preserved after it"]
     end
 
     split --> budget{"2. Do the real events<br/>fit the budget?"}

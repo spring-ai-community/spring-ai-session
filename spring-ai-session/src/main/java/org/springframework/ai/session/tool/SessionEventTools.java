@@ -18,6 +18,7 @@ package org.springframework.ai.session.tool;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.tool.annotation.Tool;
@@ -186,12 +188,14 @@ public class SessionEventTools {
 		}
 
 		// Synthetic summaries paraphrase the real events, which are still in the log, so
-		// searching them too would only return the same facts twice.
+		// searching them too would only return the same facts twice. Only conversation is
+		// searched: a tree marker carries a child's message too, which the child's log holds.
 		EventFilter filter = EventFilter.builder()
 			.keyword(query)
 			.page(pageNumber)
 			.pageSize(this.pageSize)
 			.excludeSynthetic(true)
+			.eventTypes(Set.of(EventType.MESSAGE))
 			.build();
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, filter);
 

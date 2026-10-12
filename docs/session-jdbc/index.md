@@ -120,12 +120,13 @@ List<SessionEvent> events = sessions.findEvents(session.id(), EventFilter.builde
 ## Design notes
 
 **Event serialisation** — each `SessionEvent` is stored in four columns: `event_type` (the
-`EventType` name), `message_type` (the `MessageType` name of a message event, else `NULL`),
-`message_content` (the plain text of a message event, kept as its own column so keyword
-searches run in SQL) and `payload` (JSON). For a message event the payload holds the
-message's ordered Spring AI `MessagePart`s and its metadata, serialised with the parts' own
-polymorphic JSON, so media, tool calls, tool results and provider-signed reasoning all
-survive a round trip. For any other event type it holds `SessionEvent.getPayload()`. Rows
+`EventType` name), `message_type` (the `MessageType` name of an event that carries a message, a
+message event or a tree marker, else `NULL`), `message_content` (the plain text of that
+message, kept as its own column so keyword searches run in SQL) and `payload` (JSON). For an
+event with a message the payload holds the message's ordered Spring AI `MessagePart`s and its
+metadata, serialised with the parts' own polymorphic JSON, so media, tool calls, tool results
+and provider-signed reasoning all survive a round trip; a tree marker stores its own payload
+in the same object. For any other event type it holds `SessionEvent.getPayload()`. Rows
 written before 0.11.0 keep their tool calls or tool responses in `message_data` and are
 still read.
 
@@ -143,9 +144,13 @@ rows a 0.10 compaction flagged `archived`; that column is no longer written.
 
 **Indexed attributes** — on every save the repository copies the metadata entries whose
 keys are configured as indexed (`JdbcSessionRepository.builder().indexedAttributes(...)`,
-always including `SessionAttributes.PRINCIPAL_NAME`) into `AI_SESSION_INDEX`, one row per
-attribute, on the first 512 characters of the value. `findByIndex(name, value)` is one
-query over that table joined to `AI_SESSION`. The `user_id` column of 0.10 is no longer
+always including the principal, `JdbcSessionRepository.DEFAULT_INDEXED_ATTRIBUTES`) into
+`AI_SESSION_INDEX`, one row per attribute, on the first 512 characters of the value.
+`findByIndex(name, value)` is one query over that table joined to `AI_SESSION`. The links
+of a session tree are not attributes but the `parent_session_id` and `root_session_id`
+columns of `AI_SESSION`, each with its own index, so `findByParentSessionId` and
+`findByRootSessionId` are plain lookups; a row written before 0.11.0 has `NULL` links,
+reads as a root and is found as its own tree even before the backfill ran. The `user_id` column of 0.10 is no longer
 part of the model: it is still written with the principal name (so a database that
 declares it `NOT NULL` keeps working), a row whose metadata has no principal is read with
 `user_id` as its principal, and the schema script copies `user_id` into the index once.
@@ -167,7 +172,7 @@ they match literally, as in the in-memory repository.
 rows come from `ORDER BY seq DESC LIMIT ?`. When that window is full, its oldest row is
 not a `USER` event and the filter neither searches text nor hides `USER` events, a second
 query fetches the rows between the nearest preceding matching `USER` event and the window
-(`seq >= (SELECT MAX(seq) … WHERE message_type = 'USER' AND seq < ?)`), bounded by one
+(`seq >= (SELECT MAX(seq) … WHERE event_type = 'MESSAGE' AND message_type = 'USER' AND seq < ?)`), bounded by one
 turn and served by the `(session_id, seq)` index. Cross-session reads use a plain `LIMIT`.
 
 **`EventFilter.pattern()` falls back to in-memory filtering.** Java regex cannot be

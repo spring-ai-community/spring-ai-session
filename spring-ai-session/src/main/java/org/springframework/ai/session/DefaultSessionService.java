@@ -21,8 +21,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.jspecify.annotations.Nullable;
@@ -51,15 +53,23 @@ public class DefaultSessionService implements SessionService {
 
 	private final SessionScopeResolver scopeResolver;
 
+	private final int maxTreeDepth;
+
+	private final Set<String> inheritedAttributes;
+
 	private DefaultSessionService(SessionRepository sessionRepository, Duration defaultTimeToLive,
-			boolean allowSystemMessages, SessionScopeResolver scopeResolver) {
+			boolean allowSystemMessages, SessionScopeResolver scopeResolver, int maxTreeDepth,
+			Set<String> inheritedAttributes) {
 		Assert.notNull(sessionRepository, "sessionRepository must not be null");
 		Assert.notNull(defaultTimeToLive, "defaultTimeToLive must not be null");
 		Assert.notNull(scopeResolver, "scopeResolver must not be null");
+		Assert.isTrue(maxTreeDepth >= 0, "maxTreeDepth must not be negative");
 		this.sessionRepository = sessionRepository;
 		this.defaultTimeToLive = defaultTimeToLive;
 		this.allowSystemMessages = allowSystemMessages;
 		this.scopeResolver = scopeResolver;
+		this.maxTreeDepth = maxTreeDepth;
+		this.inheritedAttributes = Set.copyOf(inheritedAttributes);
 	}
 
 	@Override
@@ -109,8 +119,95 @@ public class DefaultSessionService implements SessionService {
 	}
 
 	@Override
+	public List<Session> findChildren(String parentSessionId) {
+		Assert.hasText(parentSessionId, "parentSessionId must not be null or empty");
+		return this.sessionRepository.findByParentSessionId(parentSessionId);
+	}
+
+	@Override
+	public List<Session> findTree(String rootSessionId) {
+		Assert.hasText(rootSessionId, "rootSessionId must not be null or empty");
+		return this.sessionRepository.findByRootSessionId(rootSessionId);
+	}
+
+	@Override
+	public Session createChild(String parentSessionId, CreateSessionRequest request) {
+		Assert.hasText(parentSessionId, "parentSessionId must not be null or empty");
+		Assert.notNull(request, "request must not be null");
+		Session parent = this.sessionRepository.findById(parentSessionId);
+		if (parent == null) {
+			throw new IllegalArgumentException("Session not found: " + parentSessionId);
+		}
+		if (request.timeToLive() != null) {
+			throw new IllegalArgumentException(
+					"A child inherits the expiry of its parent; timeToLive must not be set");
+		}
+		int depth = depthOf(parent) + 1;
+		if (depth > this.maxTreeDepth) {
+			throw new IllegalArgumentException("Session '" + parentSessionId + "' is at depth " + (depth - 1)
+					+ "; children may not go deeper than " + this.maxTreeDepth);
+		}
+
+		// Inherited attributes come from the parent and may not diverge: the request may
+		// repeat the parent's value, not set another one, and not set one the parent lacks
+		Map<String, Object> metadata = new HashMap<>(request.metadata());
+		for (String key : this.inheritedAttributes) {
+			Object inherited = parent.metadata().get(key);
+			Object requested = metadata.get(key);
+			if (inherited == null) {
+				if (requested != null) {
+					throw new IllegalArgumentException("A child inherits '" + key + "' from its parent, which has none;"
+							+ " the request may not set it");
+				}
+				continue;
+			}
+			if (requested != null && !String.valueOf(requested).equals(String.valueOf(inherited))) {
+				throw new IllegalArgumentException("A child inherits '" + key + "' from its parent; '" + requested
+						+ "' differs from '" + inherited + "'");
+			}
+			metadata.put(key, inherited);
+		}
+		this.scopeResolver.resolve().forEach(metadata::putIfAbsent);
+
+		String childId = (request.id() != null && !request.id().isBlank()) ? request.id()
+				: UUID.randomUUID().toString();
+		Session child = Session.builder()
+			.id(childId)
+			.createdAt(Instant.now())
+			.expiresAt(parent.expiresAt())
+			.parentSessionId(parent.id())
+			.rootSessionId(parent.rootSessionId())
+			.metadata(metadata)
+			.build();
+		if (!this.sessionRepository.saveIfAbsent(child)) {
+			throw new IllegalStateException("Session already exists: " + childId);
+		}
+		this.sessionRepository.appendEvent(SessionTreeEvents.childCreated(child));
+		return child;
+	}
+
+	/** The depth of a session in its tree: 0 for a root, 1 for its children, and so on. */
+	private int depthOf(Session session) {
+		int depth = 0;
+		Session current = session;
+		while (current != null && current.isChild()) {
+			depth++;
+			if (depth > this.maxTreeDepth) {
+				break;
+			}
+			String parentId = current.parentSessionId();
+			current = (parentId != null) ? this.sessionRepository.findById(parentId) : null;
+		}
+		return depth;
+	}
+
+	@Override
 	public void delete(String sessionId) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		// Children go with their parent, never the other way round
+		for (Session child : findChildren(sessionId)) {
+			delete(child.id());
+		}
 		this.sessionRepository.delete(sessionId);
 	}
 
@@ -233,6 +330,10 @@ public class DefaultSessionService implements SessionService {
 
 		private SessionScopeResolver scopeResolver = SessionScopeResolver.none();
 
+		private int maxTreeDepth = 1;
+
+		private Set<String> inheritedAttributes = Set.of(SessionAttributes.PRINCIPAL_NAME);
+
 		public Builder sessionRepository(SessionRepository sessionRepository) {
 			Assert.notNull(sessionRepository, "sessionRepository must not be null");
 			this.sessionRepository = sessionRepository;
@@ -273,9 +374,33 @@ public class DefaultSessionService implements SessionService {
 			return this;
 		}
 
+		/**
+		 * How deep a session tree may go: {@code 1} (the default) allows children of a root
+		 * session and no children of children, like Claude Managed Agents; {@code 0} disables
+		 * {@link #createChild}.
+		 */
+		public Builder maxTreeDepth(int maxTreeDepth) {
+			Assert.isTrue(maxTreeDepth >= 0, "maxTreeDepth must not be negative");
+			this.maxTreeDepth = maxTreeDepth;
+			return this;
+		}
+
+		/**
+		 * The metadata keys a child takes from its parent and may not diverge from.
+		 * Defaults to {@link SessionAttributes#PRINCIPAL_NAME}, which is always included;
+		 * add a tenant key or the like.
+		 */
+		public Builder inheritedAttributes(Set<String> inheritedAttributes) {
+			Assert.notNull(inheritedAttributes, "inheritedAttributes must not be null");
+			Set<String> keys = new HashSet<>(inheritedAttributes);
+			keys.add(SessionAttributes.PRINCIPAL_NAME);
+			this.inheritedAttributes = keys;
+			return this;
+		}
+
 		public DefaultSessionService build() {
 			return new DefaultSessionService(this.sessionRepository, this.defaultTimeToLive, this.allowSystemMessages,
-					this.scopeResolver);
+					this.scopeResolver, this.maxTreeDepth, this.inheritedAttributes);
 		}
 
 	}

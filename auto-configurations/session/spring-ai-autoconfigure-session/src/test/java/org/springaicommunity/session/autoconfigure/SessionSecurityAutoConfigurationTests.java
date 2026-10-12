@@ -94,6 +94,18 @@ class SessionSecurityAutoConfigurationTests {
 	}
 
 	@Test
+	void aUserDefinedSessionServiceIsLeftAlone() {
+		SessionService mine = DefaultSessionService.builder()
+			.sessionRepository(InMemorySessionRepository.builder().build())
+			.build();
+		this.contextRunner.withBean("mySessionService", SessionService.class, () -> mine).run(context -> {
+			assertThat(context).hasSingleBean(SessionService.class);
+			assertThat(context.getBean(SessionService.class)).isSameAs(mine);
+			assertThat(context).hasSingleBean(SessionServiceDecorator.class);
+		});
+	}
+
+	@Test
 	void aUserDefinedResolverWins() {
 		this.contextRunner
 			.withBean("tenantResolver", SessionScopeResolver.class,

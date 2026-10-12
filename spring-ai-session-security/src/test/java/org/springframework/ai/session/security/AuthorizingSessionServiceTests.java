@@ -199,6 +199,25 @@ class AuthorizingSessionServiceTests {
 	}
 
 	@Test
+	void childrenBelongToTheParentsPrincipal() {
+		login("alice");
+		Session child = this.service.createChild(this.alices.id(), "researcher");
+		assertThat(SessionAttributes.principalName(child)).isEqualTo("alice");
+		assertThat(this.service.findChildren(this.alices.id())).extracting(Session::id).containsExactly(child.id());
+		assertThat(this.service.findTree(this.alices.id())).extracting(Session::id)
+			.containsExactly(this.alices.id(), child.id());
+
+		login("bob");
+		assertThatThrownBy(() -> this.service.createChild(this.alices.id(), "intruder"))
+			.isInstanceOf(AccessDeniedException.class);
+		assertThatThrownBy(() -> this.service.findById(child.id())).isInstanceOf(AccessDeniedException.class);
+		assertThat(this.service.findChildren(this.alices.id())).isEmpty();
+		assertThat(this.service.findTree(this.alices.id())).isEmpty();
+		assertThat(this.delegate.findChildren(this.alices.id())).hasSize(1);
+		assertThat(this.delegate.findTree(this.alices.id())).hasSize(2);
+	}
+
+	@Test
 	void unknownSessionsKeepTheDelegatesBehaviour() {
 		login("alice");
 

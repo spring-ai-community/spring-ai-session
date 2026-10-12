@@ -74,6 +74,16 @@ class TokenCountCompactionStrategyTests {
 	}
 
 	@Test
+	void noOpWhenAllEventsFitEvenIfTheViewStartsMidTurn() {
+		// Snapping the cut to the first user message must not cover a preamble when
+		// nothing needs to leave the view
+		CompactionResult result = maxTokens(100)
+			.compact(request(events(List.of(assistant("welcome")), turn("hi", "hello"))));
+
+		assertThat(result.isUnchanged()).isTrue();
+	}
+
+	@Test
 	void coversEventsExceedingBudget() {
 		// "User: u1"(8) + "Assistant: a1"(13) = 21 per turn. Budget 25: turn2 fits, both don't.
 		CompactionResult result = maxTokens(25).compact(request(events(turn("u1", "a1"), turn("u2", "a2"))));

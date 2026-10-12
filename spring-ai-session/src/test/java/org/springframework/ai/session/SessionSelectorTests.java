@@ -46,6 +46,16 @@ class SessionSelectorTests {
 	}
 
 	@Test
+	void principalLeavesChildrenOutUnlessAsked() {
+		Session root = create(SessionAttributes.PRINCIPAL_NAME, "alice");
+		Session child = this.service.createChild(root.id(), "researcher");
+
+		assertThat(SessionSelector.principal("alice").select(this.service)).containsExactly(root.id());
+		assertThat(SessionSelector.principalWithChildren("alice").select(this.service))
+			.containsExactlyInAnyOrder(root.id(), child.id());
+	}
+
+	@Test
 	void byIndexSelectsOnAnyAttribute() {
 		Session acme = create("tenant", "acme");
 		create("tenant", "globex");
