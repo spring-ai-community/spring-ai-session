@@ -51,6 +51,8 @@ import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
+import org.springframework.ai.session.SessionStatus;
+import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.SessionTreeEvents;
 import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.util.MimeTypeUtils;
@@ -195,6 +197,45 @@ public abstract class AbstractSessionRepositoryContractTests {
 			.build());
 		assertThat(this.repository.findById(first.id()).parentSessionId()).isEqualTo(root.id());
 		assertThat(this.repository.findByParentSessionId(root.id())).hasSize(2);
+	}
+
+	@Test
+	void theStatusRoundTripsAndChangesOnlyFromTheExpectedStatus() {
+		Session session = newSession("user-status");
+		assertThat(this.repository.findById(session.id()).status()).isEqualTo(SessionStatus.IDLE);
+
+		// A compare-and-set: only one of two concurrent starts wins
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, SessionStatus.RUNNING, null, null))
+			.isTrue();
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, SessionStatus.RUNNING, null, null))
+			.isFalse();
+		Session running = this.repository.findById(session.id());
+		assertThat(running.status()).isEqualTo(SessionStatus.RUNNING);
+		assertThat(running.stopReason()).isNull();
+
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.RUNNING, SessionStatus.IDLE,
+				StopReason.END_TURN, null)).isTrue();
+		assertThat(this.repository.findById(session.id()).stopReason()).isEqualTo(StopReason.END_TURN);
+
+		Instant archivedAt = Instant.parse("2026-03-01T00:00:00Z");
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, SessionStatus.TERMINATED, null,
+				archivedAt)).isTrue();
+		Session archived = this.repository.findById(session.id());
+		assertThat(archived.status()).isEqualTo(SessionStatus.TERMINATED);
+		assertThat(archived.stopReason()).isNull();
+		assertThat(archived.archivedAt()).isEqualTo(archivedAt);
+		assertThat(archived.isArchived()).isTrue();
+		// Nothing else changed, and an unknown session is not updated
+		assertThat(SessionAttributes.principalName(archived)).isEqualTo("user-status");
+		assertThat(this.repository.updateStatus("missing-" + UUID.randomUUID(), SessionStatus.IDLE,
+				SessionStatus.RUNNING, null, null)).isFalse();
+
+		// save() carries the status like any other field
+		Session saved = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.status(SessionStatus.RUNNING)
+			.build());
+		assertThat(this.repository.findById(saved.id()).status()).isEqualTo(SessionStatus.RUNNING);
 	}
 
 	@Test

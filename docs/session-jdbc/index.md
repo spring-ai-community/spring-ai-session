@@ -9,7 +9,7 @@ and H2 out of the box.
 ## Tables
 
 ```
-AI_SESSION          — session metadata (id, TTL, metadata JSON, event_version)
+AI_SESSION          — session metadata (id, tree links, status, TTL, metadata JSON, event_version)
 AI_SESSION_INDEX    — indexed metadata attributes (session_id, attr_name, attr_value), FK → AI_SESSION
 AI_SESSION_EVENT    — event log (FK → AI_SESSION, ON DELETE CASCADE)
 ```

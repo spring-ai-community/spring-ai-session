@@ -48,6 +48,8 @@ import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
+import org.springframework.ai.session.SessionStatus;
+import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.support.SessionEventCodec;
 import org.springframework.dao.DuplicateKeyException;
@@ -66,7 +68,7 @@ import org.springframework.util.Assert;
  * Three tables are required:
  * <ul>
  * <li>{@code AI_SESSION} — session metadata (id, the parent and root links of a session
- * tree, TTL, metadata JSON, event_version)</li>
+ * tree, status, stop reason, archive time, TTL, metadata JSON, event_version)</li>
  * <li>{@code AI_SESSION_INDEX} — the indexed metadata attributes of each session, one row
  * per attribute name (FK → AI_SESSION)</li>
  * <li>{@code AI_SESSION_EVENT} — append-only event log (FK → AI_SESSION)</li>
@@ -132,7 +134,7 @@ import org.springframework.util.Assert;
  * principal ({@code legacyUserId}, {@code SessionRowMapper}); {@code message_data} is read
  * for message rows without a {@code payload} ({@code SessionEventRowMapper}); the
  * {@code archived} flag bounds the view of a session without a boundary
- * ({@code findActiveView}); {@code NULL} tree columns read as a root
+ * ({@code findActiveView}); {@code NULL} tree and status columns read as an idle root
  * ({@code SessionRowMapper}, {@code findByRootSessionId}). The bundled H2 and PostgreSQL
  * scripts add the 0.11 columns to an existing table; MySQL needs the statements in the
  * migration note.
@@ -168,8 +170,12 @@ public final class JdbcSessionRepository implements SessionRepository {
 	// @formatter:off
 
 	private static final String SELECT_SESSION_COLUMNS =
-		"SELECT s.id, s.user_id, s.parent_session_id, s.root_session_id, s.created_at, s.expires_at, s.metadata,"
-		+ " s.event_version FROM AI_SESSION s";
+		"SELECT s.id, s.user_id, s.parent_session_id, s.root_session_id, s.status, s.stop_reason, s.archived_at,"
+		+ " s.created_at, s.expires_at, s.metadata, s.event_version FROM AI_SESSION s";
+
+	// The status compare-and-set: one turn at a time, no archive of a running session
+	private static final String UPDATE_SESSION_STATUS =
+		"UPDATE AI_SESSION SET status = ?, stop_reason = ?, archived_at = ? WHERE id = ? AND status = ?";
 
 	private static final String SELECT_SESSION_BY_ID =
 		SELECT_SESSION_COLUMNS + " WHERE s.id = ?";
@@ -286,7 +292,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 		Assert.notNull(session, "session must not be null");
 		this.transactionTemplate.executeWithoutResult(status -> {
 			this.jdbcTemplate.update(this.dialect.getUpsertSessionSql(), session.id(), legacyUserId(session),
-					session.parentSessionId(), session.rootSessionId(), toUtc(session.createdAt()),
+					session.parentSessionId(), session.rootSessionId(), session.status().name(),
+					name(session.stopReason()), toUtc(session.archivedAt()), toUtc(session.createdAt()),
 					toUtc(session.expiresAt()), this.codec.toJson(session.metadata()));
 			this.jdbcTemplate.update(DELETE_SESSION_INDEX, session.id());
 			insertIndexRows(session);
@@ -303,6 +310,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 			try {
 				if (this.jdbcTemplate.update(this.dialect.getInsertSessionIfAbsentSql(), session.id(),
 						legacyUserId(session), session.parentSessionId(), session.rootSessionId(),
+						session.status().name(), name(session.stopReason()), toUtc(session.archivedAt()),
 						toUtc(session.createdAt()), toUtc(session.expiresAt()),
 						this.codec.toJson(session.metadata())) != 1) {
 					return false;
@@ -357,6 +365,20 @@ public final class JdbcSessionRepository implements SessionRepository {
 	public List<Session> findByParentSessionId(String parentSessionId) {
 		Assert.hasText(parentSessionId, "parentSessionId must not be null or empty");
 		return this.jdbcTemplate.query(SELECT_SESSIONS_BY_PARENT, new SessionRowMapper(), parentSessionId);
+	}
+
+	@Override
+	public boolean updateStatus(String sessionId, SessionStatus expected, SessionStatus status,
+			@Nullable StopReason stopReason, @Nullable Instant archivedAt) {
+		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		Assert.notNull(expected, "expected must not be null");
+		Assert.notNull(status, "status must not be null");
+		return this.jdbcTemplate.update(UPDATE_SESSION_STATUS, status.name(), name(stopReason), toUtc(archivedAt),
+				sessionId, expected.name()) == 1;
+	}
+
+	@Nullable private static String name(@Nullable Enum<?> value) {
+		return value != null ? value.name() : null;
 	}
 
 	@Override
@@ -730,7 +752,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 	}
 
 	@Nullable private static String messageTypeName(@Nullable MessageType messageType) {
-		return messageType != null ? messageType.name() : null;
+		return name(messageType);
 	}
 
 	/**
@@ -795,12 +817,18 @@ public final class JdbcSessionRepository implements SessionRepository {
 			if (legacyUserId != null && !legacyUserId.isEmpty()) {
 				metadata.putIfAbsent(SessionAttributes.PRINCIPAL_NAME, legacyUserId);
 			}
-			// A row written before 0.11.0 has no tree columns: NULLs make it a root
+			// A row written before 0.11.0 has no tree or status columns: NULLs make it an
+			// idle root
+			String status = rs.getString("status");
+			String stopReason = rs.getString("stop_reason");
 			Session.Builder builder = Session.builder()
 				.id(rs.getString("id"))
 				.createdAt(Objects.requireNonNull(fromUtc(rs, "created_at")))
 				.parentSessionId(rs.getString("parent_session_id"))
 				.rootSessionId(rs.getString("root_session_id"))
+				.status(status != null ? SessionStatus.valueOf(status) : SessionStatus.IDLE)
+				.stopReason(stopReason != null ? StopReason.valueOf(stopReason) : null)
+				.archivedAt(fromUtc(rs, "archived_at"))
 				.metadata(metadata);
 			if (expiresAt != null) {
 				builder.expiresAt(expiresAt);

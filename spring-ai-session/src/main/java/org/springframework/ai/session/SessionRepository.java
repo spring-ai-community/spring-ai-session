@@ -89,6 +89,23 @@ public interface SessionRepository {
 	List<Session> findByRootSessionId(String rootSessionId);
 
 	/**
+	 * Changes the session's status atomically, only if its current status is
+	 * {@code expected}: the compare-and-set that keeps two concurrent turns from both
+	 * starting, and an archive from landing on a running session. On success the status,
+	 * the stop reason and the archive time are replaced as given (a {@code null} clears
+	 * the field); nothing else about the session changes.
+	 * @param sessionId the session
+	 * @param expected the status the session must have for the change to apply
+	 * @param status the new status
+	 * @param stopReason the stop reason to record, or {@code null} to clear it
+	 * @param archivedAt the archive time to record, or {@code null} to clear it
+	 * @return {@code true} when the status was changed, {@code false} when the session
+	 * does not exist or its status is not {@code expected}
+	 */
+	boolean updateStatus(String sessionId, SessionStatus expected, SessionStatus status,
+			@Nullable StopReason stopReason, @Nullable Instant archivedAt);
+
+	/**
 	 * Deletes the session with the given ID.
 	 */
 	void delete(String sessionId);

@@ -31,6 +31,8 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
@@ -44,6 +46,7 @@ import org.springframework.ai.content.Media;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.MessageFilter;
 import org.springframework.ai.session.Session;
@@ -51,6 +54,9 @@ import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionStatus;
+import org.springframework.ai.session.SessionStatusEvents;
+import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.compaction.TurnCountTrigger;
@@ -60,8 +66,11 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.util.MimeTypeUtils;
 
+import reactor.core.publisher.Flux;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
@@ -325,7 +334,7 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void compactionIsTriggeredAfterThreshold() {
 		// Wire advisor with a very low compaction threshold (1 turn) and small window
-		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.compactionTrigger(new TurnCountTrigger(2))
 			.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(2).build())
 			.build();
@@ -349,7 +358,7 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void compactionWaitsUntilTheTurnIsComplete() {
 		AtomicInteger triggerCalls = new AtomicInteger();
-		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.compactionTrigger(request -> triggerCalls.incrementAndGet() > 0)
 			.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(2).build())
 			.build();
@@ -373,7 +382,7 @@ class SessionMemoryAdvisorIT {
 		// whole conversation would be sent twice.
 		ChatClient summarizer = mock(ChatClient.class, Answers.RETURNS_DEEP_STUBS);
 		given(summarizer.prompt().system(anyString()).user(anyString()).call().content()).willReturn("summary");
-		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.compactionTrigger(request -> true)
 			.compactionStrategy(RecursiveSummarizationCompactionStrategy.builder(summarizer).maxEvents(4).build())
 			.build();
@@ -409,7 +418,7 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void compactionFailureDoesNotFailTheCall() {
-		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.compactionTrigger(request -> true)
 			.compactionStrategy(request -> {
 				throw new IllegalStateException("summarizer unavailable");
@@ -781,7 +790,7 @@ class SessionMemoryAdvisorIT {
 	void customMessageFilterBlocksUserMessagePersistenceInBefore() {
 		// A filter rejecting USER messages must prevent persistence in before(), while
 		// the outgoing prompt still carries the user message.
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.messageFilter(msg -> msg.getMessageType() != MessageType.USER)
 			.build();
 
@@ -797,7 +806,7 @@ class SessionMemoryAdvisorIT {
 	void customMessageFilterExcludesToolResponseMessages() {
 		// Store user + assistant turns but keep verbose tool responses out of the
 		// session log.
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
 				.and(MessageFilter.skipEmptyMessages()))
 			.build();
@@ -827,7 +836,7 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void customMessageFilterAppliedInAfter() {
 		// A content-based filter must gate which generations get persisted.
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.messageFilter(MessageFilter.containsText("confidential").negate())
 			.build();
 
@@ -844,7 +853,7 @@ class SessionMemoryAdvisorIT {
 	void composedCustomFilterStillSkipsEmptyAssistantMessages() {
 		// Composing a custom filter with skipEmptyMessages() preserves the
 		// empty end_turn protection (compose, don't replace).
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
 				.and(MessageFilter.skipEmptyMessages()))
 			.build();
@@ -861,7 +870,7 @@ class SessionMemoryAdvisorIT {
 	void requestEventIdGeneratorMakesRetriedBeforeCallIdempotent() {
 		// A fixed id simulates a caller supplying a deterministic id for retry safety
 		// (e.g. derived from an upstream durability layer's own idempotency key).
-		SessionMemoryAdvisor deterministicAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor deterministicAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.requestEventIdGenerator((request, message) -> "fixed-request-id")
 			.build();
 
@@ -876,7 +885,7 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void responseEventIdGeneratorMakesRetriedAfterCallIdempotent() {
-		SessionMemoryAdvisor deterministicAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor deterministicAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.responseEventIdGenerator((response, message) -> "fixed-response-id")
 			.build();
 
@@ -907,14 +916,14 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void builderRejectsNullMessageFilter() {
-		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService).messageFilter(null))
+		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false).messageFilter(null))
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("messageFilter must not be null");
 	}
 
 	@Test
 	void builderRejectsOnlyTriggerWithoutStrategy() {
-		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService)
+		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.compactionTrigger(new TurnCountTrigger(5))
 			.build()).isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("compactionTrigger and compactionStrategy must be set together");
@@ -922,7 +931,7 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void builderRejectsOnlyStrategyWithoutTrigger() {
-		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService)
+		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(5).build())
 			.build()).isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("compactionTrigger and compactionStrategy must be set together");
@@ -937,7 +946,7 @@ class SessionMemoryAdvisorIT {
 		// #44: a lastN window that landed on the tool result used to send an assistant
 		// tool call without the tool message answering it, which providers reject.
 		storeToolTurn(this.sessionId, "Weather in Paris?", "call-1", "Sunny.");
-		SessionMemoryAdvisor windowed = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor windowed = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.eventFilter(EventFilter.lastN(2))
 			.build();
 
@@ -951,7 +960,7 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void messageTypesFilterHidingToolResultsDropsTheStrandedToolCall() {
 		storeToolTurn(this.sessionId, "Weather in Paris?", "call-1", "Sunny.");
-		SessionMemoryAdvisor noToolMessages = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor noToolMessages = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.eventFilter(EventFilter.builder().messageTypes(Set.of(MessageType.USER, MessageType.ASSISTANT)).build())
 			.build();
 
@@ -1025,7 +1034,7 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void aToolResponseWhoseCallWasStoredIsPersistedDespiteTheMessageFilter() {
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT))
 			.build();
 		AdvisorChain chain = mock(AdvisorChain.class);
@@ -1047,7 +1056,7 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void aToolResponseWhoseCallWasNotStoredIsSkippedDespiteTheMessageFilter() {
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.messageFilter(message -> !(message instanceof AssistantMessage assistant && assistant.hasToolCalls()))
 			.build();
 		AdvisorChain chain = mock(AdvisorChain.class);
@@ -1074,7 +1083,7 @@ class SessionMemoryAdvisorIT {
 			this.sessionService.appendMessage(this.sessionId, new UserMessage("q" + i));
 			this.sessionService.appendMessage(this.sessionId, new AssistantMessage("a" + i));
 		}
-		SessionMemoryAdvisor windowed = SessionMemoryAdvisor.builder(this.sessionService)
+		SessionMemoryAdvisor windowed = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
 			.eventFilter(EventFilter.lastN(2))
 			.build();
 
@@ -1157,6 +1166,135 @@ class SessionMemoryAdvisorIT {
 			.build();
 	}
 
+	// --- Turn status ---
+
+	private SessionMemoryAdvisor tracking() {
+		return SessionMemoryAdvisor.builder(this.sessionService).build();
+	}
+
+	@Test
+	void aCallRunsATurnAndRecordsItInTheStatusAndTheLog() {
+		SessionMemoryAdvisor tracking = tracking();
+		CallAdvisorChain chain = mock(CallAdvisorChain.class);
+		given(chain.nextCall(any())).willAnswer(invocation -> {
+			assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
+			return buildResponse(this.sessionId, "Hi!");
+		});
+
+		tracking.adviseCall(buildRequest(this.sessionId, "Hello"), chain);
+
+		Session session = this.sessionService.findById(this.sessionId);
+		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(session.stopReason()).isEqualTo(StopReason.END_TURN);
+		assertThat(this.sessionService.getEvents(this.sessionId, EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build()))
+			.extracting(SessionStatusEvents::status)
+			.containsExactly(SessionStatus.RUNNING, SessionStatus.IDLE);
+		// The conversation is untouched by the status events
+		assertThat(describe(this.sessionService.getActiveMessages(this.sessionId))).containsExactly("Hello", "Hi!");
+	}
+
+	@Test
+	void aToolLoopKeepsTheSessionRunningUntilTheFinalReply() {
+		SessionMemoryAdvisor tracking = tracking();
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		tracking.before(buildRequest(this.sessionId, "Weather?"), chain);
+		tracking.after(buildResponseFromMessages(this.sessionId, toolCall("c1")), chain);
+		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
+
+		// Round 2: the prompt ends with the tool result, so the running turn continues
+		ChatClientRequest round2 = ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(new UserMessage("Weather?"), toolCall("c1"), toolResponse("c1"))))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build();
+		tracking.before(round2, chain);
+		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
+		tracking.after(buildResponse(this.sessionId, "Sunny."), chain);
+
+		Session session = this.sessionService.findById(this.sessionId);
+		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(session.stopReason()).isEqualTo(StopReason.END_TURN);
+	}
+
+	@Test
+	void aFailedCallEndsTheTurnWithAnError() {
+		SessionMemoryAdvisor tracking = tracking();
+		CallAdvisorChain chain = mock(CallAdvisorChain.class);
+		given(chain.nextCall(any())).willThrow(new IllegalStateException("model down"));
+
+		assertThatThrownBy(() -> tracking.adviseCall(buildRequest(this.sessionId, "Hello"), chain))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessage("model down");
+
+		Session session = this.sessionService.findById(this.sessionId);
+		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(session.stopReason()).isEqualTo(StopReason.ERROR);
+		// The next call starts a fresh turn
+		assertThat(tracking.before(buildRequest(this.sessionId, "Again"), mock(AdvisorChain.class))).isNotNull();
+	}
+
+	@Test
+	void aFailedStreamEndsTheTurnWithAnError() {
+		SessionMemoryAdvisor tracking = tracking();
+		StreamAdvisorChain chain = mock(StreamAdvisorChain.class);
+		given(chain.nextStream(any())).willReturn(Flux.error(new IllegalStateException("stream down")));
+
+		assertThatThrownBy(() -> tracking.adviseStream(buildRequest(this.sessionId, "Hello"), chain).blockLast())
+			.hasMessageContaining("stream down");
+
+		Session session = this.sessionService.findById(this.sessionId);
+		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(session.stopReason()).isEqualTo(StopReason.ERROR);
+	}
+
+	@Test
+	void aFailureInsideBeforeEndsTheTurnItStarted() {
+		SessionMemoryAdvisor tracking = tracking();
+		ChatClientRequest badFilter = ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(new UserMessage("Hello"))))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId,
+					SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, "not a filter"))
+			.build();
+
+		assertThatThrownBy(() -> tracking.before(badFilter, mock(AdvisorChain.class)))
+			.isInstanceOf(IllegalArgumentException.class);
+
+		Session session = this.sessionService.findById(this.sessionId);
+		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(session.stopReason()).isEqualTo(StopReason.ERROR);
+		// A rejected start (another caller's turn) is left alone: it is not ours to end
+		this.sessionService.startTurn(this.sessionId);
+		assertThatThrownBy(() -> tracking.before(buildRequest(this.sessionId, "Again"), mock(AdvisorChain.class)))
+			.isInstanceOf(IllegalStateException.class);
+		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
+	}
+
+	@Test
+	void aSecondConcurrentTurnOnTheSameSessionIsRejected() {
+		SessionMemoryAdvisor tracking = tracking();
+		AdvisorChain chain = mock(AdvisorChain.class);
+		tracking.before(buildRequest(this.sessionId, "First"), chain);
+
+		assertThatThrownBy(() -> tracking.before(buildRequest(this.sessionId, "Second"), chain))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("could not start a turn: it is RUNNING");
+
+		// Ending the abandoned turn by hand opens the session again
+		this.sessionService.endTurn(this.sessionId, StopReason.INTERRUPTED);
+		assertThat(tracking.before(buildRequest(this.sessionId, "Second"), chain)).isNotNull();
+	}
+
+	@Test
+	void trackStatusFalseLeavesTheStatusAlone() {
+		AdvisorChain chain = mock(AdvisorChain.class);
+		this.advisor.before(buildRequest(this.sessionId, "Hello"), chain);
+		this.advisor.after(buildResponse(this.sessionId, "Hi!"), chain);
+
+		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(this.sessionService.getEvents(this.sessionId, EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build()))
+			.isEmpty();
+	}
+
 	// --- Spring Boot configuration ---
 
 	@SpringBootConfiguration
@@ -1178,7 +1316,9 @@ class SessionMemoryAdvisorIT {
 
 		@Bean
 		SessionMemoryAdvisor sessionMemoryAdvisor(SessionService sessionService) {
-			return SessionMemoryAdvisor.builder(sessionService).build();
+			// The hook-level tests call before() and after() in isolation and out of order;
+			// the turn status is exercised by the dedicated status tests below
+			return SessionMemoryAdvisor.builder(sessionService).trackStatus(false).build();
 		}
 
 	}

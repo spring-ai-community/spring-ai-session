@@ -75,7 +75,8 @@ With Spring Boot nothing else is needed. The auto-configuration registers a
 
 - every session created through the service carries the caller's principal name;
 - a caller who is not that principal gets `AccessDeniedException` from `findById`,
-  `getEvents`, `appendEvent`, `compact` and `delete`;
+  `getEvents`, `appendEvent`, `compact`, `startTurn`, `endTurn`, `archive`,
+  `aggregateStatus` and `delete`;
 - `findByIndex` and `findEvents(sessionIds, filter)` return only the caller's sessions;
 - `create` with another principal in the request's metadata is denied;
 - an anonymous caller is denied every session, and a session without a principal

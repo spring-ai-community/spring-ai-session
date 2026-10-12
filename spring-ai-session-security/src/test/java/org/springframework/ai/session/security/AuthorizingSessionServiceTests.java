@@ -34,6 +34,8 @@ import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionSelector;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionStatus;
+import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.tool.CrossSessionRecallTools;
 import org.springframework.security.access.AccessDeniedException;
@@ -246,6 +248,26 @@ class AuthorizingSessionServiceTests {
 
 		assertThat(session.metadata()).containsEntry("agent", "support")
 			.containsEntry(SessionAttributes.PRINCIPAL_NAME, "alice");
+	}
+
+	@Test
+	void turnsArchiveAndAggregateStatusAreGuardedLikeAnyOtherCall() {
+		login("alice");
+		assertThat(this.service.startTurn(this.alices.id()).status()).isEqualTo(SessionStatus.RUNNING);
+		assertThat(this.service.aggregateStatus(this.alices.id())).isEqualTo(SessionStatus.RUNNING);
+		assertThat(this.service.endTurn(this.alices.id(), StopReason.END_TURN).status()).isEqualTo(SessionStatus.IDLE);
+
+		login("bob");
+		assertThatThrownBy(() -> this.service.startTurn(this.alices.id())).isInstanceOf(AccessDeniedException.class);
+		assertThatThrownBy(() -> this.service.endTurn(this.alices.id(), StopReason.END_TURN))
+			.isInstanceOf(AccessDeniedException.class);
+		assertThatThrownBy(() -> this.service.aggregateStatus(this.alices.id()))
+			.isInstanceOf(AccessDeniedException.class);
+		assertThatThrownBy(() -> this.service.archive(this.alices.id())).isInstanceOf(AccessDeniedException.class);
+		assertThat(this.delegate.findById(this.alices.id()).isArchived()).isFalse();
+
+		login("alice");
+		assertThat(this.service.archive(this.alices.id()).isArchived()).isTrue();
 	}
 
 }

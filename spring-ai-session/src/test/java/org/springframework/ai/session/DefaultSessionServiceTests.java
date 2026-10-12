@@ -705,4 +705,103 @@ class DefaultSessionServiceTests {
 		assertThat(this.service.deleteExpiredSessions(Instant.now())).isZero();
 	}
 
+	// --- Status, turns and archive ---
+
+	@Test
+	void aTurnRunsBetweenStartAndEndAndIsRecordedInTheLog() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
+
+		Session running = this.service.startTurn(session.id());
+		assertThat(running.status()).isEqualTo(SessionStatus.RUNNING);
+		assertThat(running.stopReason()).isNull();
+
+		Session idle = this.service.endTurn(session.id(), StopReason.END_TURN);
+		assertThat(idle.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(idle.stopReason()).isEqualTo(StopReason.END_TURN);
+
+		List<SessionEvent> statuses = this.service.getEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build());
+		assertThat(statuses).extracting(SessionStatusEvents::status)
+			.containsExactly(SessionStatus.RUNNING, SessionStatus.IDLE);
+		assertThat(SessionStatusEvents.stopReason(statuses.get(1))).isEqualTo(StopReason.END_TURN);
+		// Status events are runtime state, not conversation
+		assertThat(this.service.getActiveMessages(session.id())).isEmpty();
+	}
+
+	@Test
+	void aSecondTurnCannotStartWhileOneIsRunning() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		this.service.startTurn(session.id());
+
+		assertThatIllegalStateException().isThrownBy(() -> this.service.startTurn(session.id()))
+			.withMessageContaining("could not start a turn: it is RUNNING");
+		// An abandoned turn is ended by hand
+		this.service.endTurn(session.id(), StopReason.INTERRUPTED);
+		assertThat(this.service.startTurn(session.id()).status()).isEqualTo(SessionStatus.RUNNING);
+		// Ending a turn that is not running, or on an unknown session, is an error
+		this.service.endTurn(session.id(), StopReason.END_TURN);
+		assertThatIllegalStateException().isThrownBy(() -> this.service.endTurn(session.id(), StopReason.END_TURN))
+			.withMessageContaining("not running");
+		assertThatIllegalArgumentException().isThrownBy(() -> this.service.startTurn("missing"));
+		assertThatIllegalArgumentException().isThrownBy(() -> this.service.endTurn("missing", StopReason.END_TURN));
+	}
+
+	@Test
+	void archiveTerminatesTheSessionAndItsChildrenAndRejectsEverythingAfter() {
+		Session root = root();
+		Session child = this.service.createChild(root.id(), "researcher");
+		this.service.appendMessage(root.id(), new UserMessage("before"));
+
+		Session archived = this.service.archive(root.id());
+
+		assertThat(archived.isArchived()).isTrue();
+		assertThat(archived.archivedAt()).isNotNull();
+		assertThat(this.service.findById(child.id()).isArchived()).isTrue();
+		assertThat(this.service.getEvents(root.id(), EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build()))
+			.extracting(SessionStatusEvents::status)
+			.containsExactly(SessionStatus.TERMINATED);
+		// Read-only from now on: history stays, nothing new lands
+		assertThat(this.service.getActiveMessages(root.id())).extracting(m -> m.getText()).containsExactly("before");
+		assertThatIllegalStateException()
+			.isThrownBy(() -> this.service.appendMessage(root.id(), new UserMessage("after")))
+			.withMessageContaining("archived");
+		assertThatIllegalStateException().isThrownBy(() -> this.service.startTurn(root.id()))
+			.withMessageContaining("archived");
+		assertThatIllegalStateException().isThrownBy(() -> this.service.createChild(root.id(), "late"))
+			.withMessageContaining("archived");
+		assertThatIllegalStateException().isThrownBy(() -> this.service.compact(root.id(), request -> true,
+				org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy.builder().maxEvents(1).build()));
+		// Idempotent, and a child can be archived on its own without touching the parent
+		assertThat(this.service.archive(root.id()).archivedAt()).isEqualTo(archived.archivedAt());
+		Session other = root();
+		Session otherChild = this.service.createChild(other.id(), "writer");
+		this.service.archive(otherChild.id());
+		assertThat(this.service.findById(other.id()).isArchived()).isFalse();
+		assertThat(this.service.findById(otherChild.id()).isArchived()).isTrue();
+	}
+
+	@Test
+	void archiveRefusesARunningTreeAndAggregateStatusFollowsTheChildren() {
+		Session root = root();
+		Session child = this.service.createChild(root.id(), "researcher");
+		assertThat(this.service.aggregateStatus(root.id())).isEqualTo(SessionStatus.IDLE);
+
+		this.service.startTurn(child.id());
+		assertThat(this.service.findById(root.id()).status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(this.service.aggregateStatus(root.id())).isEqualTo(SessionStatus.RUNNING);
+		assertThatIllegalStateException().isThrownBy(() -> this.service.archive(root.id()))
+			.withMessageContaining("running");
+		assertThat(this.service.findById(root.id()).isArchived()).isFalse();
+		assertThat(this.service.findById(child.id()).isArchived()).isFalse();
+
+		this.service.endTurn(child.id(), StopReason.END_TURN);
+		this.service.startTurn(root.id());
+		assertThatIllegalStateException().isThrownBy(() -> this.service.archive(root.id()));
+		this.service.endTurn(root.id(), StopReason.END_TURN);
+		this.service.archive(root.id());
+		assertThat(this.service.aggregateStatus(root.id())).isEqualTo(SessionStatus.TERMINATED);
+		assertThatIllegalArgumentException().isThrownBy(() -> this.service.aggregateStatus("missing"));
+	}
+
 }

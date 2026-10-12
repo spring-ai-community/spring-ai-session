@@ -18,6 +18,9 @@ The event log is stored separately in the repository and fetched on demand.
 | `expiresAt` | Expiry instant. Sessions created through `SessionService.create` always get one: the request's `timeToLive`, or the service's default (60 days, configurable); a child takes its parent's. `null` (no expiry) is only possible for a `Session` built directly with `Session.builder().expiresAt(null)`, and for the children of such a session. |
 | `parentSessionId` | The session a child was created from; `null` for a root session. Set by `SessionService.createChild` only. |
 | `rootSessionId` | The root of the session's tree: the session's own id for a root, the tree's root for a child. Never `null`, so the whole tree shares one key. |
+| `status` | The session's own `SessionStatus`: `IDLE` between turns, `RUNNING` while a turn is in progress, `TERMINATED` once archived. See [Status, turns and archive](#status-turns-and-archive). |
+| `stopReason` | Why the last turn ended (`END_TURN`, `REQUIRES_ACTION`, `BUDGET_REACHED`, `INTERRUPTED`, `ERROR`); `null` while running or before the first turn ended. |
+| `archivedAt` | When the session was archived; `null` while it is not. `isArchived()` is `status == TERMINATED`. |
 | `metadata` | Arbitrary key/value pairs: the scope attributes (`SessionAttributes.PRINCIPAL_NAME` for the owning principal), model info, tags, etc. |
 
 A session has no owner field. Who it belongs to is a metadata attribute, filled by a
@@ -80,7 +83,7 @@ An event is appended once and never changed. Compaction does not flag it: it app
 | `EventType` | Records | Message |
 |---|---|---|
 | `MESSAGE` | A conversation message. The only type that takes part in prompt assembly and compaction | yes |
-| `STATUS` | A status change of the session (running, idle with a stop reason, terminated) | no |
+| `STATUS` | A status change of the session: `RUNNING` when a turn starts, `IDLE` with a stop reason when it ends, `TERMINATED` on archive. `SessionStatusEvents` builds and reads them | no |
 | `INTERRUPT` | A caller interrupted the running turn | no |
 | `TOOL_CONFIRMATION` | A caller allowed or denied a tool call that was waiting for confirmation | no |
 | `USAGE` | Token usage of a model call, or a cumulative snapshot | no |
@@ -523,6 +526,45 @@ int removed = service.deleteExpiredSessions(Instant.now());
 ```
 
 Deleted sessions are removed from the repository entirely — there is no tombstone state.
+
+### Status, turns and archive
+
+A session records what it is doing. A **turn** is one model call including its tool loop:
+`startTurn(id)` puts the session in `RUNNING` and `endTurn(id, stopReason)` back in `IDLE`,
+each appending a `STATUS` event so the log tells when every turn started and how it ended.
+`SessionMemoryAdvisor` does both around every `ChatClient` call (see
+[ChatClient Integration](../chat-client/chat-client.md#what-the-advisor-does)). The start is
+a compare-and-set from `IDLE`, so two concurrent calls cannot run turns on one session at
+the same time: the second gets an `IllegalStateException`. A turn that was abandoned, for
+example by a crashed process, is ended by hand with `endTurn(id, StopReason.INTERRUPTED)`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE : create / createChild
+    IDLE --> RUNNING : startTurn (compare-and-set)
+    RUNNING --> IDLE : endTurn(stopReason)
+    IDLE --> TERMINATED : archive (cascades to children)
+    TERMINATED --> [*] : delete
+    IDLE --> [*] : delete
+    note right of RUNNING
+        a second startTurn fails;
+        the advisor ends a failed call with ERROR
+    end note
+    note right of TERMINATED
+        read-only: no events, turns or children;
+        history stays readable until delete
+    end note
+```
+
+`archive(id)` puts an idle session and its children in `TERMINATED`, stamps `archivedAt`
+and appends a `STATUS` event; from then on the session accepts no events, turns or
+children, while its history stays readable until it is deleted. A running session, or one
+with a running child, cannot be archived: interrupt or wait first. Archived sessions are
+still returned by `findByIndex`, `findChildren` and `findTree`, but the `SessionSelector`
+factories for a principal leave them out.
+
+`aggregateStatus(rootId)` is the status of a tree as a whole, never stored: `RUNNING` while
+any member runs a turn, otherwise the root's own status.
 
 ### Expiry cleanup
 

@@ -34,16 +34,19 @@ public class H2JdbcSessionRepositoryDialect implements JdbcSessionRepositoryDial
 		return """
 				MERGE INTO AI_SESSION t
 				USING (VALUES (CAST(? AS VARCHAR(255)), CAST(? AS VARCHAR(255)), CAST(? AS VARCHAR(255)),
-						CAST(? AS VARCHAR(255)), CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP), CAST(? AS LONGVARCHAR)))
-					AS s (id, user_id, parent_session_id, root_session_id, created_at, expires_at, metadata)
+						CAST(? AS VARCHAR(255)), CAST(? AS VARCHAR(16)), CAST(? AS VARCHAR(32)), CAST(? AS TIMESTAMP),
+						CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP), CAST(? AS LONGVARCHAR)))
+					AS s (id, user_id, parent_session_id, root_session_id, status, stop_reason, archived_at,
+						created_at, expires_at, metadata)
 				ON t.id = s.id
 				WHEN MATCHED THEN UPDATE
 					SET user_id = s.user_id, parent_session_id = s.parent_session_id,
-						root_session_id = s.root_session_id, expires_at = s.expires_at, metadata = s.metadata
-				WHEN NOT MATCHED THEN INSERT (id, user_id, parent_session_id, root_session_id, created_at, expires_at,
-						metadata)
-					VALUES (s.id, s.user_id, s.parent_session_id, s.root_session_id, s.created_at, s.expires_at,
-						s.metadata)
+						root_session_id = s.root_session_id, status = s.status, stop_reason = s.stop_reason,
+						archived_at = s.archived_at, expires_at = s.expires_at, metadata = s.metadata
+				WHEN NOT MATCHED THEN INSERT (id, user_id, parent_session_id, root_session_id, status, stop_reason,
+						archived_at, created_at, expires_at, metadata)
+					VALUES (s.id, s.user_id, s.parent_session_id, s.root_session_id, s.status, s.stop_reason,
+						s.archived_at, s.created_at, s.expires_at, s.metadata)
 				""";
 	}
 

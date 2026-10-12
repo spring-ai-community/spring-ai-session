@@ -39,29 +39,35 @@ public interface SessionSelector {
 	List<String> select(SessionService sessionService);
 
 	/**
-	 * The sessions whose metadata holds {@code value} under {@code name}, children
-	 * included.
+	 * The sessions whose metadata holds {@code value} under {@code name}, children and
+	 * archived sessions included.
 	 */
 	static SessionSelector byIndex(String name, String value) {
 		return sessionService -> sessionService.findByIndex(name, value).stream().map(Session::id).toList();
 	}
 
 	/**
-	 * The root sessions of the given principal ({@link SessionAttributes#PRINCIPAL_NAME}).
-	 * Children are left out: a sub-agent's log is not the principal's conversation. Use
-	 * {@link #principalWithChildren} to include them.
+	 * The root sessions of the given principal ({@link SessionAttributes#PRINCIPAL_NAME})
+	 * that are not archived. Children are left out: a sub-agent's log is not the
+	 * principal's conversation. Use {@link #principalWithChildren} to include them, and
+	 * {@link #byIndex} to include archived sessions.
 	 */
 	static SessionSelector principal(String principalName) {
 		return sessionService -> sessionService.findByIndex(SessionAttributes.PRINCIPAL_NAME, principalName)
 			.stream()
 			.filter(Session::isRoot)
+			.filter(s -> !s.isArchived())
 			.map(Session::id)
 			.toList();
 	}
 
-	/** Every session of the given principal, children included. */
+	/** Every session of the given principal that is not archived, children included. */
 	static SessionSelector principalWithChildren(String principalName) {
-		return byIndex(SessionAttributes.PRINCIPAL_NAME, principalName);
+		return sessionService -> sessionService.findByIndex(SessionAttributes.PRINCIPAL_NAME, principalName)
+			.stream()
+			.filter(s -> !s.isArchived())
+			.map(Session::id)
+			.toList();
 	}
 
 	/** A fixed set of sessions. */

@@ -72,11 +72,43 @@ public final class InMemorySessionRepository implements SessionRepository {
 				.expiresAt(session.expiresAt())
 				.parentSessionId(session.parentSessionId())
 				.rootSessionId(session.rootSessionId())
+				.status(session.status())
+				.stopReason(session.stopReason())
+				.archivedAt(session.archivedAt())
 				.metadata(session.metadata())
 				.build();
 			return new SessionData(updated, existing.events(), existing.version());
 		});
 		return saved.session();
+	}
+
+	@Override
+	public boolean updateStatus(String sessionId, SessionStatus expected, SessionStatus status,
+			@Nullable StopReason stopReason, @Nullable Instant archivedAt) {
+		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		Assert.notNull(expected, "expected must not be null");
+		Assert.notNull(status, "status must not be null");
+		boolean[] changed = { false };
+		this.store.computeIfPresent(sessionId, (id, data) -> {
+			Session current = data.session();
+			if (current.status() != expected) {
+				return data;
+			}
+			changed[0] = true;
+			Session updated = Session.builder()
+				.id(current.id())
+				.createdAt(current.createdAt())
+				.expiresAt(current.expiresAt())
+				.parentSessionId(current.parentSessionId())
+				.rootSessionId(current.rootSessionId())
+				.status(status)
+				.stopReason(stopReason)
+				.archivedAt(archivedAt)
+				.metadata(current.metadata())
+				.build();
+			return new SessionData(updated, data.events(), data.version());
+		});
+		return changed[0];
 	}
 
 	@Override

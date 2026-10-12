@@ -44,6 +44,7 @@ import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.SessionTreeEvents;
 import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
@@ -310,6 +311,8 @@ class JdbcSessionRepositoryTests {
 		assertThat(legacy).isNotNull();
 		assertThat(SessionAttributes.principalName(legacy)).isEqualTo("alice");
 		assertThat(legacy.isRoot()).isTrue();
+		assertThat(legacy.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(upgraded.updateStatus("old", SessionStatus.IDLE, SessionStatus.RUNNING, null, null)).isTrue();
 		assertThat(upgraded.findByIndex(SessionAttributes.PRINCIPAL_NAME, "alice")).extracting(Session::id)
 			.containsExactly("old");
 		assertThat(upgraded.findByRootSessionId("old")).extracting(Session::id).containsExactly("old");

@@ -184,7 +184,9 @@ class IdempotentSessionEventIdGeneratorTests {
 	}
 
 	private SessionMemoryAdvisor advisorWith(IdempotentSessionEventIdGenerator generator) {
+		// before() is retried directly below, which is not a second turn; see the status tests
 		return SessionMemoryAdvisor.builder(this.sessionService)
+			.trackStatus(false)
 			.requestEventIdGenerator(generator)
 			.responseEventIdGenerator(generator)
 			.build();

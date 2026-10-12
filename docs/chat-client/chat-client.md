@@ -39,6 +39,12 @@ On every request the advisor:
    inside a tool-calling loop compaction waits for the final reply. The full turn is
    already written at that point, so there is no race between compaction and message
    appending.
+7. Records the turn in the session's status: `startTurn` before the model call, which
+   rejects a second concurrent turn on the same session, and `endTurn(END_TURN)` once the
+   final reply is in; a call that fails ends the turn with `ERROR`. Inside a tool-calling
+   loop the later rounds (whose prompt ends with tool results) continue the running turn.
+   `trackStatus(false)` on the builder leaves the status alone. See
+   [Status, turns and archive](../session-management/concepts.md#status-turns-and-archive).
 
 The diagram below shows the round-trip: the **before** phase loads history and builds the
 expanded prompt, the **after** phase appends the assistant message and compacts on trigger.

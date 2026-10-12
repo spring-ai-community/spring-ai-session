@@ -27,12 +27,16 @@ public class MysqlJdbcSessionRepositoryDialect implements JdbcSessionRepositoryD
 	@Override
 	public String getUpsertSessionSql() {
 		return """
-				INSERT INTO AI_SESSION (id, user_id, parent_session_id, root_session_id, created_at, expires_at, metadata)
-				VALUES (?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO AI_SESSION (id, user_id, parent_session_id, root_session_id, status, stop_reason, archived_at,
+					created_at, expires_at, metadata)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON DUPLICATE KEY UPDATE
 					user_id           = VALUES(user_id),
 					parent_session_id = VALUES(parent_session_id),
 					root_session_id   = VALUES(root_session_id),
+					status            = VALUES(status),
+					stop_reason       = VALUES(stop_reason),
+					archived_at       = VALUES(archived_at),
 					expires_at        = VALUES(expires_at),
 					metadata          = VALUES(metadata)
 				""";

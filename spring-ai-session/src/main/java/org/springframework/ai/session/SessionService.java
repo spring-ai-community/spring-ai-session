@@ -90,6 +90,51 @@ public interface SessionService {
 	 */
 	List<Session> findTree(String rootSessionId);
 
+	// Status
+
+	/**
+	 * Starts a turn: the session goes {@link SessionStatus#RUNNING} and a
+	 * {@link EventType#STATUS} event records it. The change is a compare-and-set from
+	 * {@link SessionStatus#IDLE}, so two callers cannot run turns on one session at the
+	 * same time; a turn that was abandoned (the caller crashed) is ended with
+	 * {@link #endTurn} and {@link StopReason#INTERRUPTED}.
+	 * @return the session, running
+	 * @throws IllegalArgumentException if the session does not exist
+	 * @throws IllegalStateException if the session is already running a turn, or is
+	 * archived
+	 */
+	Session startTurn(String sessionId);
+
+	/**
+	 * Ends the running turn: the session goes {@link SessionStatus#IDLE} with the given
+	 * stop reason and a {@link EventType#STATUS} event records it.
+	 * @return the session, idle
+	 * @throws IllegalArgumentException if the session does not exist
+	 * @throws IllegalStateException if the session is not running a turn
+	 */
+	Session endTurn(String sessionId, StopReason stopReason);
+
+	/**
+	 * The status of a session tree as a whole, never stored: {@link SessionStatus#RUNNING}
+	 * while any member of the tree runs a turn, otherwise the root's own status.
+	 * @throws IllegalArgumentException if the root does not exist
+	 */
+	SessionStatus aggregateStatus(String rootSessionId);
+
+	/**
+	 * Archives the session and, when it has children, its children: each goes
+	 * {@link SessionStatus#TERMINATED}, is stamped with {@link Session#archivedAt()},
+	 * records a {@link EventType#STATUS} event and accepts no further events, turns or
+	 * children. Its history stays readable until {@link #delete}. An archived session is
+	 * left as it is, so the call is idempotent. Like a delete, archiving never affects the
+	 * parent.
+	 * @return the session, archived
+	 * @throws IllegalArgumentException if the session does not exist
+	 * @throws IllegalStateException if the session or one of its children is running a
+	 * turn: interrupt or wait for it first
+	 */
+	Session archive(String sessionId);
+
 	/**
 	 * Deletes the session, its events and, when it has children, the children and their
 	 * events. Deleting a child never affects its parent.
@@ -117,6 +162,7 @@ public interface SessionService {
 	/**
 	 * Appends a {@link SessionEvent} to the session identified by
 	 * {@link SessionEvent#getSessionId()}.
+	 * @throws IllegalStateException if the session is archived
 	 * @throws IllegalArgumentException if the event wraps a
 	 * {@link org.springframework.ai.chat.messages.SystemMessage} and the service does not
 	 * allow storing system messages (the default for {@link DefaultSessionService}; see

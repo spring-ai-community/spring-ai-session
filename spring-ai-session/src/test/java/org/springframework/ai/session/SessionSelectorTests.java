@@ -76,4 +76,17 @@ class SessionSelectorTests {
 		return this.service.create(CreateSessionRequest.builder().metadata(key, value).build());
 	}
 
+	@Test
+	void principalSelectorsLeaveArchivedSessionsOutButByIndexKeepsThem() {
+		Session open = create(SessionAttributes.PRINCIPAL_NAME, "alice");
+		Session archived = create(SessionAttributes.PRINCIPAL_NAME, "alice");
+		Session child = this.service.createChild(archived.id(), "researcher");
+		this.service.archive(archived.id());
+
+		assertThat(SessionSelector.principal("alice").select(this.service)).containsExactly(open.id());
+		assertThat(SessionSelector.principalWithChildren("alice").select(this.service)).containsExactly(open.id());
+		assertThat(SessionSelector.byIndex(SessionAttributes.PRINCIPAL_NAME, "alice").select(this.service))
+			.containsExactlyInAnyOrder(open.id(), archived.id(), child.id());
+	}
+
 }

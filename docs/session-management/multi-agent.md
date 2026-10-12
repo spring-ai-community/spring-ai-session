@@ -37,8 +37,11 @@ keep the tree sound:
   a child is rejected;
 - a `CHILD_CREATED` marker is appended to the parent's log, so the parent's history shows
   that a delegation happened without copying the child's events;
-- **delete cascades down**: deleting the parent deletes its children and their events;
-  deleting a child leaves the parent alone.
+- **delete and archive cascade down**: deleting the parent deletes its children and their
+  events, archiving it archives them; either on a child leaves the parent alone;
+- the tree has a **status**: each session records its own turns, and
+  `aggregateStatus(rootId)` is `RUNNING` while any member runs a turn, so an orchestrator
+  knows whether a delegation is still in flight.
 
 The orchestrator exposes the sub-agent as a tool. When it is called, the tool:
 

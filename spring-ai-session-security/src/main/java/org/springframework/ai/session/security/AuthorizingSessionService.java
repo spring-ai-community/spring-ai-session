@@ -29,6 +29,8 @@ import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionStatus;
+import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
@@ -45,8 +47,9 @@ import org.springframework.util.Assert;
  * that touches a session, with the caller taken from the security context.
  *
  * <p>
- * Reads, appends, compaction, delete and the creation of a child are allowed only when
- * the manager grants the caller that session (the parent, for a child); otherwise an
+ * Reads, appends, compaction, turns, archive, delete and the creation of a child are
+ * allowed only when the manager grants the caller that session (the parent, for a child;
+ * the root, for an aggregate status); otherwise an
  * {@link AccessDeniedException} is thrown.
  * Listings ({@link #findByIndex}, {@link #findChildren}, {@link #findTree}) and
  * cross-session reads ({@link #findEvents(Collection, EventFilter)}) are narrowed to the
@@ -172,6 +175,30 @@ public class AuthorizingSessionService implements SessionService {
 	public CompactionResult compact(String sessionId, CompactionTrigger trigger, CompactionStrategy strategy) {
 		authorized(sessionId);
 		return this.delegate.compact(sessionId, trigger, strategy);
+	}
+
+	@Override
+	public Session startTurn(String sessionId) {
+		authorized(sessionId);
+		return this.delegate.startTurn(sessionId);
+	}
+
+	@Override
+	public Session endTurn(String sessionId, StopReason stopReason) {
+		authorized(sessionId);
+		return this.delegate.endTurn(sessionId, stopReason);
+	}
+
+	@Override
+	public SessionStatus aggregateStatus(String rootSessionId) {
+		authorized(rootSessionId);
+		return this.delegate.aggregateStatus(rootSessionId);
+	}
+
+	@Override
+	public Session archive(String sessionId) {
+		authorized(sessionId);
+		return this.delegate.archive(sessionId);
 	}
 
 	private @Nullable Session authorized(String sessionId) {

@@ -136,6 +136,7 @@ public class DefaultSessionService implements SessionService {
 		if (parent == null) {
 			throw new IllegalArgumentException("Session not found: " + parentSessionId);
 		}
+		requireNotArchived(parent);
 		if (request.timeToLive() != null) {
 			throw new IllegalArgumentException(
 					"A child inherits the expiry of its parent; timeToLive must not be set");
@@ -200,6 +201,90 @@ public class DefaultSessionService implements SessionService {
 	}
 
 	@Override
+	public Session startTurn(String sessionId) {
+		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		if (!this.sessionRepository.updateStatus(sessionId, SessionStatus.IDLE, SessionStatus.RUNNING, null, null)) {
+			Session session = requireSession(sessionId);
+			requireNotArchived(session);
+			throw new IllegalStateException("Session '" + sessionId + "' could not start a turn: it is "
+					+ session.status() + "; a turn that was abandoned is ended with endTurn(id, StopReason.INTERRUPTED)");
+		}
+		this.sessionRepository.appendEvent(SessionStatusEvents.running(sessionId));
+		return requireSession(sessionId);
+	}
+
+	@Override
+	public Session endTurn(String sessionId, StopReason stopReason) {
+		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		Assert.notNull(stopReason, "stopReason must not be null");
+		if (!this.sessionRepository.updateStatus(sessionId, SessionStatus.RUNNING, SessionStatus.IDLE, stopReason,
+				null)) {
+			Session session = requireSession(sessionId);
+			throw new IllegalStateException("Session '" + sessionId + "' is not running a turn; it is " + session.status());
+		}
+		this.sessionRepository.appendEvent(SessionStatusEvents.idle(sessionId, stopReason));
+		return requireSession(sessionId);
+	}
+
+	@Override
+	public SessionStatus aggregateStatus(String rootSessionId) {
+		Assert.hasText(rootSessionId, "rootSessionId must not be null or empty");
+		Session root = requireSession(rootSessionId);
+		boolean running = this.sessionRepository.findByRootSessionId(rootSessionId)
+			.stream()
+			.anyMatch(s -> s.status() == SessionStatus.RUNNING);
+		return running ? SessionStatus.RUNNING : root.status();
+	}
+
+	@Override
+	public Session archive(String sessionId) {
+		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		Session session = requireSession(sessionId);
+		if (session.isArchived()) {
+			return session;
+		}
+		// The whole subtree must be idle before anything changes; then children go first,
+		// so a failure part-way leaves the parent open rather than orphaning live children
+		List<Session> children = findChildren(sessionId);
+		if (session.status() == SessionStatus.RUNNING || children.stream().anyMatch(this::isRunningTree)) {
+			throw new IllegalStateException(
+					"Session '" + sessionId + "' or one of its children is running a turn; interrupt or wait first");
+		}
+		for (Session child : children) {
+			archive(child.id());
+		}
+		if (this.sessionRepository.updateStatus(sessionId, SessionStatus.IDLE, SessionStatus.TERMINATED, null,
+				Instant.now())) {
+			this.sessionRepository.appendEvent(SessionStatusEvents.terminated(sessionId));
+			return requireSession(sessionId);
+		}
+		// The compare-and-set lost against a turn that started in between, or another archive
+		Session current = requireSession(sessionId);
+		if (current.isArchived()) {
+			return current;
+		}
+		throw new IllegalStateException("Session '" + sessionId + "' started a turn while being archived; retry");
+	}
+
+	private boolean isRunningTree(Session session) {
+		return session.status() == SessionStatus.RUNNING || findChildren(session.id()).stream().anyMatch(this::isRunningTree);
+	}
+
+	private Session requireSession(String sessionId) {
+		Session session = this.sessionRepository.findById(sessionId);
+		if (session == null) {
+			throw new IllegalArgumentException("Session not found: " + sessionId);
+		}
+		return session;
+	}
+
+	private static void requireNotArchived(Session session) {
+		if (session.isArchived()) {
+			throw new IllegalStateException("Session '" + session.id() + "' is archived and accepts no more events");
+		}
+	}
+
+	@Override
 	public void delete(String sessionId) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		// Children go with their parent, never the other way round
@@ -218,6 +303,11 @@ public class DefaultSessionService implements SessionService {
 	@Override
 	public void appendEvent(SessionEvent event) {
 		Assert.notNull(event, "event must not be null");
+		Session session = this.sessionRepository.findById(event.getSessionId());
+		if (session != null) {
+			// An unknown session is left to the repository, which reports it
+			requireNotArchived(session);
+		}
 		if (!this.allowSystemMessages && event.hasMessage() && event.getMessageType() == MessageType.SYSTEM) {
 			throw new IllegalArgumentException("Storing a SystemMessage in session '" + event.getSessionId()
 					+ "' is disabled. System prompts are configuration: supply them on every request "
@@ -249,10 +339,8 @@ public class DefaultSessionService implements SessionService {
 		Assert.notNull(trigger, "trigger must not be null");
 		Assert.notNull(strategy, "strategy must not be null");
 
-		Session session = this.sessionRepository.findById(sessionId);
-		if (session == null) {
-			throw new IllegalArgumentException("Session not found: " + sessionId);
-		}
+		Session session = requireSession(sessionId);
+		requireNotArchived(session);
 
 		// Read version BEFORE events so the version we pass to the CAS write is
 		// guaranteed to be ≤ the version of the events we subsequently read. If another

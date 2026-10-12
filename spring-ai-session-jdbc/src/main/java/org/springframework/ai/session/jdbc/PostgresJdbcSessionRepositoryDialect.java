@@ -27,12 +27,16 @@ public class PostgresJdbcSessionRepositoryDialect implements JdbcSessionReposito
 	@Override
 	public String getUpsertSessionSql() {
 		return """
-				INSERT INTO AI_SESSION (id, user_id, parent_session_id, root_session_id, created_at, expires_at, metadata)
-				VALUES (?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO AI_SESSION (id, user_id, parent_session_id, root_session_id, status, stop_reason, archived_at,
+					created_at, expires_at, metadata)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (id) DO UPDATE
 					SET user_id           = EXCLUDED.user_id,
 						parent_session_id = EXCLUDED.parent_session_id,
 						root_session_id   = EXCLUDED.root_session_id,
+						status            = EXCLUDED.status,
+						stop_reason       = EXCLUDED.stop_reason,
+						archived_at       = EXCLUDED.archived_at,
 						expires_at        = EXCLUDED.expires_at,
 						metadata          = EXCLUDED.metadata
 				""";
@@ -43,8 +47,9 @@ public class PostgresJdbcSessionRepositoryDialect implements JdbcSessionReposito
 		// A failed INSERT would abort an enclosing PostgreSQL transaction; ignore the
 		// conflict instead and report it through the update count.
 		return """
-				INSERT INTO AI_SESSION (id, user_id, parent_session_id, root_session_id, created_at, expires_at, metadata)
-				VALUES (?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO AI_SESSION (id, user_id, parent_session_id, root_session_id, status, stop_reason, archived_at,
+					created_at, expires_at, metadata)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (id) DO NOTHING
 				""";
 	}

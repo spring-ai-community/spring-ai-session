@@ -37,6 +37,7 @@ import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.MemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -52,6 +53,8 @@ import org.springframework.ai.session.MessageFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionStatus;
+import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 import org.springframework.core.Ordered;
@@ -75,6 +78,11 @@ import org.springframework.util.Assert;
  * assistant messages (blank text, no tool calls, and no media) are filtered out.</li>
  * <li>Optionally triggers context compaction if the configured trigger fires, once the
  * turn is complete (not after a reply that requests tool calls).</li>
+ * <li>Records the turn in the session's status: {@link SessionService#startTurn} before
+ * the model call and {@link SessionService#endTurn} once the turn is complete, with
+ * {@link StopReason#ERROR} when the call fails. The start is a compare-and-set, so a
+ * second concurrent turn on the same session is rejected; see
+ * {@link Builder#trackStatus(boolean)}.</li>
  * </ol>
  *
  * <p>
@@ -178,10 +186,13 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	@Nullable private final CompactionStrategy compactionStrategy;
 
+	private final boolean trackStatus;
+
 	private SessionMemoryAdvisor(SessionService sessionService, int order, Scheduler scheduler,
 			EventFilter eventFilter, MessageFilter messageFilter, SessionEventRequestIdGenerator requestEventIdGenerator,
 			SessionEventResponseIdGenerator responseEventIdGenerator, @Nullable CompactionTrigger compactionTrigger,
-			@Nullable CompactionStrategy compactionStrategy) {
+			@Nullable CompactionStrategy compactionStrategy, boolean trackStatus) {
+		this.trackStatus = trackStatus;
 		this.sessionService = sessionService;
 		this.order = order;
 		this.scheduler = scheduler;
@@ -218,6 +229,25 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// Whether the caller may use this session is not decided here: an authorizing
 		// SessionService (see the security module) checks every read and append.
 
+		// 1.1. Start the turn, unless this is a later round of a tool loop (the prompt ends
+		// with the tool results of the previous round), in which case the turn is already
+		// running. The service's compare-and-set rejects a second concurrent turn. Once the
+		// turn is ours, anything that fails below ends it, so the session never stays running
+		// because of a bad filter value, a rejected message or a store that is down.
+		if (this.trackStatus && !(request.prompt().getLastUserOrToolResponseMessage() instanceof ToolResponseMessage)) {
+			this.sessionService.startTurn(sessionId);
+		}
+		try {
+			return assemblePrompt(request, sessionId);
+		}
+		catch (RuntimeException ex) {
+			failTurn(request.context(), ex);
+			throw ex;
+		}
+	}
+
+	/** Steps 2 to 4 of {@link #before}: load the history, build the prompt, persist the user message. */
+	private ChatClientRequest assemblePrompt(ChatClientRequest request, String sessionId) {
 		// 2. Retrieve history applying the configured filter (default: all events)
 
 		// Always read the active view: the events a compaction covered live on only for
@@ -356,7 +386,56 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			}
 		}
 
+		// 3. End the turn once it is complete: a reply that requests tool calls keeps the
+		// session running until the loop's final reply. A turn someone ended by hand in the
+		// meantime (an interrupt) must not fail the reply that was already produced.
+		if (this.trackStatus && !requestsToolCalls(response)) {
+			try {
+				this.sessionService.endTurn(sessionId, StopReason.END_TURN);
+			}
+			catch (IllegalStateException ex) {
+				logger.warn("The turn of session [{}] was already ended: {}", sessionId, ex.getMessage());
+			}
+		}
+
 		return response;
+	}
+
+	@Override
+	public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+		Assert.notNull(request, "request must not be null");
+		Assert.notNull(chain, "chain must not be null");
+		ChatClientRequest processed = before(request, chain);
+		ChatClientResponse response;
+		try {
+			response = chain.nextCall(processed);
+		}
+		catch (RuntimeException ex) {
+			failTurn(processed.context(), ex);
+			throw ex;
+		}
+		return after(response, chain);
+	}
+
+	/**
+	 * Ends the turn with {@link StopReason#ERROR} when the chain fails after
+	 * {@code before()} started it, so the session does not stay running. Inside a tool
+	 * loop the innermost round ends it; the outer rounds then find it idle and do nothing.
+	 */
+	private void failTurn(Map<String, @Nullable Object> context, Throwable cause) {
+		if (!this.trackStatus) {
+			return;
+		}
+		try {
+			String sessionId = getSessionId(context);
+			Session session = this.sessionService.findById(sessionId);
+			if (session != null && session.status() == SessionStatus.RUNNING) {
+				this.sessionService.endTurn(sessionId, StopReason.ERROR);
+			}
+		}
+		catch (RuntimeException ex) {
+			logger.warn("Could not end the failed turn; the session may stay running until endTurn is called", ex);
+		}
 	}
 
 	/**
@@ -508,7 +587,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		return Mono.just(request)
 			.publishOn(this.scheduler)
 			.map(r -> this.before(r, chain))
-			.flatMapMany(chain::nextStream)
+			.flatMapMany(r -> chain.nextStream(r).doOnError(ex -> failTurn(r.context(), ex)))
 			// Re-pin to the scheduler so that the after() callback (which performs
 			// synchronous session writes and optional compaction) always runs on the
 			// configured scheduler rather than the LLM streaming thread.
@@ -690,6 +769,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		@Nullable private CompactionStrategy compactionStrategy;
 
+		private boolean trackStatus = true;
+
 		private Builder(SessionService sessionService) {
 			Assert.notNull(sessionService, "sessionService must not be null");
 			this.sessionService = sessionService;
@@ -771,6 +852,18 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			return this;
 		}
 
+		/**
+		 * Whether the advisor records the session's turn status: {@code true} (the default)
+		 * starts a turn in {@code before()} ({@link SessionService#startTurn}, which rejects
+		 * a second concurrent turn on the same session), ends it in {@code after()} once the
+		 * reply no longer requests tool calls, and ends it with {@link StopReason#ERROR}
+		 * when the call fails. {@code false} leaves the status alone.
+		 */
+		public Builder trackStatus(boolean trackStatus) {
+			this.trackStatus = trackStatus;
+			return this;
+		}
+
 		public SessionMemoryAdvisor build() {
 			if ((this.compactionTrigger == null) != (this.compactionStrategy == null)) {
 				throw new IllegalArgumentException(
@@ -778,7 +871,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			}
 			return new SessionMemoryAdvisor(this.sessionService, this.order, this.scheduler,
 					this.eventFilter, this.messageFilter, this.requestEventIdGenerator, this.responseEventIdGenerator,
-					this.compactionTrigger, this.compactionStrategy);
+					this.compactionTrigger, this.compactionStrategy, this.trackStatus);
 		}
 
 	}

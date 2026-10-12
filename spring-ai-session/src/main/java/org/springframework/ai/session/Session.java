@@ -27,7 +27,8 @@ import org.springframework.util.Assert;
 
 /**
  * Immutable metadata container for a single, continuous conversation between a user and
- * an agent. Holds only identity, lifecycle and the links of its session tree
+ * an agent. Holds only identity, lifecycle ({@link #status()}, {@link #stopReason()},
+ * {@link #expiresAt()}, {@link #archivedAt()}) and the links of its session tree
  * ({@link #parentSessionId()}, {@link #rootSessionId()}) — the event log is stored
  * separately in {@link SessionRepository} and retrieved on demand via
  * {@link SessionService}.
@@ -56,15 +57,25 @@ public final class Session {
 
 	private final String rootSessionId;
 
+	private final SessionStatus status;
+
+	@Nullable private final StopReason stopReason;
+
+	@Nullable private final Instant archivedAt;
+
 	private final Map<String, Object> metadata;
 
 	private Session(String id, Instant createdAt, @Nullable Instant expiresAt, @Nullable String parentSessionId,
-			String rootSessionId, Map<String, Object> metadata) {
+			String rootSessionId, SessionStatus status, @Nullable StopReason stopReason, @Nullable Instant archivedAt,
+			Map<String, Object> metadata) {
 		this.id = id;
 		this.createdAt = createdAt;
 		this.expiresAt = expiresAt;
 		this.parentSessionId = parentSessionId;
 		this.rootSessionId = rootSessionId;
+		this.status = status;
+		this.stopReason = stopReason;
+		this.archivedAt = archivedAt;
 		this.metadata = Map.copyOf(metadata);
 	}
 
@@ -117,6 +128,31 @@ public final class Session {
 	}
 
 	/**
+	 * This session's own status: {@link SessionStatus#RUNNING} while a turn is in
+	 * progress, {@link SessionStatus#IDLE} between turns, {@link SessionStatus#TERMINATED}
+	 * once archived. A root's status over its tree is
+	 * {@link SessionService#aggregateStatus}.
+	 */
+	public SessionStatus status() {
+		return this.status;
+	}
+
+	/** Why the last turn ended, or {@code null} while running or before the first turn ended. */
+	public @Nullable StopReason stopReason() {
+		return this.stopReason;
+	}
+
+	/** When the session was archived, or {@code null} while it is not. */
+	public @Nullable Instant archivedAt() {
+		return this.archivedAt;
+	}
+
+	/** Whether the session is archived: {@link SessionStatus#TERMINATED}, read-only. */
+	public boolean isArchived() {
+		return this.status == SessionStatus.TERMINATED;
+	}
+
+	/**
 	 * Arbitrary metadata: the scope attributes ({@link SessionAttributes}), model info,
 	 * tags, agent type, etc.
 	 */
@@ -139,6 +175,12 @@ public final class Session {
 		@Nullable private String parentSessionId;
 
 		@Nullable private String rootSessionId;
+
+		private SessionStatus status = SessionStatus.IDLE;
+
+		@Nullable private StopReason stopReason;
+
+		@Nullable private Instant archivedAt;
 
 		private Map<String, Object> metadata = new HashMap<>();
 
@@ -180,6 +222,25 @@ public final class Session {
 			return this;
 		}
 
+		/** The session's own status; {@link SessionStatus#IDLE} by default. */
+		public Builder status(SessionStatus status) {
+			Assert.notNull(status, "status must not be null");
+			this.status = status;
+			return this;
+		}
+
+		/** Why the last turn ended; {@code null} by default. */
+		public Builder stopReason(@Nullable StopReason stopReason) {
+			this.stopReason = stopReason;
+			return this;
+		}
+
+		/** When the session was archived; {@code null} by default. */
+		public Builder archivedAt(@Nullable Instant archivedAt) {
+			this.archivedAt = archivedAt;
+			return this;
+		}
+
 		/** Adds every entry of the map, keeping the ones already set; like the request builder. */
 		public Builder metadata(Map<String, Object> metadata) {
 			this.metadata.putAll(metadata);
@@ -197,13 +258,14 @@ public final class Session {
 			if (this.parentSessionId == null) {
 				Assert.isTrue(this.rootSessionId == null || this.rootSessionId.equals(this.id),
 						"a root session's rootSessionId must be its own id");
-				return new Session(this.id, this.createdAt, this.expiresAt, null, this.id, this.metadata);
+				return new Session(this.id, this.createdAt, this.expiresAt, null, this.id, this.status,
+						this.stopReason, this.archivedAt, this.metadata);
 			}
 			Assert.isTrue(!this.parentSessionId.equals(this.id), "a session cannot be its own parent");
 			Assert.hasText(this.rootSessionId, "a child must name the root of its tree");
 			Assert.isTrue(!this.rootSessionId.equals(this.id), "a child cannot be its own root");
 			return new Session(this.id, this.createdAt, this.expiresAt, this.parentSessionId, this.rootSessionId,
-					this.metadata);
+					this.status, this.stopReason, this.archivedAt, this.metadata);
 		}
 
 	}

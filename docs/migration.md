@@ -176,6 +176,33 @@ and `agent` keys set by hand) is replaced by the API: those keys are plain metad
 so a session written that way stays a root, and `findChildren`, the cascade and the
 selectors leave it alone.
 
+### New: session status, turns and archive
+
+`Session` gains `status()` (`SessionStatus.IDLE`, `RUNNING`, `TERMINATED`), `stopReason()`
+(`StopReason.END_TURN`, `REQUIRES_ACTION`, `BUDGET_REACHED`, `INTERRUPTED`, `ERROR`),
+`archivedAt()` and `isArchived()`. `SessionService` gains `startTurn(id)`, a compare-and-set
+from `IDLE` to `RUNNING`; `endTurn(id, stopReason)`; `archive(id)`, which cascades to the
+children, stamps `archivedAt` and makes the session read-only; and `aggregateStatus(rootId)`.
+Each transition appends a `STATUS` event, built and read with `SessionStatusEvents`.
+`SessionRepository` gains `updateStatus(id, expected, status, stopReason, archivedAt)`, the
+compare-and-set behind them. `AuthorizingSessionService` guards the four calls.
+
+Behaviour changes:
+
+- **`SessionMemoryAdvisor` tracks the turn.** It calls `startTurn` in `before()` and
+  `endTurn(END_TURN)` in `after()` once the reply no longer requests tool calls, and ends a
+  failed call with `ERROR`. Two concurrent `ChatClient` calls on the same session therefore
+  no longer interleave: the second fails with `IllegalStateException`. A turn left running by
+  a crashed process is ended with `endTurn(id, StopReason.INTERRUPTED)`.
+  `SessionMemoryAdvisor.builder().trackStatus(false)` restores the old behaviour.
+- **An archived session rejects `appendEvent`, `startTurn`, `createChild` and `compact`**
+  with `IllegalStateException`; reads keep working.
+- **`SessionSelector.principal` and `principalWithChildren` leave archived sessions out**;
+  `byIndex` includes them.
+
+The JDBC `AI_SESSION` table gains `status`, `stop_reason` and `archived_at`; a row written
+before reads as an idle root (see the schema section below).
+
 ### Renames and small API changes
 
 - `EventFilter.compactedView` is `activeView` (record accessor, builder method and
@@ -206,8 +233,9 @@ calls, tool results and signed reasoning now round-trip (this closes #53 and #46
 ### Breaking: the JDBC schema changes once for 0.11.0
 
 `AI_SESSION` gains the session-tree columns `parent_session_id` and `root_session_id` (each
-indexed) and the `AI_SESSION_INDEX` table for indexed metadata attributes; `user_id` is kept and
-still written on every save. `AI_SESSION_EVENT` gains `event_type` and `payload`, and allows a
+indexed), the status columns `status`, `stop_reason` and `archived_at`, and the
+`AI_SESSION_INDEX` table for indexed metadata attributes; `user_id` is kept and still written
+on every save. `AI_SESSION_EVENT` gains `event_type` and `payload`, and allows a
 `NULL` `message_type` (an event that is not a message). `message_data` is no longer written but
 is still read, so existing rows load unchanged; the same goes for `archived`, which bounds the
 view of a session without a boundary and must stay until that read is removed.
@@ -223,6 +251,9 @@ are safe to re-run), so `initialize-schema: always` is all that is needed. **MyS
 ALTER TABLE AI_SESSION ADD COLUMN parent_session_id VARCHAR(255);
 ALTER TABLE AI_SESSION ADD COLUMN root_session_id VARCHAR(255);
 ALTER TABLE AI_SESSION MODIFY user_id VARCHAR(255) NOT NULL DEFAULT '';
+ALTER TABLE AI_SESSION ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'IDLE';
+ALTER TABLE AI_SESSION ADD COLUMN stop_reason VARCHAR(32);
+ALTER TABLE AI_SESSION ADD COLUMN archived_at DATETIME(6);
 CREATE INDEX idx_ai_session_parent_session_id ON AI_SESSION (parent_session_id);
 CREATE INDEX idx_ai_session_root_session_id ON AI_SESSION (root_session_id);
 UPDATE AI_SESSION SET root_session_id = id WHERE root_session_id IS NULL;   -- existing sessions are roots

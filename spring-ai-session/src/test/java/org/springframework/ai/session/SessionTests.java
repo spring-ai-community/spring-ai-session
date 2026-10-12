@@ -62,4 +62,25 @@ class SessionTests {
 			.isThrownBy(() -> Session.builder().id("t").parentSessionId("p").rootSessionId("t").build());
 	}
 
+	@Test
+	void aSessionIsIdleUntilToldOtherwise() {
+		Session session = Session.builder().id("s").build();
+
+		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(session.stopReason()).isNull();
+		assertThat(session.archivedAt()).isNull();
+		assertThat(session.isArchived()).isFalse();
+
+		java.time.Instant at = java.time.Instant.parse("2026-01-01T00:00:00Z");
+		Session archived = Session.builder()
+			.id("s")
+			.status(SessionStatus.TERMINATED)
+			.stopReason(StopReason.END_TURN)
+			.archivedAt(at)
+			.build();
+		assertThat(archived.isArchived()).isTrue();
+		assertThat(archived.stopReason()).isEqualTo(StopReason.END_TURN);
+		assertThat(archived.archivedAt()).isEqualTo(at);
+	}
+
 }
