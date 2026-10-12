@@ -16,7 +16,7 @@ On every request the advisor:
 2. Loads the session's history with the configured `eventFilter` (default
    `EventFilter.all()`), merged with any per-request `EVENT_FILTER_CONTEXT_KEY` filter, and
    **prepends** it to the prompt. `EventFilter.active()` is always merged in on top, so
-   the prompt only ever sees the compacted view, never the events a compaction covered. Of any stored system messages
+   the prompt only ever sees the active view, never the events a compaction covered. Of any stored system messages
    (an opt-in), only the latest one is kept; under a `lastN` or page window it is looked up
    separately, so a window never drops the system prompt. A `lastN` window is extended by
    the repository to the start of the turn it lands in, and any tool call or tool result
@@ -55,7 +55,7 @@ SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
     .compactionTrigger(new TurnCountTrigger(20))
     .compactionStrategy(
         RecursiveSummarizationCompactionStrategy.builder(chatClient)
-            .maxEventsToKeep(10)
+            .maxEvents(10)
             .build()
     )
     .build();
@@ -209,7 +209,7 @@ String response = client.prompt()
 
 `EventFilter.merge()` semantics: every non-null field from the request filter replaces
 the corresponding field from the advisor default; the two boolean flags, `excludeSynthetic`
-and `compactedView`, are OR-ed so either side can opt in. A request-level `lastN` or
+and `activeView`, are OR-ed so either side can opt in. A request-level `lastN` or
 `page`/`pageSize` replaces the advisor's retrieval modifier as a whole (see
 [Merging filters](../session-management/event-filtering.md#merging-filters)). A `null` value for
 `EVENT_FILTER_CONTEXT_KEY` is ignored.

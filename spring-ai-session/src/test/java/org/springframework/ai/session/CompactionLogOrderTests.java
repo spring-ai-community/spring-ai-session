@@ -57,7 +57,7 @@ class CompactionLogOrderTests {
 				"summary 2", "summary 3");
 		RecursiveSummarizationCompactionStrategy strategy = RecursiveSummarizationCompactionStrategy
 			.builder(chatClient)
-			.maxEventsToKeep(4)
+			.maxEvents(4)
 			.build();
 		String id = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-order").build()).id();
 

@@ -22,7 +22,7 @@ that is not a message. Code that iterates `getEvents(sessionId)` (which is
 other kinds of events. `SessionService.getMessages()` and `getActiveMessages()` already skip
 them.
 
-`EventFilter.active()` now selects the `MESSAGE` events of the compacted view (see the next
+`EventFilter.active()` now selects the `MESSAGE` events of the active view (see the next
 section); it is the prompt view and the compaction input, and runtime events do not belong
 in either.
 `EventFilter` gets a 13th record component, `eventTypes`; code calling the canonical
@@ -50,26 +50,26 @@ What changes in the API:
 - **`SessionEvent.isArchived()`, `asArchived()` and `Builder.archived(...)` are removed.**
   An event has no compaction state. To know whether an event is in the view, read the view
   (`EventFilter.active()`) or project it with `CompactionBoundary.project(log)`.
-- **`EventFilter.excludeArchived` is renamed `compactedView`.** Same record position, same
-  builder position; `EventFilter.active()` sets it. With `compactedView(true)` the filter
+- **`EventFilter.excludeArchived` is renamed `activeView`.** Same record position, same
+  builder position; `EventFilter.active()` sets it. With `activeView(true)` the filter
   applies to the view instead of the whole log, so a `lastN`, a page or a `messageTypes`
   selection never reaches into covered events. `EventFilter.apply(List)` now projects
   first when the flag is set.
 - **`CompactionResult` is reshaped.** `compactedEvents()` / `archivedEvents()` /
   `archivedEventCount()` are replaced by `coveredEvents()`, `pinnedEvents()`,
   `preservedEvents()`, `summary()` (the new summary turn as `Message`s, empty for the window
-  strategies), `strategy()`, plus `coveredEventCount()`, `keptEvents()` (pinned then
-  preserved), `isUnchanged()` and the `unchanged()` factory. A custom strategy returns
+  strategies), `strategy()`, plus `coveredEventCount()`, `isUnchanged()`, the `unchanged()`
+  factory and `toEvents(sessionId)`. A custom strategy returns
   what should leave the view and what should stay; it no longer builds the new window or
   creates summary events itself, the service does.
 - **`CompactionPlan` is removed and `SessionRepository.applyCompaction` is replaced by
   `appendEvents(sessionId, events, expectedVersion)`:** an atomic, version-checked append of
   several events that increments the version once. A custom repository implements it
   (validate that every event belongs to the session and has a new id, check the version,
-  append) and honours `EventFilter.compactedView()` in `findEvents`: read the newest
+  append) and honours `EventFilter.activeView()` in `findEvents`: read the newest
   `COMPACTION` event, fetch the events it names plus everything from it on, and hand them
   to `EventFilter.apply`, which projects, filters and windows. `findEvents(sessionIds, filter)`
-  with a compacted view can fall back to the default per-session loop. The contract test kit
+  with an active view can fall back to the default per-session loop. The contract test kit
   checks all of it; its protected `plan(...)` and `apply(...)` helpers are replaced by
   `compact(sessionId, pinned, summary, preserved)` and `event(sessionId, message)`.
 - **`SessionEvent.METADATA_COMPACTION_ID`** is set on every summary event to the id of its
@@ -108,7 +108,7 @@ Spring Security divide the work. See [Scope and Security](session-management/sco
 | `Session.userId()`, `Session.builder().userId(...)`, `CreateSessionRequest.builder().userId(...)` (required) | removed; `metadata` carries `SessionAttributes.PRINCIPAL_NAME` (`"principalName"`). `SessionAttributes.principalName(session)` reads it; `Session.builder().metadata(key, value)` is new |
 | `SessionRepository.findByUserId(userId)`, `SessionService.findByUserId(userId)` | `findByIndex(name, value)`: the sessions whose metadata holds `value` under `name`. The principal is indexed by every store; JDBC indexes other keys when told to (`indexedAttributes`) |
 | `findEventsByUserId(userId, filter)` on the repository and the service | `findEvents(Collection<String> sessionIds, EventFilter filter)`; the caller chooses the sessions, through `findByIndex` or a `SessionSelector` |
-| `CrossSessionRecallTools.builder(sessionService, userId)` | `builder(sessionService, SessionSelector)`; `builder(sessionService, principalName)` remains as the one-principal shorthand |
+| `CrossSessionRecallTools.builder(sessionService, userId)` | `builder(sessionService, SessionSelector)`, with `SessionSelector.principal(name)` for one principal's root sessions |
 | `SessionMemoryAdvisor.USER_ID_CONTEXT_KEY`, `Builder.defaultUserId(...)`, the advisor's ownership check | removed. The session a request creates gets its scope from the service's `SessionScopeResolver`; `SESSION_METADATA_CONTEXT_KEY` passes other creation metadata. Authorization is the `AuthorizingSessionService`'s job |
 | — | new `SessionScopeResolver` (`none()`, `fixed(Map)`; `DefaultSessionService.builder().scopeResolver(...)`), `SessionAttributes`, `SessionSelector` (`principal`, `byIndex`, `of`) |
 | — | JDBC: `JdbcSessionRepository.builder().indexedAttributes(Set)`, `getIndexedAttributes()`, `MAX_INDEXED_VALUE_LENGTH` (512: an indexed value and a lookup value are both cut to their first 512 characters, so longer values match by prefix); property `spring.ai.session.repository.jdbc.indexed-attributes` |
@@ -165,7 +165,7 @@ Two behaviour changes come with it:
 - **`delete(sessionId)` cascades to the session's children.** A session created before
   0.11.0 has no children, so nothing changes for it.
 - **`SessionSelector.principal(name)` selects root sessions only**, so
-  `CrossSessionRecallTools.builder(service, "alice")` no longer searches sub-agent sessions;
+  `CrossSessionRecallTools.builder(service, SessionSelector.principal("alice"))` no longer searches sub-agent sessions;
   `SessionSelector.principalWithChildren(name)` does.
 
 The JDBC `AI_SESSION` table gains the `parent_session_id` and `root_session_id` columns
@@ -175,6 +175,23 @@ listing. The metadata convention the 0.10 multi-agent guide suggested (`parentSe
 and `agent` keys set by hand) is replaced by the API: those keys are plain metadata now,
 so a session written that way stays a root, and `findChildren`, the cascade and the
 selectors leave it alone.
+
+### Renames and small API changes
+
+- `EventFilter.compactedView` is `activeView` (record accessor, builder method and
+  `EventFilter.active()` both), and `EventFilter.toBuilder()` copies a filter; `merge` and
+  `withoutWindow` are unchanged in behaviour.
+- `RecursiveSummarizationCompactionStrategy.Builder.maxEventsToKeep(...)` is `maxEvents(...)`, the
+  name the sliding window already used, and `DEFAULT_MAX_EVENTS_TO_KEEP` is `DEFAULT_MAX_EVENTS`.
+- `CompactionResult.keptEvents()`, `CompactionRequest.currentEventCount()` and
+  `CompactionBoundary.namedEventIds()` are removed; `CompactionResult.toEvents(sessionId)` builds the
+  boundary and summary events `SessionService.compact` appends.
+- `CrossSessionRecallTools.builder(sessionService, principalName)` is removed; use
+  `builder(sessionService, SessionSelector.principal(principalName))`.
+- `Session.Builder.metadata(Map)` now adds the entries to the ones already set, like
+  `CreateSessionRequest.Builder.metadata(Map)`, instead of replacing the map.
+- New properties `spring.ai.session.max-tree-depth` (default `1`) and
+  `spring.ai.session.inherited-attributes`.
 
 ### Breaking: `SessionEventCodec` encodes events, not messages
 
@@ -186,61 +203,52 @@ payload is JSON of the message's Spring AI 2.1 `MessagePart`s and metadata, so m
 calls, tool results and signed reasoning now round-trip (this closes #53 and #46). The old
 `decode(EncodedMessage)` stays, deprecated, to read what earlier versions wrote.
 
-### Breaking: JDBC schema adds `event_type` and `payload`, and `message_type` becomes nullable
+### Breaking: the JDBC schema changes once for 0.11.0
 
-`AI_SESSION_EVENT` gains an `event_type` column, a `payload` column, and allows a `NULL`
-`message_type` (an event that is not a message). `message_data` is no longer written but is
-still read, so existing rows load unchanged; the same goes for `archived` (see the
-compaction section above). Recreate the table or apply:
+`AI_SESSION` gains the session-tree columns `parent_session_id` and `root_session_id` (each
+indexed) and the `AI_SESSION_INDEX` table for indexed metadata attributes; `user_id` is kept and
+still written on every save. `AI_SESSION_EVENT` gains `event_type` and `payload`, and allows a
+`NULL` `message_type` (an event that is not a message). `message_data` is no longer written but
+is still read, so existing rows load unchanged; the same goes for `archived`, which bounds the
+view of a session without a boundary and must stay until that read is removed.
+
+**H2 and PostgreSQL:** the bundled script upgrades an existing 0.10 database by itself
+(`ALTER TABLE … ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, one-off backfills that
+are safe to re-run), so `initialize-schema: always` is all that is needed. **MySQL** has no
+`ADD COLUMN IF NOT EXISTS`, so apply the statements below once, in this order, before starting
+0.11.0 with the bundled script; MariaDB users can use the H2/PostgreSQL form.
 
 ```sql
--- PostgreSQL and H2
-ALTER TABLE AI_SESSION_EVENT ADD COLUMN event_type VARCHAR(32) NOT NULL DEFAULT 'MESSAGE';
-ALTER TABLE AI_SESSION_EVENT ADD COLUMN payload TEXT;            -- H2: LONGVARCHAR
-ALTER TABLE AI_SESSION_EVENT ALTER COLUMN message_type DROP NOT NULL;
+-- MySQL, in order. (PostgreSQL and H2: the bundled script runs the equivalent itself.)
+ALTER TABLE AI_SESSION ADD COLUMN parent_session_id VARCHAR(255);
+ALTER TABLE AI_SESSION ADD COLUMN root_session_id VARCHAR(255);
+ALTER TABLE AI_SESSION MODIFY user_id VARCHAR(255) NOT NULL DEFAULT '';
+CREATE INDEX idx_ai_session_parent_session_id ON AI_SESSION (parent_session_id);
+CREATE INDEX idx_ai_session_root_session_id ON AI_SESSION (root_session_id);
+UPDATE AI_SESSION SET root_session_id = id WHERE root_session_id IS NULL;   -- existing sessions are roots
 
--- MySQL
 ALTER TABLE AI_SESSION_EVENT ADD COLUMN event_type VARCHAR(32) NOT NULL DEFAULT 'MESSAGE';
 ALTER TABLE AI_SESSION_EVENT ADD COLUMN payload LONGTEXT;
 ALTER TABLE AI_SESSION_EVENT MODIFY message_type VARCHAR(20) NULL;
-```
 
-`AI_SESSION` gains the `parent_session_id` and `root_session_id` columns of the session
-tree, each indexed; existing rows are roots, so the bundled script sets their
-`root_session_id` to their id (safe to re-run):
-
-```sql
--- PostgreSQL, H2 and MySQL
-ALTER TABLE AI_SESSION ADD COLUMN parent_session_id VARCHAR(255);
-ALTER TABLE AI_SESSION ADD COLUMN root_session_id VARCHAR(255);
-CREATE INDEX idx_ai_session_parent ON AI_SESSION (parent_session_id);
-CREATE INDEX idx_ai_session_root ON AI_SESSION (root_session_id);
-UPDATE AI_SESSION SET root_session_id = id WHERE root_session_id IS NULL;
-```
-
-`AI_SESSION` also gains the `AI_SESSION_INDEX` table for indexed metadata attributes (see
-the scope section above). `user_id` is kept and still written on every save; the default
-only matches the bundled script:
-
-```sql
--- PostgreSQL, H2 and MySQL (the bundled MySQL script declares the index inline)
 CREATE TABLE AI_SESSION_INDEX (
     session_id VARCHAR(255) NOT NULL,
     attr_name  VARCHAR(255) NOT NULL,
     attr_value VARCHAR(512) NOT NULL,
     PRIMARY KEY (session_id, attr_name),
+    INDEX idx_ai_session_index_name_value (attr_name, attr_value),
     CONSTRAINT fk_ai_session_index_session
         FOREIGN KEY (session_id) REFERENCES AI_SESSION (id) ON DELETE CASCADE
 );
-CREATE INDEX idx_ai_session_index_name_value ON AI_SESSION_INDEX (attr_name, attr_value);
-ALTER TABLE AI_SESSION ALTER COLUMN user_id SET DEFAULT '';   -- MySQL: ALTER ... MODIFY user_id VARCHAR(255) NOT NULL DEFAULT ''
-
 -- Once: the owner of existing sessions becomes their principal attribute
 INSERT INTO AI_SESSION_INDEX (session_id, attr_name, attr_value)
 SELECT s.id, 'principalName', s.user_id FROM AI_SESSION s
 WHERE s.user_id <> '' AND NOT EXISTS (SELECT 1 FROM AI_SESSION_INDEX i
                                       WHERE i.session_id = s.id AND i.attr_name = 'principalName');
 ```
+
+The `user_id` index of 0.10 is no longer created by the bundled scripts; an existing one is
+harmless and may be dropped.
 
 See the bundled `schema-{h2,postgresql,mysql}.sql` for the full DDL per dialect.
 
@@ -289,7 +297,7 @@ compaction settings, and pass only the task in and the result back. See
   `EventFilter` to search summaries.
 - **Every `USER` event starts a turn.** Turn counting (`TurnCountTrigger`) and every
   strategy's turn boundaries now use all non-synthetic `USER` events, and the event-count
-  strategies (`maxEvents`, `maxEventsToKeep`) count all real events. Events that were
+  strategies (`maxEvents`) count all real events. Events that were
   stored on a branch before the upgrade become ordinary events: every reader sees them,
   and their `USER` events now count as turns and turn boundaries. Sessions with branched
   history may therefore be compacted sooner after the upgrade.

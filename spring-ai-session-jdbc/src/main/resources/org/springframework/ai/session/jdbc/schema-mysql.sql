@@ -15,10 +15,9 @@ CREATE TABLE IF NOT EXISTS AI_SESSION (
     expires_at    DATETIME(6),
     metadata      LONGTEXT,
     event_version BIGINT        NOT NULL DEFAULT 0,
-    INDEX idx_ai_session_user_id (user_id),
     INDEX idx_ai_session_expires_at (expires_at),
-    INDEX idx_ai_session_parent (parent_session_id),
-    INDEX idx_ai_session_root (root_session_id)
+    INDEX idx_ai_session_parent_session_id (parent_session_id),
+    INDEX idx_ai_session_root_session_id (root_session_id)
 );
 
 -- Sessions written before 0.11.0 have no tree columns: they are roots. Safe to re-run.
@@ -60,7 +59,8 @@ CREATE TABLE IF NOT EXISTS AI_SESSION_EVENT (
     message_data    LONGTEXT,
     synthetic       TINYINT(1)    NOT NULL DEFAULT 0,
     -- Not written since 0.11.0 (compaction appends a boundary row instead); still read
-    -- for sessions a 0.10 compaction flagged and that have no boundary yet
+    -- for sessions a 0.10 compaction flagged and that have no boundary yet. Keep the
+    -- column until that read is removed
     archived        TINYINT(1)    NOT NULL DEFAULT 0,
     -- Unused since 0.10.0 (branch support was removed); kept for existing databases
     branch          VARCHAR(500),

@@ -18,7 +18,6 @@ package org.springframework.ai.session;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -30,7 +29,6 @@ import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 
 import org.springframework.ai.chat.messages.MessageType;
-import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.compaction.CompactionRequest;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -41,7 +39,7 @@ import org.springframework.util.Assert;
  * Default implementation of {@link SessionService} backed by a {@link SessionRepository}.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public class DefaultSessionService implements SessionService {
 
@@ -280,40 +278,11 @@ public class DefaultSessionService implements SessionService {
 
 		// Record the decision as an appended boundary followed by its summary events. The
 		// log is never changed: the boundary names, by id, what the view is from now on.
-		String boundaryId = UUID.randomUUID().toString();
-		Instant now = Instant.now();
-		List<SessionEvent> summaryEvents = result.summary().stream().map(message -> SessionEvent.builder()
-			.sessionId(session.id())
-			.timestamp(now)
-			.message(message)
-			.metadata(SessionEvent.METADATA_SYNTHETIC, true)
-			.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, result.strategy())
-			.metadata(SessionEvent.METADATA_COMPACTION_ID, boundaryId)
-			.build()).toList();
-		CompactionBoundary boundary = new CompactionBoundary(boundaryId, ids(result.pinnedEvents()),
-				ids(summaryEvents), ids(result.preservedEvents()), result.coveredEventCount(),
-				result.tokensEstimatedSaved(), result.strategy());
-		SessionEvent boundaryEvent = SessionEvent.builder()
-			.id(boundaryId)
-			.sessionId(session.id())
-			.timestamp(now)
-			.type(EventType.COMPACTION)
-			.payload(boundary.toPayload())
-			.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, result.strategy())
-			.build();
-		List<SessionEvent> toAppend = new ArrayList<>(1 + summaryEvents.size());
-		toAppend.add(boundaryEvent);
-		toAppend.addAll(summaryEvents);
-
-		if (!this.sessionRepository.appendEvents(session.id(), toAppend, version)) {
+		if (!this.sessionRepository.appendEvents(session.id(), result.toEvents(session.id()), version)) {
 			// CAS rejected — a concurrent writer already changed the log; skip silently.
 			return CompactionResult.unchanged();
 		}
 		return result;
-	}
-
-	private static List<String> ids(List<SessionEvent> events) {
-		return events.stream().map(SessionEvent::getId).toList();
 	}
 
 	public static Builder builder() {

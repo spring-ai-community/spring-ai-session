@@ -111,7 +111,7 @@ final class DialectScenarios {
 				"summary 2", "summary 3");
 		RecursiveSummarizationCompactionStrategy strategy = RecursiveSummarizationCompactionStrategy
 			.builder(chatClient)
-			.maxEventsToKeep(4)
+			.maxEvents(4)
 			.build();
 		SessionService service = DefaultSessionService.builder()
 			.sessionRepository(repository)

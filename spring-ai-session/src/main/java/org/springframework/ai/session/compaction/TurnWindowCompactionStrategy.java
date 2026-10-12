@@ -59,7 +59,7 @@ import org.springframework.util.Assert;
  * stored system message is covered only when a later pass cuts.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  * @see TurnCountTrigger
  */
 public final class TurnWindowCompactionStrategy implements CompactionStrategy {
@@ -96,7 +96,7 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 		// 2. Any preamble events before the first user message (e.g. pre-seeded tool
 		// context) are pinned too: kept verbatim, ahead of the turns.
 		int firstUserIdx = 0;
-		while (firstUserIdx < real.size() && !CompactionUtils.isTurnStart(real.get(firstUserIdx))) {
+		while (firstUserIdx < real.size() && !real.get(firstUserIdx).isTurnStart()) {
 			firstUserIdx++;
 		}
 		List<SessionEvent> preamble = real.subList(0, firstUserIdx);
@@ -126,7 +126,7 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 		List<SessionEvent> currentTurn = null;
 
 		for (SessionEvent event : events) {
-			if (CompactionUtils.isTurnStart(event)) {
+			if (event.isTurnStart()) {
 				if (currentTurn != null) {
 					turns.add(currentTurn);
 				}

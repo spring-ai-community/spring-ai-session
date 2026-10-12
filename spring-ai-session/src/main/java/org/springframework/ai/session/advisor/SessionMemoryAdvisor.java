@@ -129,7 +129,7 @@ import org.springframework.util.Assert;
  * a repeated append of the same message an idempotent no-op rather than a duplicate event.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
@@ -220,7 +220,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		// 2. Retrieve history applying the configured filter (default: all events)
 
-		// Always read the compacted view: the events a compaction covered live on only for
+		// Always read the active view: the events a compaction covered live on only for
 		// Recall Storage search. Merging forces the flag on regardless of the configured or
 		// per-request filter.
 		EventFilter eventFilter = resolveEventFilter(request.context()).merge(EventFilter.active());
@@ -367,7 +367,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		EventFilter latestSystem = EventFilter.builder()
 			.messageTypes(Set.of(MessageType.SYSTEM))
 			.excludeSynthetic(true)
-			.compactedView(true)
+			.activeView(true)
 			.lastN(1)
 			.build();
 		List<SessionEvent> found = this.sessionService.getEvents(sessionId, latestSystem);

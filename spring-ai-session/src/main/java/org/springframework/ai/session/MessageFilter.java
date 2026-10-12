@@ -44,7 +44,7 @@ import org.springframework.util.CollectionUtils;
  * }</pre>
  *
  * @author Sukhrob Tokhirov
- * @since 2.0.0
+ * @since 0.6.0
  * @see org.springframework.ai.session.advisor.SessionMemoryAdvisor.Builder#messageFilter(MessageFilter)
  */
 @FunctionalInterface

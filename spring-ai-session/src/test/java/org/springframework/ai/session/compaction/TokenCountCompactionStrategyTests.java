@@ -120,7 +120,7 @@ class TokenCountCompactionStrategyTests {
 		CompactionResult result = maxTokens(6)
 			.compact(request(events(turn("aaaa", "bbbb"), turn("cccc", "dddd"), turn("eeee", "ffff"))));
 
-		SessionEvent first = result.keptEvents().get(0);
+		SessionEvent first = result.preservedEvents().get(0);
 		assertThat(first.isSynthetic() || first.getMessage() instanceof UserMessage).isTrue();
 	}
 

@@ -132,12 +132,17 @@ public record CompactionBoundary(String id, List<String> pinnedEventIds, List<St
 	 */
 	public static @Nullable CompactionBoundary newest(List<SessionEvent> log) {
 		Assert.notNull(log, "log must not be null");
+		int index = newestBoundaryIndex(log);
+		return (index < 0) ? null : from(log.get(index));
+	}
+
+	private static int newestBoundaryIndex(List<SessionEvent> log) {
 		for (int i = log.size() - 1; i >= 0; i--) {
 			if (log.get(i).getType() == EventType.COMPACTION) {
-				return from(log.get(i));
+				return i;
 			}
 		}
-		return null;
+		return -1;
 	}
 
 	/**
@@ -154,13 +159,7 @@ public record CompactionBoundary(String id, List<String> pinnedEventIds, List<St
 	 */
 	public static List<SessionEvent> project(List<SessionEvent> log) {
 		Assert.notNull(log, "log must not be null");
-		int boundaryIndex = -1;
-		for (int i = log.size() - 1; i >= 0; i--) {
-			if (log.get(i).getType() == EventType.COMPACTION) {
-				boundaryIndex = i;
-				break;
-			}
-		}
+		int boundaryIndex = newestBoundaryIndex(log);
 		if (boundaryIndex < 0) {
 			return new ArrayList<>(log);
 		}
@@ -196,14 +195,6 @@ public record CompactionBoundary(String id, List<String> pinnedEventIds, List<St
 			}
 		}
 		return List.copyOf(view);
-	}
-
-	/** The ids named by this boundary: pinned, summary and preserved. */
-	public Set<String> namedEventIds() {
-		Set<String> ids = new HashSet<>(this.pinnedEventIds);
-		ids.addAll(this.summaryEventIds);
-		ids.addAll(this.preservedEventIds);
-		return ids;
 	}
 
 	private static List<String> ids(@Nullable Object value) {

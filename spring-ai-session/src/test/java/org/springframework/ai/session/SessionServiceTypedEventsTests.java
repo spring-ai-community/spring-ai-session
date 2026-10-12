@@ -85,7 +85,7 @@ class SessionServiceTypedEventsTests {
 		assertThat(this.service.getEvents(session.id(), EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build()))
 			.hasSize(2);
 		assertThat(this.service.getEvents(session.id(),
-				EventFilter.builder().compactedView(true).eventTypes(Set.of(EventType.STATUS)).build()))
+				EventFilter.builder().activeView(true).eventTypes(Set.of(EventType.STATUS)).build()))
 			.isEmpty();
 	}
 

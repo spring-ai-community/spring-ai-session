@@ -80,7 +80,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * contract of {@link SessionRepository#findEvents} (pushdown or
  * {@link EventFilter#apply(List)} must give the same result, including a {@code lastN}
  * window that keeps turns whole), cross-session reads, the atomic
- * {@link SessionRepository#appendEvents} and the compacted view a boundary defines.
+ * {@link SessionRepository#appendEvents} and the active view a boundary defines.
  *
  * @author Christian Tzolov
  * @since 0.10.0
@@ -458,7 +458,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 	}
 
 	@Test
-	void compactedViewHidesCoveredEvents() {
+	void activeViewHidesCoveredEvents() {
 		Session session = newSession("user-covered");
 		append(session.id(), user("old"), user("new"));
 		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
@@ -783,11 +783,11 @@ public abstract class AbstractSessionRepositoryContractTests {
 		assertThat(texts(id, EventFilter.active().merge(EventFilter.lastN(5))))
 			.containsExactly("Summarize the conversation we had so far.", "summary", "u2", "a2", "u3", "a3");
 		// a message-type filter on the view
-		assertThat(texts(id, EventFilter.builder().compactedView(true).messageTypes(Set.of(MessageType.USER)).build()))
+		assertThat(texts(id, EventFilter.builder().activeView(true).messageTypes(Set.of(MessageType.USER)).build()))
 			.containsExactly("Summarize the conversation we had so far.", "u2", "u3");
 		// text search: the covered event is found in the whole log, not in the view
 		assertThat(texts(id, EventFilter.keywordSearch("secret"))).containsExactly("u1 secret");
-		assertThat(texts(id, EventFilter.builder().compactedView(true).keyword("secret").build())).isEmpty();
+		assertThat(texts(id, EventFilter.builder().activeView(true).keyword("secret").build())).isEmpty();
 	}
 
 	@Test
@@ -803,14 +803,14 @@ public abstract class AbstractSessionRepositoryContractTests {
 
 		// a time range on the view does not reach the covered u2
 		assertThat(texts(id,
-				EventFilter.builder().compactedView(true).from(t0.plusSeconds(2)).to(t0.plusSeconds(4)).build()))
+				EventFilter.builder().activeView(true).from(t0.plusSeconds(2)).to(t0.plusSeconds(4)).build()))
 			.containsExactly("u3", "u4");
 		assertThat(texts(id, EventFilter.builder().from(t0.plusSeconds(2)).to(t0.plusSeconds(4)).build()))
 			.containsExactly("u2", "u3", "u4");
 		// pages count from the oldest event of the view
-		assertThat(texts(id, EventFilter.builder().compactedView(true).page(0).pageSize(2).build()))
+		assertThat(texts(id, EventFilter.builder().activeView(true).page(0).pageSize(2).build()))
 			.containsExactly("u3", "u4");
-		assertThat(texts(id, EventFilter.builder().compactedView(true).page(1).pageSize(2).build()))
+		assertThat(texts(id, EventFilter.builder().activeView(true).page(1).pageSize(2).build()))
 			.containsExactly("u5", "u6");
 		assertThat(texts(id, EventFilter.builder().page(0).pageSize(2).build())).containsExactly("u1", "u2");
 	}
@@ -844,11 +844,11 @@ public abstract class AbstractSessionRepositoryContractTests {
 		EventFilter statuses = EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build();
 		assertThat(this.repository.findEvents(id, statuses)).extracting(e -> e.getPayload().get("status"))
 			.containsExactly("RUNNING", "IDLE");
-		assertThat(this.repository.findEvents(id, statuses.merge(EventFilter.builder().compactedView(true).build())))
+		assertThat(this.repository.findEvents(id, statuses.merge(EventFilter.builder().activeView(true).build())))
 			.extracting(e -> e.getPayload().get("status"))
 			.containsExactly("IDLE");
 		// The boundary itself is not part of the view it defines
-		assertThat(labels(this.repository.findEvents(id, EventFilter.builder().compactedView(true).build())))
+		assertThat(labels(this.repository.findEvents(id, EventFilter.builder().activeView(true).build())))
 			.containsExactly("u2", "IDLE");
 	}
 

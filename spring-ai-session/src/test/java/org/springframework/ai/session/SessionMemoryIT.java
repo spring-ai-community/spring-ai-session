@@ -258,7 +258,7 @@ class SessionMemoryIT {
 		assertThat(result.coveredEventCount()).isPositive();
 		assertThat(result.preservedEvents().size()).isLessThan(10);
 		// Kept window must start on a user message (turn boundary)
-		assertThat(result.keptEvents().get(0).getMessageType().getValue()).isEqualTo("user");
+		assertThat(result.preservedEvents().get(0).getMessageType().getValue()).isEqualTo("user");
 	}
 
 	@Test

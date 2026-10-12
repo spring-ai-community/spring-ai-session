@@ -126,7 +126,7 @@ combining several instructions into it is the integration's responsibility. Ever
 
 - the latest one is **pinned**: it stays in the active window, first, and is never covered
   or summarized. Integrations put it first in the prompt (`SessionMemoryAdvisor` does);
-- it doesn't use `maxEvents` / `maxTurns` / `maxEventsToKeep` slots.
+- it doesn't use `maxEvents` / `maxTurns` slots.
   `TokenCountCompactionStrategy` subtracts its tokens from the budget, because it is sent
   with the conversation;
 - earlier ones are **superseded**: the next compaction that cuts covers them wherever they

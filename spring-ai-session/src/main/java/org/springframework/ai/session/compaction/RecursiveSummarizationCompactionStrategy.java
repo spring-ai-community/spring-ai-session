@@ -45,10 +45,10 @@ import org.springframework.util.Assert;
  * never summarized; see {@code CompactionUtils#pinnedSystemEvents}) and separate the
  * synthetic summary events from the real conversation events. A superseded stored
  * system message is covered like any other event before the cut.</li>
- * <li>Keep the last {@code maxEventsToKeep} real events intact (the <em>active
+ * <li>Keep the last {@code maxEvents} real events intact (the <em>active
  * window</em>), snapping the cut point forward to the next turn boundary so a partial
  * turn is never kept. If no later turn boundary exists, the most recent turn is kept even
- * when it exceeds {@code maxEventsToKeep}.</li>
+ * when it exceeds {@code maxEvents}.</li>
  * <li>Everything before the active window — plus any prior synthetic summaries — forms
  * the <em>events to summarize</em>.</li>
  * <li>An LLM call condenses them into a rolling summary, optionally including the first
@@ -68,10 +68,10 @@ import org.springframework.util.Assert;
  * the log.
  *
  * <h2>No-op condition</h2> If the number of real events does not exceed
- * {@code maxEventsToKeep} no LLM call is made and the view is unchanged.
+ * {@code maxEvents} no LLM call is made and the view is unchanged.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  * @see SlidingWindowCompactionStrategy
  */
 public final class RecursiveSummarizationCompactionStrategy implements CompactionStrategy {
@@ -79,7 +79,7 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 	private static final Logger logger = LoggerFactory.getLogger(RecursiveSummarizationCompactionStrategy.class);
 
 	/** Default number of recent real events preserved after compaction. */
-	public static final int DEFAULT_MAX_EVENTS_TO_KEEP = 10;
+	public static final int DEFAULT_MAX_EVENTS = 10;
 
 	/**
 	 * Default number of active-window events fed into the summary prompt for continuity.
@@ -110,7 +110,7 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 	private final ChatClient chatClient;
 
-	private final int maxEventsToKeep;
+	private final int maxEvents;
 
 	private final int overlapSize;
 
@@ -124,20 +124,20 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 	private final Function<SessionEvent, String> eventFormatter;
 
-	private RecursiveSummarizationCompactionStrategy(ChatClient chatClient, int maxEventsToKeep, int overlapSize,
+	private RecursiveSummarizationCompactionStrategy(ChatClient chatClient, int maxEvents, int overlapSize,
 			String systemPrompt, String shadowPrompt, TokenCountEstimator tokenCountEstimator,
 			@Nullable Consumer<CompactionRequest> onSummarizationFailure,
 			Function<SessionEvent, String> eventFormatter) {
 		Assert.notNull(chatClient, "chatClient must not be null");
-		Assert.isTrue(maxEventsToKeep > 0, "maxEventsToKeep must be greater than 0");
+		Assert.isTrue(maxEvents > 0, "maxEvents must be greater than 0");
 		Assert.isTrue(overlapSize >= 0, "overlapSize must be >= 0");
-		Assert.isTrue(overlapSize < maxEventsToKeep, "overlapSize must be less than maxEventsToKeep");
+		Assert.isTrue(overlapSize < maxEvents, "overlapSize must be less than maxEvents");
 		Assert.hasText(systemPrompt, "systemPrompt must not be empty");
 		Assert.hasText(shadowPrompt, "shadowPrompt must not be empty");
 		Assert.notNull(tokenCountEstimator, "tokenCountEstimator must not be null");
 		Assert.notNull(eventFormatter, "eventFormatter must not be null");
 		this.chatClient = chatClient;
-		this.maxEventsToKeep = maxEventsToKeep;
+		this.maxEvents = maxEvents;
 		this.overlapSize = overlapSize;
 		this.systemPrompt = systemPrompt;
 		this.shadowPrompt = shadowPrompt;
@@ -147,15 +147,13 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 	}
 
 	@Override
-	public CompactionResult compact(CompactionRequest context) {
+	public CompactionResult compact(CompactionRequest request) {
+		Assert.notNull(request, "request must not be null");
 
-		Assert.notNull(context, "context must not be null");
-		Assert.notNull(context.session(), "session must not be null");
-
-		List<SessionEvent> events = context.events();
+		List<SessionEvent> events = request.events();
 
 		// The latest stored system message is the system prompt: pinned at the front of the
-		// view, never counted against maxEventsToKeep and never summarized. The synthetic
+		// view, never counted against maxEvents and never summarized. The synthetic
 		// summary a previous pass left is not pinned: it is fed to the summarizer as the prior
 		// summary and covered by the new one.
 		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
@@ -163,20 +161,16 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		List<SessionEvent> realEvents = CompactionUtils.compactableEvents(events);
 		ToIntFunction<SessionEvent> tokens = e -> this.tokenCountEstimator.estimate(this.eventFormatter.apply(e));
 
-		if (realEvents.size() <= this.maxEventsToKeep) {
+		if (realEvents.size() <= this.maxEvents) {
 			// Nothing to summarize
 			return CompactionResult.unchanged();
 		}
 
-		// Raw cut: keep the last maxEventsToKeep real events
-		int rawCutIndex = realEvents.size() - this.maxEventsToKeep;
+		// Raw cut: keep the last maxEvents real events
+		int rawCutIndex = realEvents.size() - this.maxEvents;
 
-		// Snap forward to the nearest turn start (USER message) so the active window
-		// always begins at a turn boundary and is never a partial turn.
-		// If no later turn start exists (the newest turn alone exceeds the budget), keep
-		// that last turn rather than covering the whole active window.
-		int cutIndex = CompactionUtils.retainLastTurn(realEvents,
-				CompactionUtils.snapToTurnStart(realEvents, rawCutIndex));
+		// Cut at a turn boundary; the newest turn is kept even when it alone exceeds the budget
+		int cutIndex = CompactionUtils.turnCut(realEvents, rawCutIndex);
 
 		// Split real events: summarize the older ones, keep the newest window
 		List<SessionEvent> toSummarizeReal = realEvents.subList(0, cutIndex);
@@ -191,14 +185,9 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		// into the summary prompt so the LLM has continuity context
 		List<SessionEvent> overlapEvents = activeWindow.subList(0, Math.min(this.overlapSize, activeWindow.size()));
 
-		// System messages are configuration, not conversation, so none is ever
-		// summarized. Stored ones were separated above; this also guards the overlap
-		// and any other system-typed event from reaching the summarizer.
-		List<SessionEvent> toSummarize = withoutSystemMessages(toSummarizeReal);
-
-		// Build the user prompt for the LLM
-		String userPrompt = buildSummarizationPrompt(syntheticEvents, toSummarize,
-				withoutSystemMessages(overlapEvents));
+		// System messages are configuration, not conversation: the real events hold none
+		// (stored ones are pinned or superseded), so nothing system-typed reaches the summarizer
+		String userPrompt = buildSummarizationPrompt(syntheticEvents, toSummarizeReal, overlapEvents);
 
 		// Call the LLM
 		String summary = this.chatClient.prompt().system(this.systemPrompt).user(userPrompt).call().content();
@@ -207,9 +196,9 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 			logger.warn(
 					"RecursiveSummarizationCompactionStrategy: LLM returned a null or blank summary for session '{}'. "
 							+ "Summarization skipped — the conversation is unchanged.",
-					context.session().id());
+					request.session().id());
 			if (this.onSummarizationFailure != null) {
-				this.onSummarizationFailure.accept(context);
+				this.onSummarizationFailure.accept(request);
 			}
 			return CompactionResult.unchanged();
 		}
@@ -244,9 +233,8 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 		if (!priorSummaries.isEmpty()) {
 			prompt.append("=== PRIOR SUMMARY ===\n");
-			// Exclude synthetic USER shadow prompts — they are structural placeholders,
-			// not summary content. Include only ASSISTANT (and legacy SYSTEM) events
-			// whose text carries the actual compressed history.
+			// Exclude the synthetic USER shadow prompts, structural placeholders rather
+			// than summary content; the ASSISTANT summaries carry the compressed history.
 			priorSummaries.stream()
 				.filter(e -> e.getMessageType() != MessageType.USER)
 				.forEach(e -> prompt.append(e.getMessage().getText()).append("\n"));
@@ -265,10 +253,6 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		return prompt.toString();
 	}
 
-	private static List<SessionEvent> withoutSystemMessages(List<SessionEvent> events) {
-		return events.stream().filter(e -> e.getMessageType() != MessageType.SYSTEM).toList();
-	}
-
 	public static String formatEvent(SessionEvent event) {
 		return CompactionUtils.formatEvent(event);
 	}
@@ -283,7 +267,7 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 		private final ChatClient chatClient;
 
-		private int maxEventsToKeep = DEFAULT_MAX_EVENTS_TO_KEEP;
+		private int maxEvents = DEFAULT_MAX_EVENTS;
 
 		private int overlapSize = DEFAULT_OVERLAP_SIZE;
 
@@ -304,11 +288,11 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 
 		/**
 		 * Number of recent real events kept in full after compaction. Older events are
-		 * summarized. Default: {@value #DEFAULT_MAX_EVENTS_TO_KEEP}.
+		 * summarized. Default: {@value #DEFAULT_MAX_EVENTS}.
 		 */
-		public Builder maxEventsToKeep(int maxEventsToKeep) {
-			Assert.isTrue(maxEventsToKeep > 0, "maxEventsToKeep must be greater than 0");
-			this.maxEventsToKeep = maxEventsToKeep;
+		public Builder maxEvents(int maxEvents) {
+			Assert.isTrue(maxEvents > 0, "maxEvents must be greater than 0");
+			this.maxEvents = maxEvents;
 			return this;
 		}
 
@@ -379,11 +363,11 @@ public final class RecursiveSummarizationCompactionStrategy implements Compactio
 		}
 
 		public RecursiveSummarizationCompactionStrategy build() {
-			if (this.overlapSize >= this.maxEventsToKeep) {
+			if (this.overlapSize >= this.maxEvents) {
 				throw new IllegalArgumentException("overlapSize (" + this.overlapSize
-						+ ") must be less than maxEventsToKeep (" + this.maxEventsToKeep + ")");
+						+ ") must be less than maxEvents (" + this.maxEvents + ")");
 			}
-			return new RecursiveSummarizationCompactionStrategy(this.chatClient, this.maxEventsToKeep, this.overlapSize,
+			return new RecursiveSummarizationCompactionStrategy(this.chatClient, this.maxEvents, this.overlapSize,
 					this.systemPrompt, this.shadowPrompt, this.tokenCountEstimator, this.onSummarizationFailure,
 					this.eventFormatter);
 		}

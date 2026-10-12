@@ -168,7 +168,7 @@ resolver, as any created session does. `AuthorizingSessionService` checks the pa
 
 ```java
 CrossSessionRecallTools tools = CrossSessionRecallTools
-    .builder(sessionService, SessionSelector.principal("alice"))   // or .builder(sessionService, "alice")
+    .builder(sessionService, SessionSelector.principal("alice"))
     .build();
 ```
 

@@ -42,7 +42,7 @@ import org.springframework.util.Assert;
  * Mutations return new instances; the original is never modified.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public final class Session {
 
@@ -180,8 +180,9 @@ public final class Session {
 			return this;
 		}
 
+		/** Adds every entry of the map, keeping the ones already set; like the request builder. */
 		public Builder metadata(Map<String, Object> metadata) {
-			this.metadata = new HashMap<>(metadata);
+			this.metadata.putAll(metadata);
 			return this;
 		}
 

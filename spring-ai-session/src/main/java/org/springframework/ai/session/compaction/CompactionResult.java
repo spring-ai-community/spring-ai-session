@@ -16,9 +16,13 @@
 
 package org.springframework.ai.session.compaction;
 
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.util.Assert;
 
@@ -45,7 +49,7 @@ import org.springframework.util.Assert;
  * summary
  * @param strategy the name of the strategy, recorded on the boundary and the summary events
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public record CompactionResult(List<SessionEvent> coveredEvents, List<SessionEvent> pinnedEvents,
 		List<SessionEvent> preservedEvents, List<Message> summary, int tokensEstimatedSaved, String strategy) {
@@ -82,12 +86,48 @@ public record CompactionResult(List<SessionEvent> coveredEvents, List<SessionEve
 	}
 
 	/**
-	 * The view as the strategy leaves it, in prompt order: pinned events, then preserved
-	 * events. The summary messages are not events yet, so they are not included; they go
-	 * between the two once the service has appended them.
+	 * Records this result as the events {@link org.springframework.ai.session.SessionService#compact}
+	 * appends: a {@link org.springframework.ai.session.EventType#COMPACTION} boundary event
+	 * first, then one synthetic event per summary message, all sharing one timestamp. The
+	 * boundary names the pinned, summary and preserved events by id, so the active view is
+	 * rebuilt from the log alone (see {@link CompactionBoundary#project(List)}).
+	 * @param sessionId the session the events belong to
+	 * @return the events to append, in order; empty for an unchanged result
 	 */
-	public List<SessionEvent> keptEvents() {
-		return java.util.stream.Stream.concat(this.pinnedEvents.stream(), this.preservedEvents.stream()).toList();
+	public List<SessionEvent> toEvents(String sessionId) {
+		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		if (isUnchanged()) {
+			return List.of();
+		}
+		String boundaryId = UUID.randomUUID().toString();
+		Instant now = Instant.now();
+		List<SessionEvent> summaryEvents = this.summary.stream()
+			.map(message -> SessionEvent.builder()
+				.sessionId(sessionId)
+				.timestamp(now)
+				.message(message)
+				.metadata(SessionEvent.METADATA_SYNTHETIC, true)
+				.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, this.strategy)
+				.metadata(SessionEvent.METADATA_COMPACTION_ID, boundaryId)
+				.build())
+			.toList();
+		CompactionBoundary boundary = new CompactionBoundary(boundaryId, ids(this.pinnedEvents), ids(summaryEvents),
+				ids(this.preservedEvents), coveredEventCount(), this.tokensEstimatedSaved, this.strategy);
+		List<SessionEvent> events = new ArrayList<>(1 + summaryEvents.size());
+		events.add(SessionEvent.builder()
+			.id(boundaryId)
+			.sessionId(sessionId)
+			.timestamp(now)
+			.type(EventType.COMPACTION)
+			.payload(boundary.toPayload())
+			.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, this.strategy)
+			.build());
+		events.addAll(summaryEvents);
+		return events;
+	}
+
+	private static List<String> ids(List<SessionEvent> events) {
+		return events.stream().map(SessionEvent::getId).toList();
 	}
 
 }

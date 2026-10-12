@@ -34,7 +34,7 @@ import org.springframework.util.Assert;
  * compaction unit consistent.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  * @see TurnWindowCompactionStrategy
  */
 public final class TurnCountTrigger implements CompactionTrigger {

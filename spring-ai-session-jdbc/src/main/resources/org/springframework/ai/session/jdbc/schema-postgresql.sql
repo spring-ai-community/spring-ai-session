@@ -15,16 +15,18 @@ CREATE TABLE IF NOT EXISTS AI_SESSION (
     event_version BIGINT        NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS idx_ai_session_user_id
-    ON AI_SESSION (user_id);
+-- A table created by 0.10 gains the 0.11 columns; every statement is a no-op afterwards
+ALTER TABLE AI_SESSION ADD COLUMN IF NOT EXISTS parent_session_id VARCHAR(255);
+ALTER TABLE AI_SESSION ADD COLUMN IF NOT EXISTS root_session_id VARCHAR(255);
+ALTER TABLE AI_SESSION ALTER COLUMN user_id SET DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_ai_session_expires_at
     ON AI_SESSION (expires_at);
 
-CREATE INDEX IF NOT EXISTS idx_ai_session_parent
+CREATE INDEX IF NOT EXISTS idx_ai_session_parent_session_id
     ON AI_SESSION (parent_session_id);
 
-CREATE INDEX IF NOT EXISTS idx_ai_session_root
+CREATE INDEX IF NOT EXISTS idx_ai_session_root_session_id
     ON AI_SESSION (root_session_id);
 
 -- Sessions written before 0.11.0 have no tree columns: they are roots. Safe to re-run.
@@ -68,7 +70,8 @@ CREATE TABLE IF NOT EXISTS AI_SESSION_EVENT (
     message_data    TEXT,
     synthetic       BOOLEAN       NOT NULL DEFAULT FALSE,
     -- Not written since 0.11.0 (compaction appends a boundary row instead); still read
-    -- for sessions a 0.10 compaction flagged and that have no boundary yet
+    -- for sessions a 0.10 compaction flagged and that have no boundary yet. Keep the
+    -- column until that read is removed
     archived        BOOLEAN       NOT NULL DEFAULT FALSE,
     -- Unused since 0.10.0 (branch support was removed); kept for existing databases
     branch          VARCHAR(500),
@@ -76,6 +79,11 @@ CREATE TABLE IF NOT EXISTS AI_SESSION_EVENT (
     CONSTRAINT fk_ai_session_event_session
         FOREIGN KEY (session_id) REFERENCES AI_SESSION (id) ON DELETE CASCADE
 );
+
+-- A table created by 0.10 gains the 0.11 columns; every statement is a no-op afterwards
+ALTER TABLE AI_SESSION_EVENT ADD COLUMN IF NOT EXISTS event_type VARCHAR(32) NOT NULL DEFAULT 'MESSAGE';
+ALTER TABLE AI_SESSION_EVENT ADD COLUMN IF NOT EXISTS payload TEXT;
+ALTER TABLE AI_SESSION_EVENT ALTER COLUMN message_type DROP NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_ai_session_event_session_seq
     ON AI_SESSION_EVENT (session_id, seq);

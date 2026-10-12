@@ -32,7 +32,9 @@ decisions) — not for the live conversational agent answering the user directly
 ```java
 // The root sessions of one principal (SessionAttributes.PRINCIPAL_NAME); sub-agent sessions
 // are left out, use SessionSelector.principalWithChildren("alice") to include them
-CrossSessionRecallTools tools = CrossSessionRecallTools.builder(sessionService, "alice").build();
+CrossSessionRecallTools tools = CrossSessionRecallTools
+    .builder(sessionService, SessionSelector.principal("alice"))
+    .build();
 
 // Any selection: an indexed attribute, or a fixed set of ids
 CrossSessionRecallTools tenantTools = CrossSessionRecallTools

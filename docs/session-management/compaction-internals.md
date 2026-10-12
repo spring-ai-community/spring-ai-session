@@ -68,7 +68,6 @@ classDiagram
         <<record>>
         session
         events
-        currentEventCount
         currentTurnCount
     }
     class CompactionResult {
@@ -102,10 +101,11 @@ classDiagram
     SessionRepository <|.. JdbcSessionRepository
     DefaultSessionService --> CompactionTrigger : 1. shouldCompact
     DefaultSessionService --> CompactionStrategy : 2. compact
-    DefaultSessionService ..> CompactionBoundary : 3. build from the result
+    DefaultSessionService ..> CompactionResult : 3. toEvents (boundary + summary)
+    CompactionResult ..> CompactionBoundary : builds
     CompactionTrigger ..> CompactionRequest
     CompactionStrategy ..> CompactionResult
-    SessionRepository ..> CompactionBoundary : project (compactedView)
+    SessionRepository ..> CompactionBoundary : project (activeView)
 ```
 
 - **Triggers are cheap; strategies can be expensive.** The service always runs the trigger
@@ -175,7 +175,7 @@ classDiagram
         -int maxTokens
     }
     class RecursiveSummarizationCompactionStrategy {
-        -int maxEventsToKeep
+        -int maxEvents
         -ChatClient chatClient
     }
     class CompactionUtils {
@@ -200,15 +200,17 @@ classDiagram
 | `SlidingWindowCompactionStrategy` | the newest `maxEvents` real events, cut at a turn boundary | `maxEvents` (20), `tokenCountEstimator` (JTokkit) |
 | `TurnWindowCompactionStrategy` | the newest `maxTurns` complete turns | `maxTurns` (10), `tokenCountEstimator` (JTokkit) |
 | `TokenCountCompactionStrategy` | a contiguous suffix of real events within `maxTokens`, cut at a turn boundary | `maxTokens` (4000), `tokenCountEstimator` (JTokkit) |
-| `RecursiveSummarizationCompactionStrategy` | the newest `maxEventsToKeep` real events, plus an LLM summary of the rest | `chatClient` (required), `maxEventsToKeep` (10), `overlapSize` (2), `systemPrompt`, `shadowPrompt` (`DEFAULT_SUMMARY_SHADOW_PROMPT`), `eventFormatter`, `onSummarizationFailure`, `tokenCountEstimator` (JTokkit) |
+| `RecursiveSummarizationCompactionStrategy` | the newest `maxEvents` real events, plus an LLM summary of the rest | `chatClient` (required), `maxEvents` (10), `overlapSize` (2), `systemPrompt`, `shadowPrompt` (`DEFAULT_SUMMARY_SHADOW_PROMPT`), `eventFormatter`, `onSummarizationFailure`, `tokenCountEstimator` (JTokkit) |
 
 All four share the helpers in `CompactionUtils`:
 
 - **Split the view:** `pinnedSystemEvents` (the latest stored system message),
   `syntheticEvents` (earlier summary turns) and `compactableEvents` (the real
   conversation).
-- **Choose the cut:** `snapToTurnStart` and `retainLastTurn`. `TurnWindowCompactionStrategy`
-  only uses `isTurnStart`: it groups events into whole turns, so it needs no snapping.
+- **Choose the cut:** `turnCut`, which snaps a raw cut forward to the next turn start
+  (`snapToTurnStart`) and keeps the newest turn when that would cover everything
+  (`retainLastTurn`). `TurnWindowCompactionStrategy` groups events into whole turns with
+  `SessionEvent.isTurnStart()` instead, so it needs no snapping.
 - **Build the result:** `cut`, which partitions the view into covered, pinned and
   preserved events around the chosen cut and attaches the summary.
 
@@ -349,11 +351,11 @@ sequenceDiagram
     Caller->>R: compact(request)
     R->>U: pinnedSystemEvents / syntheticEvents / compactableEvents
     U-->>R: pinned, prior summaries, real
-    alt real.size() <= maxEventsToKeep
+    alt real.size() <= maxEvents
         R-->>Caller: CompactionResult.unchanged() (no LLM call)
     else over budget
-        R->>R: rawCut = real.size() - maxEventsToKeep
-        R->>U: snapToTurnStart(real, rawCut), then retainLastTurn(...)
+        R->>R: rawCut = real.size() - maxEvents
+        R->>U: turnCut(real, rawCut): snapToTurnStart, then retainLastTurn
         U-->>R: cut
         R->>R: toSummarize = real[..cut), activeWindow = real[cut..]
         alt toSummarize is empty (one oversize turn)
@@ -440,7 +442,7 @@ flowchart LR
 ### 5b. Projecting the view: `CompactionBoundary.project(log)`
 
 The reference implementation. `EventFilter.apply(List)` calls it whenever the filter has
-`compactedView`, so `InMemorySessionRepository` gets it for free; `JdbcSessionRepository`
+`activeView`, so `InMemorySessionRepository` gets it for free; `JdbcSessionRepository`
 fetches only the rows the view can contain and hands them to the same code (§6).
 
 ```mermaid
@@ -460,7 +462,7 @@ then keeps the messages.
 
 ### 5c. Worked example
 
-A recursive pass with `maxEventsToKeep = 2` on a log that already holds a summary
+A recursive pass with `maxEvents = 2` on a log that already holds a summary
 (`Σold`) from an earlier pass (`⊥1`), in front of the turns that were appended after it.
 
 ```
@@ -527,7 +529,7 @@ sequenceDiagram
   version is `v + 1`, the CAS matches 0 rows, and `appendEvents` returns `false`. The
   service skips silently, and the next turn compacts from a fresh view.
 
-**Reading the view.** A `findEvents` with `compactedView` runs two queries: the session's
+**Reading the view.** A `findEvents` with `activeView` runs two queries: the session's
 newest `COMPACTION` row (`ORDER BY seq DESC LIMIT 1`), then the rows whose `id` is in the
 boundary's pinned, summary or preserved lists `OR` whose `seq` is at or after the
 boundary's, ordered by `seq`. `EventFilter.apply` projects, filters and windows that list
@@ -555,7 +557,7 @@ synthetic summary turn.
 | 4 | System message updated mid-session | `S:v1 U1 A1 S:v2 U2 A2` | SlidingWindow, `maxEvents = 20` | unchanged | nothing |
 | 5 | System prompt stored in an old turn | `U1 S A1 U2 A2 U3 A3` | SlidingWindow, `maxEvents = 2` | `S U3 A3` | `U1 A1 U2 A2` |
 | 6 | Token budget with a system prompt | `S:sys(11) U(8) A(13) U(8) A(13)` | TokenCount, `maxTokens = 45` | `S:sys U A` (newest turn) | the older turn |
-| 7 | Recursive with a prior summary | `Σold U1 A1 U2 A2 U3 A3` | Recursive, `maxEventsToKeep = 2`, `overlapSize = 1` | `Σnew U3 A3` | `Σold U1 A1 U2 A2` |
+| 7 | Recursive with a prior summary | `Σold U1 A1 U2 A2 U3 A3` | Recursive, `maxEvents = 2`, `overlapSize = 1` | `Σnew U3 A3` | `Σold U1 A1 U2 A2` |
 
 **Notes on the examples:**
 

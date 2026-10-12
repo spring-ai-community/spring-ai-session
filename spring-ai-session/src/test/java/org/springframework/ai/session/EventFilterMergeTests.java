@@ -155,17 +155,17 @@ class EventFilterMergeTests {
 		assertThat(EventFilter.all().merge(EventFilter.all()).excludeSynthetic()).isFalse();
 	}
 
-	// --- compactedView is OR-ed ---
+	// --- activeView is OR-ed ---
 
 	@Test
-	void compactedViewIsTrueWhenEitherSideIsTrue() {
-		assertThat(EventFilter.all().merge(EventFilter.active()).compactedView()).isTrue();
-		assertThat(EventFilter.active().merge(EventFilter.all()).compactedView()).isTrue();
+	void activeViewIsTrueWhenEitherSideIsTrue() {
+		assertThat(EventFilter.all().merge(EventFilter.active()).activeView()).isTrue();
+		assertThat(EventFilter.active().merge(EventFilter.all()).activeView()).isTrue();
 	}
 
 	@Test
-	void compactedViewIsFalseWhenBothAreFalse() {
-		assertThat(EventFilter.all().merge(EventFilter.all()).compactedView()).isFalse();
+	void activeViewIsFalseWhenBothAreFalse() {
+		assertThat(EventFilter.all().merge(EventFilter.all()).activeView()).isFalse();
 	}
 
 	// --- merging two EventFilter.all() produces all() ---

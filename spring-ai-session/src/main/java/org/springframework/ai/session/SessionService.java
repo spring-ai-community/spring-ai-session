@@ -31,7 +31,7 @@ import org.springframework.ai.session.compaction.CompactionTrigger;
  * Primary API for managing the full lifecycle of {@link Session} objects.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public interface SessionService {
 

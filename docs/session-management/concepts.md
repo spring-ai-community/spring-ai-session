@@ -336,7 +336,7 @@ stateDiagram-v2
 
 **The view is a projection**
 
-A read with `EventFilter.compactedView()` (which `EventFilter.active()` sets) returns the
+A read with `EventFilter.activeView()` (which `EventFilter.active()` sets) returns the
 events the newest boundary names, in its order (pinned, summary, preserved), followed by
 everything appended since; `CompactionBoundary.project(log)` is the reference
 implementation. What an integration sends to the model is that view, while
@@ -350,7 +350,7 @@ because a summary only paraphrases real events that are still in the log.
 The view is the conversation. Compaction reads message events only, so a boundary names
 message events: a `STATUS` or `USAGE` event logged before the boundary is not in the view,
 while one logged after it is. Read runtime state from the log, with `eventTypes` and
-without `compactedView`.
+without `activeView`.
 
 Nothing is ever rewritten. In the JDBC repository a compaction is one batch insert, and a
 view read is one query for the rows the boundary names plus the rows from the boundary on.
@@ -405,7 +405,7 @@ log for a `lastN` or a page. Evaluate `excludeSynthetic`, `eventTypes`,
 keywords in the query itself. `EventFilter.apply(List)` is the reference implementation of
 the read contract for a log held as a list; use it only for what the store cannot express,
 as the JDBC repository does for `pattern` (a Java regex cannot be translated to portable
-SQL). A `compactedView` read is the exception: the view is bounded by compaction, so fetch
+SQL). An `activeView` read is the exception: the view is bounded by compaction, so fetch
 the rows the newest boundary names plus the rows from the boundary on and let
 `EventFilter.apply` project, filter and window them, as the JDBC repository does. A `lastN` window must keep turns whole: when its oldest event is not a `USER` event,
 extend it back to the nearest preceding one among the matching events, unless the filter

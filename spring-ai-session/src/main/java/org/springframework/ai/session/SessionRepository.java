@@ -33,7 +33,7 @@ import org.jspecify.annotations.Nullable;
  * compaction is recorded by appending (see {@link #appendEvents}).
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public interface SessionRepository {
 
@@ -188,7 +188,7 @@ public interface SessionRepository {
 	 * reference implementation; {@code JdbcSessionRepository} pushes it down as one
 	 * bounded extra query when the window lands mid-turn.
 	 * <p>
-	 * <strong>The compacted view.</strong> With {@link EventFilter#compactedView()} the
+	 * <strong>The active view.</strong> With {@link EventFilter#activeView()} the
 	 * filter applies to the active view of the log rather than the whole log: the events
 	 * named by the newest {@link EventType#COMPACTION} boundary (pinned, summary,
 	 * preserved, in that order) and everything appended after it. A log without a boundary

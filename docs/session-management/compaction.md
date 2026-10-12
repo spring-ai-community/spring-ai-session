@@ -30,7 +30,8 @@ CompactionResult result = service.compact(
 
 System.out.println(result.coveredEventCount());    // derived: coveredEvents().size()
 System.out.println(result.coveredEvents());        // the events that left the view (not deleted)
-System.out.println(result.keptEvents());           // pinned + preserved events, in view order
+System.out.println(result.pinnedEvents());         // kept at the front of the view (system prompt)
+System.out.println(result.preservedEvents());      // the recent events kept verbatim
 System.out.println(result.summary());              // the new summary turn, as messages
 System.out.println(result.tokensEstimatedSaved()); // rough token saving estimate
 System.out.println(result.isUnchanged());          // nothing left the view, nothing written
@@ -50,7 +51,7 @@ service.compact(sessionId, req -> true, SlidingWindowCompactionStrategy.builder(
   and the [JDBC concurrency diagram](compaction-internals.md#6-sequence-jdbc-appendevents-and-a-concurrent-append).
 - **Stored system messages are configuration.** If you store them (opt-in), the latest one
   is always pinned first in the view, never summarized and not counted against `maxEvents` /
-  `maxTurns` / `maxEventsToKeep`; earlier ones are covered when a pass cuts. See
+  `maxTurns` / `maxEvents`; earlier ones are covered when a pass cuts. See
   [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins).
 
 ---
@@ -226,10 +227,10 @@ can build on it — creating a rolling, recursive compressed history.
 ```java
 RecursiveSummarizationCompactionStrategy strategy =
     RecursiveSummarizationCompactionStrategy.builder(chatClient)
-        .maxEventsToKeep(10)           // active window size: real events kept
+        .maxEvents(10)                 // active window size: real events kept
                                        // intact; defaults to 10
         .overlapSize(2)                // events from active window fed to summary prompt;
-                                       // >= 0 and < maxEventsToKeep, else
+                                       // >= 0 and < maxEvents, else
                                        // IllegalArgumentException; defaults to 2
         .systemPrompt("...")           // optional custom system prompt
         .shadowPrompt("...")           // optional custom USER shadow prompt; defaults to
@@ -267,7 +268,7 @@ Register a callback to react to a blank summary:
 ```java
 RecursiveSummarizationCompactionStrategy strategy =
     RecursiveSummarizationCompactionStrategy.builder(chatClient)
-        .maxEventsToKeep(10)
+        .maxEvents(10)
         .onSummarizationFailure(req -> {
             log.error("Compaction failed for session {}", req.session().id());
             // retry, alert, increment a metric, etc.
@@ -283,7 +284,7 @@ rendering or multilingual summaries:
 ```java
 RecursiveSummarizationCompactionStrategy strategy =
     RecursiveSummarizationCompactionStrategy.builder(chatClient)
-        .maxEventsToKeep(10)
+        .maxEvents(10)
         .eventFormatter(event -> {
             // ToolResponseMessage.getText() is null — render the response data instead
             if (event.getMessage() instanceof ToolResponseMessage trm) {

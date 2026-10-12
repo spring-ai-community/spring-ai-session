@@ -27,7 +27,7 @@ import org.springframework.boot.jdbc.init.DatabaseInitializationProperties;
  * {@link org.springframework.ai.session.jdbc.JdbcSessionRepository}.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 @ConfigurationProperties(JdbcSessionRepositoryProperties.CONFIG_PREFIX)
 public class JdbcSessionRepositoryProperties extends DatabaseInitializationProperties {

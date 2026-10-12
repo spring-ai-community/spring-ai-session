@@ -94,17 +94,6 @@ class CompactionRequestTests {
 	}
 
 	@Test
-	void currentEventCountMatchesEventListSize() {
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("q1")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a1")).build());
-
-		CompactionRequest request = requestWith(events);
-
-		assertThat(request.currentEventCount()).isEqualTo(2);
-	}
-
-	@Test
 	void ofRejectsNullSession() {
 		assertThatThrownBy(() -> CompactionRequest.of(null, List.of())).isInstanceOf(IllegalArgumentException.class);
 	}

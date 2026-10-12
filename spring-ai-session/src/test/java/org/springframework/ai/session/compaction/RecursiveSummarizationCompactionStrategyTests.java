@@ -70,9 +70,9 @@ class RecursiveSummarizationCompactionStrategyTests {
 		clearInvocations(this.chatClient);
 	}
 
-	private RecursiveSummarizationCompactionStrategy.Builder strategy(int maxEventsToKeep, int overlapSize) {
+	private RecursiveSummarizationCompactionStrategy.Builder strategy(int maxEvents, int overlapSize) {
 		return RecursiveSummarizationCompactionStrategy.builder(this.chatClient)
-			.maxEventsToKeep(maxEventsToKeep)
+			.maxEvents(maxEvents)
 			.overlapSize(overlapSize);
 	}
 
@@ -204,7 +204,7 @@ class RecursiveSummarizationCompactionStrategyTests {
 	void overlapSizeEqualToMaxEventsToKeepIsRejected() {
 		assertThatThrownBy(() -> strategy(5, 5).build()).isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("overlapSize")
-			.hasMessageContaining("maxEventsToKeep");
+			.hasMessageContaining("maxEvents");
 	}
 
 	@Test

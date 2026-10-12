@@ -33,7 +33,7 @@ import org.springframework.ai.session.SessionEvent;
  * Internal utilities shared by compaction strategies.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 final class CompactionUtils {
 
@@ -197,17 +197,21 @@ final class CompactionUtils {
 	}
 
 	/**
-	 * Returns {@code true} if the event starts a turn (see
-	 * {@link SessionEvent#isTurnStart()}). Synthetic events are excluded from the
-	 * real-event list before this is applied.
+	 * Turns a raw cut into one that keeps turns whole: the cut is snapped forward to the
+	 * next turn start ({@link #snapToTurnStart}) and, when that would cover the whole
+	 * window, moved back to the last turn start ({@link #retainLastTurn}). Every window
+	 * strategy computes its raw cut and hands it here.
+	 * @param real the real events of the view, oldest first
+	 * @param rawCutIndex the first real event the strategy wants to keep
+	 * @return the index of the first preserved real event
 	 */
-	static boolean isTurnStart(SessionEvent event) {
-		return event.isTurnStart();
+	static int turnCut(List<SessionEvent> real, int rawCutIndex) {
+		return retainLastTurn(real, snapToTurnStart(real, rawCutIndex));
 	}
 
 	/**
 	 * Advances {@code rawCutIndex} forward until it points to a
-	 * {@linkplain #isTurnStart turn start}, or to {@code real.size()} if no such event
+	 * {@linkplain SessionEvent#isTurnStart() turn start}, or to {@code real.size()} if no such event
 	 * exists.
 	 *
 	 * <p>
@@ -223,7 +227,7 @@ final class CompactionUtils {
 	 */
 	static int snapToTurnStart(List<SessionEvent> real, int rawCutIndex) {
 		int idx = rawCutIndex;
-		while (idx < real.size() && !isTurnStart(real.get(idx))) {
+		while (idx < real.size() && !real.get(idx).isTurnStart()) {
 			idx++;
 		}
 		return idx;
@@ -233,7 +237,7 @@ final class CompactionUtils {
 	 * Guards against a cut that would cover the entire real-event window. When
 	 * {@code cutIndex == real.size()} — e.g. because the most recent turn alone exceeds
 	 * the strategy's budget, so {@link #snapToTurnStart} found no later turn start — the
-	 * cut is moved back to the last {@linkplain #isTurnStart turn start} so that the
+	 * cut is moved back to the last {@linkplain SessionEvent#isTurnStart() turn start} so that the
 	 * current turn is always kept in the active window, even if it exceeds the budget.
 	 * When there is no {@code USER} event at all (no turn boundary to cut at), returns
 	 * {@code 0}, so nothing is covered. Returns {@code cutIndex} unchanged when it already
@@ -248,7 +252,7 @@ final class CompactionUtils {
 			return cutIndex;
 		}
 		for (int i = real.size() - 1; i >= 0; i--) {
-			if (isTurnStart(real.get(i))) {
+			if (real.get(i).isTurnStart()) {
 				return i;
 			}
 		}

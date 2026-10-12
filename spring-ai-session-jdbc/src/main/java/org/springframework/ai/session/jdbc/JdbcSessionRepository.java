@@ -115,15 +115,27 @@ import org.springframework.util.Assert;
  * conditional {@code UPDATE … WHERE event_version = ?} first; if zero rows are updated
  * nothing is inserted and {@code false} is returned.
  *
- * <h2>Compacted view</h2>
+ * <h2>Active view</h2>
  * <p>
  * The log is append-only. A compaction appends a {@code COMPACTION} boundary row whose
  * payload names the view by event id, so a read with
- * {@link EventFilter#compactedView()} fetches the newest boundary, then one query for the
+ * {@link EventFilter#activeView()} fetches the newest boundary, then one query for the
  * rows it names plus every row from the boundary on, and lets
  * {@link EventFilter#apply(List)} order and window them. Rows written before 0.11.0 by a
  * compaction that flagged events {@code archived} are honoured until the session's first
  * boundary: without a boundary, the view excludes rows with {@code archived = true}.
+ *
+ * <h2>0.10 compatibility</h2>
+ * <p>
+ * Five paths keep a database written by 0.10 readable and are meant to be removed together
+ * in 0.12: {@code user_id} is still written with the principal name and read as a legacy
+ * principal ({@code legacyUserId}, {@code SessionRowMapper}); {@code message_data} is read
+ * for message rows without a {@code payload} ({@code SessionEventRowMapper}); the
+ * {@code archived} flag bounds the view of a session without a boundary
+ * ({@code findActiveView}); {@code NULL} tree columns read as a root
+ * ({@code SessionRowMapper}, {@code findByRootSessionId}). The bundled H2 and PostgreSQL
+ * scripts add the 0.11 columns to an existing table; MySQL needs the statements in the
+ * migration note.
  *
  * <h2>Idempotent append</h2>
  * <p>
@@ -138,7 +150,7 @@ import org.springframework.util.Assert;
  * <p>
  * Events are ordered by a database-assigned monotonic {@code seq} column, which reflects
  * insertion order (the logical conversation order) rather than wall-clock
- * {@code timestamp}. The compacted view has its own order (pinned, summary, preserved,
+ * {@code timestamp}. The active view has its own order (pinned, summary, preserved,
  * then the rest), which the boundary defines and the filter applies in memory.
  *
  * <h2>Thread safety</h2>
@@ -147,7 +159,7 @@ import org.springframework.util.Assert;
  * thread-safe as long as the underlying {@link DataSource} is.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public final class JdbcSessionRepository implements SessionRepository {
 
@@ -209,13 +221,10 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private static final String GET_EVENT_VERSION =
 		"SELECT event_version FROM AI_SESSION WHERE id = ?";
 
-	private static final String COUNT_SESSION =
-		"SELECT COUNT(*) FROM AI_SESSION WHERE id = ?";
-
 	private static final String SELECT_EVENT_SESSION_ID =
 		"SELECT session_id FROM AI_SESSION_EVENT WHERE id = ?";
 
-	// The newest compaction boundary of a session, if any: it defines the compacted view.
+	// The newest compaction boundary of a session, if any: it defines the active view.
 	private static final String SELECT_NEWEST_BOUNDARY =
 		"SELECT e.seq, e.payload FROM AI_SESSION_EVENT e"
 		+ " WHERE e.session_id = ? AND e.event_type = ? ORDER BY e.seq DESC LIMIT 1";
@@ -439,19 +448,23 @@ public final class JdbcSessionRepository implements SessionRepository {
 			Assert.isTrue(batchIds.add(event.getId()),
 					() -> "Event id '" + event.getId() + "' appears twice in the batch");
 		}
-		requireSessionExists(sessionId);
 		Boolean success = this.transactionTemplate.execute(status -> {
 			// Atomically claim the version slot. If another writer already changed it,
-			// 0 rows are updated and we bail out without touching the event log.
+			// 0 rows are updated and we bail out without touching the event log; a session
+			// that does not exist at all is reported as such.
 			int updated = this.jdbcTemplate.update(CAS_INCREMENT_EVENT_VERSION, sessionId, expectedVersion);
 			if (updated == 0) {
+				if (this.jdbcTemplate.queryForList(GET_EVENT_VERSION, Long.class, sessionId).isEmpty()) {
+					throw new IllegalArgumentException("Session not found: " + sessionId);
+				}
 				return false;
 			}
-			for (SessionEvent event : events) {
-				if (!this.jdbcTemplate.queryForList(SELECT_EVENT_SESSION_ID, String.class, event.getId()).isEmpty()) {
-					throw new IllegalArgumentException(
-							"Event id '" + event.getId() + "' is already in the log of session " + sessionId);
-				}
+			String placeholders = placeholders(events.size());
+			List<String> taken = this.jdbcTemplate.queryForList(
+					"SELECT id FROM AI_SESSION_EVENT WHERE id IN (" + placeholders + ")", String.class,
+					events.stream().map(SessionEvent::getId).toArray());
+			if (!taken.isEmpty()) {
+				throw new IllegalArgumentException("Event id '" + taken.get(0) + "' is already in the log");
 			}
 			batchInsertEvents(events);
 			return true;
@@ -470,10 +483,10 @@ public final class JdbcSessionRepository implements SessionRepository {
 	public List<SessionEvent> findEvents(String sessionId, EventFilter filter) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(filter, "filter must not be null");
-		if (filter.compactedView()) {
-			return findCompactedView(sessionId, filter);
+		if (filter.activeView()) {
+			return findActiveView(sessionId, filter);
 		}
-		return query(SELECT_EVENTS_BASE, List.of(sessionId), filter, "e.seq", sessionId);
+		return findFiltered(SELECT_EVENTS_BASE, List.of(sessionId), filter, "e.seq", sessionId);
 	}
 
 	@Override
@@ -484,25 +497,25 @@ public final class JdbcSessionRepository implements SessionRepository {
 		if (ids.isEmpty()) {
 			return List.of();
 		}
-		if (filter.compactedView()) {
-			// A compacted view is per session; read each session's view and window the union.
+		if (filter.activeView()) {
+			// An active view is per session; read each session's view and window the union.
 			return SessionRepository.super.findEvents(ids, filter);
 		}
 		// Across sessions the log order is the timestamp; seq only breaks ties. Turns do
 		// not exist across sessions, so the window is plain.
-		String base = SELECT_EVENTS_IN_SESSIONS_BASE + "?,".repeat(ids.size()).replaceAll(",$", "") + ") ";
-		return query(base, ids, filter, "e.timestamp, e.seq", null);
+		String base = SELECT_EVENTS_IN_SESSIONS_BASE + placeholders(ids.size()) + ") ";
+		return findFiltered(base, ids, filter, "e.timestamp, e.seq", null);
 	}
 
 	/**
-	 * Reads the compacted view of a session: the rows the newest boundary names (pinned,
+	 * Reads the active view of a session: the rows the newest boundary names (pinned,
 	 * summary, preserved) plus every row from the boundary on, in log order, which
 	 * {@link EventFilter#apply(List)} then projects into view order, filters and windows.
 	 * The view is bounded by compaction, so it is read whole. A session without a
 	 * boundary is read whole too, minus rows flagged {@code archived} by a compaction
 	 * written before 0.11.0.
 	 */
-	private List<SessionEvent> findCompactedView(String sessionId, EventFilter filter) {
+	private List<SessionEvent> findActiveView(String sessionId, EventFilter filter) {
 		List<Map<String, Object>> boundaries = this.jdbcTemplate.queryForList(SELECT_NEWEST_BOUNDARY, sessionId,
 				EventType.COMPACTION.name());
 		StringBuilder sql = new StringBuilder(SELECT_EVENTS_BASE);
@@ -526,10 +539,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 			sql.append("AND (e.seq >= ? ");
 			params.add(boundarySeq);
 			if (!named.isEmpty()) {
-				sql.append("OR e.id IN (");
-				named.forEach(id -> sql.append("?,"));
-				sql.setLength(sql.length() - 1);
-				sql.append(") ");
+				sql.append("OR e.id IN (").append(placeholders(named.size())).append(") ");
 				params.addAll(named);
 			}
 			sql.append(") ");
@@ -541,32 +551,26 @@ public final class JdbcSessionRepository implements SessionRepository {
 	}
 
 	/**
-	 * Runs an event query: every criterion the database can evaluate is pushed down as a
-	 * {@code WHERE} clause, and the window ({@code lastN} or a page) as {@code LIMIT} /
-	 * {@code OFFSET}. A {@link EventFilter#pattern()} is the exception: a
+	 * Runs the filter as one query: every criterion the database can evaluate is pushed
+	 * down as a {@code WHERE} clause, and the window ({@code lastN} or a page) as
+	 * {@code LIMIT} / {@code OFFSET}. A {@link EventFilter#pattern()} is the exception: a
 	 * {@link java.util.regex.Pattern} cannot be safely translated to portable SQL (H2,
 	 * MySQL and PostgreSQL each have their own regex dialect, none a strict superset of
 	 * Java's), so with a pattern the window is deferred and the SQL-filtered result is
 	 * finished in memory with {@link EventFilter#apply(List)} (per session) or
 	 * {@link EventFilter#applyWindow(List)} (across sessions).
-	 * <p>
-	 * A per-session {@code lastN} keeps turns whole (see
-	 * {@link EventFilter#applyTurnAwareWindow(List)}): when the window lands mid-turn,
-	 * {@link #extendToTurnStart} prepends the rest of that turn with one more query.
 	 * @param base the {@code SELECT … WHERE <scope> = ? } prefix
-	 * @param scope the value of the scope column (session id or user id)
+	 * @param scope the values of the scope column: one session id, or the ids of a read
+	 * across sessions
 	 * @param order the {@code ORDER BY} columns, ascending; reversed for {@code lastN}
-	 * @param perSession whether the scope is one session, so that a window keeps turns
-	 * whole
+	 * @param turnAwareSessionId the session when the query reads one session's log, so
+	 * that a {@code lastN} window keeps turns whole ({@link #extendToTurnStart} prepends
+	 * the rest of the turn with one more query); {@code null} for a read across sessions,
+	 * whose window is plain
 	 */
-	/**
-	 * Runs the filter as one query. {@code perSessionId} is the session when the query
-	 * reads one session's log (turn-aware windows apply); {@code null} for a read across
-	 * sessions (plain windows).
-	 */
-	private List<SessionEvent> query(String base, List<String> scope, EventFilter filter, String order,
-			@Nullable String perSessionId) {
-		boolean perSession = perSessionId != null;
+	private List<SessionEvent> findFiltered(String base, List<String> scope, EventFilter filter, String order,
+			@Nullable String turnAwareSessionId) {
+		boolean perSession = turnAwareSessionId != null;
 		boolean inMemoryWindow = filter.pattern() != null;
 		StringBuilder sql = new StringBuilder(base);
 		List<Object> params = new ArrayList<>(scope);
@@ -599,7 +603,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 			result = new ArrayList<>(result);
 			Collections.reverse(result);
 			if (perSession) {
-				result = extendToTurnStart(perSessionId, filter, result);
+				result = extendToTurnStart(turnAwareSessionId, filter, result);
 			}
 		}
 		return Collections.unmodifiableList(result);
@@ -667,18 +671,14 @@ public final class JdbcSessionRepository implements SessionRepository {
 			params.add(toUtc(filter.to()));
 		}
 		if (filter.eventTypes() != null && !filter.eventTypes().isEmpty()) {
-			sql.append("AND ").append(col).append("event_type IN (");
-			filter.eventTypes().forEach(et -> sql.append("?,"));
-			sql.setLength(sql.length() - 1);
-			sql.append(") ");
+			sql.append("AND ").append(col).append("event_type IN (").append(placeholders(filter.eventTypes().size()))
+				.append(") ");
 			filter.eventTypes().forEach(et -> params.add(et.name()));
 		}
 		if (filter.messageTypes() != null && !filter.messageTypes().isEmpty()) {
 			// A NULL message_type (an event that is not a message) never matches.
-			sql.append("AND ").append(col).append("message_type IN (");
-			filter.messageTypes().forEach(mt -> sql.append("?,"));
-			sql.setLength(sql.length() - 1);
-			sql.append(") ");
+			sql.append("AND ").append(col).append("message_type IN (").append(placeholders(filter.messageTypes().size()))
+				.append(") ");
 			filter.messageTypes().forEach(mt -> params.add(mt.name()));
 		}
 		if (filter.excludeSynthetic()) {
@@ -725,11 +725,11 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private void insertEvent(SessionEvent event) {
 		SessionEventCodec.EncodedEvent encoded = this.codec.encode(event);
 		this.jdbcTemplate.update(INSERT_EVENT, event.getId(), event.getSessionId(), toUtc(event.getTimestamp()),
-				encoded.type().name(), name(encoded.messageType()), encoded.text(), encoded.payload(),
+				encoded.type().name(), messageTypeName(encoded.messageType()), encoded.text(), encoded.payload(),
 				event.isSynthetic(), this.codec.toJson(event.getMetadata()));
 	}
 
-	@Nullable private static String name(@Nullable MessageType messageType) {
+	@Nullable private static String messageTypeName(@Nullable MessageType messageType) {
 		return messageType != null ? messageType.name() : null;
 	}
 
@@ -746,7 +746,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 			ps.setString(2, event.getSessionId());
 			ps.setObject(3, toUtc(event.getTimestamp()));
 			ps.setString(4, encoded.type().name());
-			ps.setString(5, name(encoded.messageType()));
+			ps.setString(5, messageTypeName(encoded.messageType()));
 			ps.setString(6, encoded.text());
 			ps.setString(7, encoded.payload());
 			ps.setBoolean(8, event.isSynthetic());
@@ -754,11 +754,9 @@ public final class JdbcSessionRepository implements SessionRepository {
 		});
 	}
 
-	private void requireSessionExists(String sessionId) {
-		Integer count = this.jdbcTemplate.queryForObject(COUNT_SESSION, Integer.class, sessionId);
-		if (count == null || count == 0) {
-			throw new IllegalArgumentException("Session not found: " + sessionId);
-		}
+	/** {@code ?,?,…} for an {@code IN} list of {@code n} values. */
+	private static String placeholders(int n) {
+		return String.join(",", Collections.nCopies(n, "?"));
 	}
 
 	/**

@@ -31,7 +31,7 @@ import org.jspecify.annotations.Nullable;
  * ones a request leaves out.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public final class CreateSessionRequest {
 

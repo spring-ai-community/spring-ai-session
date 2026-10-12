@@ -375,7 +375,7 @@ class SessionMemoryAdvisorIT {
 		given(summarizer.prompt().system(anyString()).user(anyString()).call().content()).willReturn("summary");
 		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.compactionTrigger(request -> true)
-			.compactionStrategy(RecursiveSummarizationCompactionStrategy.builder(summarizer).maxEventsToKeep(4).build())
+			.compactionStrategy(RecursiveSummarizationCompactionStrategy.builder(summarizer).maxEvents(4).build())
 			.build();
 		for (int i = 1; i <= 3; i++) {
 			this.sessionService.appendMessage(this.sessionId, new UserMessage("question " + i));

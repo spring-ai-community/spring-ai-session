@@ -41,7 +41,7 @@ import org.springframework.util.Assert;
  * record. All mutations are performed atomically via {@link ConcurrentHashMap#compute}.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public final class InMemorySessionRepository implements SessionRepository {
 

@@ -73,12 +73,12 @@ import org.springframework.util.Assert;
  * }</pre>
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullable Set<MessageType> messageTypes,
 		boolean excludeSynthetic, @Nullable Integer lastN, @Nullable String keyword,
 		@Nullable List<String> keywords, @Nullable MatchMode matchMode, @Nullable Pattern pattern,
-		@Nullable Integer page, @Nullable Integer pageSize, boolean compactedView,
+		@Nullable Integer page, @Nullable Integer pageSize, boolean activeView,
 		@Nullable Set<EventType> eventTypes) {
 
 	/**
@@ -127,7 +127,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	/**
 	 * Returns a filter combining this (base) filter with {@code other}, where every
 	 * criterion set on {@code other} takes precedence. The {@code excludeSynthetic} and
-	 * {@code compactedView} flags are OR-ed (either side can only narrow the result).
+	 * {@code activeView} flags are OR-ed (either side can only narrow the result).
 	 *
 	 * <p>
 	 * The retrieval modifier — {@link #lastN} or {@link #page}/{@link #pageSize} — is
@@ -137,17 +137,22 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	 * combination.
 	 */
 	public EventFilter merge(EventFilter other) {
-		boolean otherHasRetrievalModifier = other.lastN != null || other.pageSize != null;
-		EventFilter retrieval = otherHasRetrievalModifier ? other : this;
-		return new EventFilter(other.from != null ? other.from : this.from, other.to != null ? other.to : this.to,
-				other.messageTypes != null ? other.messageTypes : this.messageTypes,
-				other.excludeSynthetic || this.excludeSynthetic, retrieval.lastN,
-				other.keyword != null ? other.keyword : this.keyword,
-				other.keywords != null ? other.keywords : this.keywords,
-				other.matchMode != null ? other.matchMode : this.matchMode,
-				other.pattern != null ? other.pattern : this.pattern, retrieval.page, retrieval.pageSize,
-				other.compactedView || this.compactedView,
-				other.eventTypes != null ? other.eventTypes : this.eventTypes);
+		Assert.notNull(other, "other must not be null");
+		EventFilter retrieval = (other.lastN != null || other.pageSize != null) ? other : this;
+		return toBuilder().from(other.from != null ? other.from : this.from)
+			.to(other.to != null ? other.to : this.to)
+			.messageTypes(other.messageTypes != null ? other.messageTypes : this.messageTypes)
+			.eventTypes(other.eventTypes != null ? other.eventTypes : this.eventTypes)
+			.excludeSynthetic(other.excludeSynthetic || this.excludeSynthetic)
+			.activeView(other.activeView || this.activeView)
+			.keyword(other.keyword != null ? other.keyword : this.keyword)
+			.keywords(other.keywords != null ? other.keywords : this.keywords)
+			.matchMode(other.matchMode != null ? other.matchMode : this.matchMode)
+			.pattern(other.pattern != null ? other.pattern : this.pattern)
+			.lastN(retrieval.lastN)
+			.page(retrieval.page)
+			.pageSize(retrieval.pageSize)
+			.build();
 	}
 
 	/** Default number of results per page used by {@link #keywordSearch(String)}. */
@@ -165,13 +170,13 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 
 	/**
 	 * Returns the active conversation: the {@link EventType#MESSAGE} events of the
-	 * {@linkplain Builder#compactedView(boolean) compacted view}, in prompt order. This is
+	 * {@linkplain Builder#activeView(boolean) active view}, in prompt order. This is
 	 * the view that should be injected into the prompt as the active context window, and
 	 * the input of compaction. Events of any other type record runtime state, not
 	 * conversation, and are left out.
 	 */
 	public static EventFilter active() {
-		return builder().compactedView(true).eventTypes(Set.of(EventType.MESSAGE)).build();
+		return builder().activeView(true).eventTypes(Set.of(EventType.MESSAGE)).build();
 	}
 
 	/** Returns the last {@code n} events. */
@@ -242,7 +247,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	/**
 	 * Returns {@code true} if the given event passes all per-event criteria in this
 	 * filter. Note: {@link #lastN}, {@link #page}, {@link #pageSize} and the
-	 * {@link #compactedView()} are applied at the collection level, not here.
+	 * {@link #activeView()} are applied at the collection level, not here.
 	 */
 	public boolean matches(SessionEvent event) {
 		if (this.excludeSynthetic && event.isSynthetic()) {
@@ -289,7 +294,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 
 	/**
 	 * Applies this filter to the events of one session held in memory: with
-	 * {@link #compactedView()} first reduces the log to its active view
+	 * {@link #activeView()} first reduces the log to its active view
 	 * ({@link CompactionBoundary#project(List)}), then keeps the events that
 	 * {@link #matches(SessionEvent)}, then applies the retrieval window keeping turns whole
 	 * ({@link #applyTurnAwareWindow(List)}). This is the reference implementation of the
@@ -297,12 +302,12 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	 * query should do so and use this only for what it cannot express (see
 	 * {@link SessionRepository#findEvents}).
 	 * @param events the events of one session, oldest first: the whole log, or for a
-	 * compacted view any superset of the view that includes the newest boundary
+	 * active view any superset of the view that includes the newest boundary
 	 * @return the matching events, never the input list itself
 	 */
 	public List<SessionEvent> apply(List<SessionEvent> events) {
 		Assert.notNull(events, "events must not be null");
-		List<SessionEvent> base = this.compactedView ? CompactionBoundary.project(events) : events;
+		List<SessionEvent> base = this.activeView ? CompactionBoundary.project(events) : events;
 		return applyTurnAwareWindow(base.stream().filter(this::matches).toList());
 	}
 
@@ -383,8 +388,12 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	 * @return the filter without a window
 	 */
 	public EventFilter withoutWindow() {
-		return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, null, this.keyword,
-				this.keywords, this.matchMode, this.pattern, null, null, this.compactedView, this.eventTypes);
+		return toBuilder().lastN(null).page(null).pageSize(null).build();
+	}
+
+	/** Returns a builder initialised with every criterion of this filter. */
+	public Builder toBuilder() {
+		return new Builder(this);
 	}
 
 	/**
@@ -416,11 +425,27 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 
 		private @Nullable Integer pageSize;
 
-		private boolean compactedView = false;
+		private boolean activeView = false;
 
 		private @Nullable Set<EventType> eventTypes;
 
 		private Builder() {
+		}
+
+		private Builder(EventFilter source) {
+			this.from = source.from;
+			this.to = source.to;
+			this.messageTypes = source.messageTypes;
+			this.excludeSynthetic = source.excludeSynthetic;
+			this.lastN = source.lastN;
+			this.keyword = source.keyword;
+			this.keywords = source.keywords;
+			this.matchMode = source.matchMode;
+			this.pattern = source.pattern;
+			this.page = source.page;
+			this.pageSize = source.pageSize;
+			this.activeView = source.activeView;
+			this.eventTypes = source.eventTypes;
 		}
 
 		/**
@@ -446,9 +471,10 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		}
 
 		/**
-		 * Only include {@link EventType#MESSAGE} events whose
-		 * {@link SessionEvent#getMessageType()} is in this set. Events of any other type
-		 * never match.
+		 * Only include events carrying a message whose {@link SessionEvent#getMessageType()}
+		 * is in this set: {@link EventType#MESSAGE} events and the tree markers that carry
+		 * one (see {@link EventType#canCarryMessage()}). An event without a message never
+		 * matches; add {@link #eventTypes} to narrow to {@code MESSAGE}.
 		 */
 		public Builder messageTypes(@Nullable Set<MessageType> messageTypes) {
 			this.messageTypes = messageTypes;
@@ -551,8 +577,8 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		 * is therefore not in the view, while one logged after it is. Read runtime state
 		 * without this flag.
 		 */
-		public Builder compactedView(boolean compactedView) {
-			this.compactedView = compactedView;
+		public Builder activeView(boolean activeView) {
+			this.activeView = activeView;
 			return this;
 		}
 
@@ -560,7 +586,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		public EventFilter build() {
 			return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, this.lastN,
 					this.keyword, this.keywords, this.matchMode, this.pattern, this.page, this.pageSize,
-					this.compactedView, this.eventTypes);
+					this.activeView, this.eventTypes);
 		}
 
 	}

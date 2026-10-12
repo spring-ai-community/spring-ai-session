@@ -77,7 +77,7 @@ class EventFilterEventTypesTests {
 
 		assertThat(EventFilter.active().apply(events)).containsExactly(this.assistant);
 		assertThat(EventFilter.active().eventTypes()).containsExactly(EventType.MESSAGE);
-		assertThat(EventFilter.active().compactedView()).isTrue();
+		assertThat(EventFilter.active().activeView()).isTrue();
 	}
 
 	@Test
@@ -116,7 +116,7 @@ class EventFilterEventTypesTests {
 
 		assertThat(base.merge(other).eventTypes()).containsExactly(EventType.USAGE);
 		assertThat(base.merge(EventFilter.all()).eventTypes()).containsExactly(EventType.MESSAGE);
-		assertThat(base.merge(other).compactedView()).isTrue();
+		assertThat(base.merge(other).activeView()).isTrue();
 	}
 
 	@Test

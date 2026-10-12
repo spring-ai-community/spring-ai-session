@@ -58,7 +58,7 @@ import org.springframework.util.StringUtils;
  * Read-only: this class has no append/compact/delete capability.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.7.0
  */
 public class CrossSessionRecallTools {
 
@@ -93,17 +93,6 @@ public class CrossSessionRecallTools {
 	 */
 	public static Builder builder(SessionService sessionService, SessionSelector selector) {
 		return new Builder(sessionService, selector);
-	}
-
-	/**
-	 * A builder for tools bound to the sessions of one principal
-	 * ({@link org.springframework.ai.session.SessionAttributes#PRINCIPAL_NAME}).
-	 */
-	public static Builder builder(SessionService sessionService, String principalName) {
-		if (!StringUtils.hasText(principalName)) {
-			throw new IllegalArgumentException("principalName must not be empty");
-		}
-		return new Builder(sessionService, SessionSelector.principal(principalName));
 	}
 
 	/**

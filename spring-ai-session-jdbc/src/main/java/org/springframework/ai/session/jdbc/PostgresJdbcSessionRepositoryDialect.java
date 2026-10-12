@@ -20,7 +20,7 @@ package org.springframework.ai.session.jdbc;
  * {@link JdbcSessionRepositoryDialect} for PostgreSQL.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public class PostgresJdbcSessionRepositoryDialect implements JdbcSessionRepositoryDialect {
 

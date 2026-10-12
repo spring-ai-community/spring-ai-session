@@ -75,6 +75,8 @@ Boot's `DatabaseInitializationProperties` and inherits these:
 |---|---|---|
 | `time-to-live` | `60d` | Default time-to-live of sessions created by the auto-configured `DefaultSessionService` (any `Duration`, e.g. `2h`, `30d`) |
 | `allow-system-messages` | `false` | Whether a `SystemMessage` may be stored in a session. Disabled by default; see [System Messages](../session-management/system-messages.md) |
+| `max-tree-depth` | `1` | How deep a session tree may go: `1` allows child sessions of a root and no children of children, `0` disables `createChild`; see [Multi-Agent](../session-management/multi-agent.md) |
+| `inherited-attributes` | _(empty)_ | Metadata keys a child session takes from its parent and may not diverge from, besides `principalName`, which is always inherited |
 | `security.enabled` | `true` | Whether to scope and authorize sessions with Spring Security when it is on the classpath; see [Scope and Security](../session-management/scope-and-security.md) |
 
 ---

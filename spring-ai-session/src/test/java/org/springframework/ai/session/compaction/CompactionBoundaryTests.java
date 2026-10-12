@@ -73,7 +73,6 @@ class CompactionBoundaryTests {
 			.build();
 
 		assertThat(CompactionBoundary.from(event)).isEqualTo(boundary);
-		assertThat(boundary.namedEventIds()).containsExactlyInAnyOrder("p1", "s1", "s2", "k1");
 	}
 
 	@Test

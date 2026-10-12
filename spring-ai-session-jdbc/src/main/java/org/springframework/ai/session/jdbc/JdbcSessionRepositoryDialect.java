@@ -33,7 +33,7 @@ import org.springframework.jdbc.support.JdbcUtils;
  * {@link JdbcSessionRepository}.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  * @see PostgresJdbcSessionRepositoryDialect
  * @see H2JdbcSessionRepositoryDialect
  * @see MysqlJdbcSessionRepositoryDialect

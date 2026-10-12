@@ -53,7 +53,7 @@ import org.springframework.util.Assert;
  * stored system message is covered only when a later pass cuts.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public final class TokenCountCompactionStrategy implements CompactionStrategy {
 
@@ -73,12 +73,10 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 	}
 
 	@Override
-	public CompactionResult compact(CompactionRequest context) {
+	public CompactionResult compact(CompactionRequest request) {
+		Assert.notNull(request, "request must not be null");
 
-		Assert.notNull(context, "context must not be null");
-		Assert.notNull(context.session(), "session must not be null");
-
-		List<SessionEvent> events = context.events();
+		List<SessionEvent> events = request.events();
 
 		// The latest stored system message and the synthetic summary a previous compaction
 		// left are pinned: kept at the front of the view whatever the cut
@@ -114,11 +112,8 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 			return CompactionResult.unchanged();
 		}
 
-		// Snap the raw cut forward to the nearest USER event so the kept window always
-		// starts at a turn boundary.
-		// If no later turn start exists (the newest turn alone exceeds the budget), keep
-		// that last turn rather than covering the whole active window.
-		int cutIndex = CompactionUtils.retainLastTurn(real, CompactionUtils.snapToTurnStart(real, rawCutIndex));
+		// Cut at a turn boundary; the newest turn is kept even when it alone exceeds the budget
+		int cutIndex = CompactionUtils.turnCut(real, rawCutIndex);
 
 		return CompactionUtils.cut(events, pinned, real, cutIndex, List.of(), 0, tokens, STRATEGY_NAME);
 	}

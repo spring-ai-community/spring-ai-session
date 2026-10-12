@@ -135,7 +135,7 @@ every `appendEvent` that appends a new event and every successful `appendEvents`
 `appendEvents` claims the version slot with `UPDATE … WHERE event_version = ?` before
 inserting, so two concurrent compactions cannot both land a boundary.
 
-**Compacted view** — a read with `EventFilter.compactedView()` (what `EventFilter.active()`
+**Active view** — a read with `EventFilter.activeView()` (what `EventFilter.active()`
 sets) first selects the session's newest `COMPACTION` row, then fetches in one query the
 rows that boundary names plus every row from the boundary on, ordered by `seq`, and lets
 `EventFilter.apply` put them in view order, filter and window them. The view is bounded by

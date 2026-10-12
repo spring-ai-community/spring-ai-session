@@ -50,7 +50,7 @@ import org.springframework.util.Assert;
  * stored system message is covered only when a later pass cuts.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  * @see TurnWindowCompactionStrategy
  */
 public final class SlidingWindowCompactionStrategy implements CompactionStrategy {
@@ -71,12 +71,10 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 	}
 
 	@Override
-	public CompactionResult compact(CompactionRequest context) {
+	public CompactionResult compact(CompactionRequest request) {
+		Assert.notNull(request, "request must not be null");
 
-		Assert.notNull(context, "context must not be null");
-		Assert.notNull(context.session(), "session must not be null");
-
-		List<SessionEvent> events = context.events();
+		List<SessionEvent> events = request.events();
 
 		// The latest stored system message (the system prompt) and the synthetic summary a
 		// previous compaction left are pinned: kept at the front of the view whatever the
@@ -92,15 +90,8 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 			return CompactionResult.unchanged();
 		}
 
-		// Raw cut: keep the last maxEvents real events
-		int rawCutIndex = real.size() - this.maxEvents;
-
-		// Snap forward to the nearest turn start (USER message) so we never keep a
-		// partial turn — e.g. an assistant reply without its originating user message.
-		// If no later turn start exists (the newest turn alone exceeds the budget), keep
-		// that last turn rather than covering the whole active window.
-		int cutIndex = CompactionUtils.retainLastTurn(real, CompactionUtils.snapToTurnStart(real, rawCutIndex));
-
+		// Keep the last maxEvents real events, cut at a turn boundary
+		int cutIndex = CompactionUtils.turnCut(real, real.size() - this.maxEvents);
 		return CompactionUtils.cut(events, pinned, real, cutIndex, List.of(), 0, tokens, STRATEGY_NAME);
 	}
 

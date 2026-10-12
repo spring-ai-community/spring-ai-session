@@ -32,6 +32,7 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.mockito.Mockito.mock;
 
@@ -118,6 +119,28 @@ class SessionServiceAutoConfigurationTests {
 				service.appendMessage(session.id(), new SystemMessage("Answer in French."));
 				assertThat(service.getMessages(session.id())).extracting(m -> m.getText())
 					.containsExactly("Answer in French.");
+			});
+	}
+
+	@Test
+	void treeDepthAndInheritedAttributesAreBoundFromProperties() {
+		this.contextRunner.withBean(SessionRepository.class, () -> InMemorySessionRepository.builder().build())
+			.withPropertyValues("spring.ai.session.max-tree-depth=0")
+			.run(context -> {
+				SessionService service = context.getBean(SessionService.class);
+				Session root = service.create(CreateSessionRequest.builder().build());
+				assertThatThrownBy(() -> service.createChild(root.id(), "x")).isInstanceOf(IllegalArgumentException.class)
+					.hasMessageContaining("depth");
+			});
+		this.contextRunner.withBean(SessionRepository.class, () -> InMemorySessionRepository.builder().build())
+			.withPropertyValues("spring.ai.session.inherited-attributes=tenant")
+			.run(context -> {
+				SessionService service = context.getBean(SessionService.class);
+				Session root = service.create(CreateSessionRequest.builder().metadata("tenant", "acme").build());
+				assertThat(service.createChild(root.id(), "x").metadata()).containsEntry("tenant", "acme");
+				assertThatThrownBy(() -> service.createChild(root.id(),
+						CreateSessionRequest.builder().metadata("tenant", "globex").build()))
+					.isInstanceOf(IllegalArgumentException.class);
 			});
 	}
 

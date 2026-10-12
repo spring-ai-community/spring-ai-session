@@ -42,7 +42,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * application declares its own {@link SessionRepository} bean of any type.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 @AutoConfiguration(after = DataSourceAutoConfiguration.class)
 // DatabaseInitializationProperties (spring-boot-jdbc, an optional dependency) is the base

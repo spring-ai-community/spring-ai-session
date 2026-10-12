@@ -44,7 +44,7 @@ import org.springframework.context.annotation.Bean;
  * the repository bean is guaranteed to be available when this configuration runs.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 @AutoConfiguration(
 		afterName = "org.springaicommunity.session.jdbc.autoconfigure.JdbcSessionRepositoryAutoConfiguration")
@@ -61,6 +61,8 @@ public class SessionServiceAutoConfiguration {
 			.sessionRepository(sessionRepository)
 			.defaultTimeToLive(properties.getTimeToLive())
 			.allowSystemMessages(properties.isAllowSystemMessages())
+			.maxTreeDepth(properties.getMaxTreeDepth())
+			.inheritedAttributes(properties.getInheritedAttributes())
 			.scopeResolver(scopeResolver.getIfAvailable(SessionScopeResolver::none))
 			.build();
 		for (SessionServiceDecorator decorator : decorators.orderedStream().toList()) {

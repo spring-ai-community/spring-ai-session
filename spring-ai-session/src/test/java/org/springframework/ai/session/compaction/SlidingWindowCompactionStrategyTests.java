@@ -118,7 +118,7 @@ class SlidingWindowCompactionStrategyTests {
 
 		CompactionResult result = maxEvents(2).compact(request(view));
 
-		SessionEvent first = result.keptEvents().get(0);
+		SessionEvent first = result.preservedEvents().get(0);
 		assertThat(first.isSynthetic() || first.getMessage() instanceof UserMessage).isTrue();
 	}
 

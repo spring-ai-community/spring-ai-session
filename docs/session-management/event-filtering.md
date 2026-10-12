@@ -17,7 +17,7 @@ service.getEvents(id, EventFilter.lastN(20));
 // Exclude synthetic summary events — only real conversation turns
 service.getEvents(id, EventFilter.realOnly());
 
-// The compacted view's message events — the active context window only
+// The active view's message events — the active context window only
 service.getEvents(id, EventFilter.active());
 
 // Keyword search — first page (default page size 10)
@@ -87,7 +87,7 @@ than one and an event must satisfy all of them. In practice, callers set exactly
 | `pattern` | `Pattern` | Compiled regular expression matched against `message.getText()` via `Matcher.find()`. **Only ever pass a developer-authored `Pattern`** — see the ReDoS warning above |
 | `page` | `Integer` | Zero-indexed page in chronological order (oldest first, page 0 = oldest) |
 | `pageSize` | `Integer` | Results per page. Unset means no pagination; the `*Search` factories use 10. Must be > 0 if set |
-| `compactedView` | `boolean` | When `true`, the filter applies to the active view defined by the newest compaction boundary (pinned events, summary, preserved events, then everything appended since) instead of the whole log — used by `EventFilter.active()`. A boundary names message events, so a non-message event logged before it is not in the view; read runtime state without this flag. See [Event lifecycle](concepts.md#event-lifecycle) |
+| `activeView` | `boolean` | When `true`, the filter applies to the active view defined by the newest compaction boundary (pinned events, summary, preserved events, then everything appended since) instead of the whole log — used by `EventFilter.active()`. A boundary names message events, so a non-message event logged before it is not in the view; read runtime state without this flag. See [Event lifecycle](concepts.md#event-lifecycle) |
 
 ---
 
@@ -143,7 +143,7 @@ The compact constructor enforces these rules at construction time:
 
 `EventFilter.merge(other)` merges two filters: every non-null field from `other` replaces
 the corresponding field from `this`; the two boolean flags, `excludeSynthetic` and
-`compactedView`, are OR-ed so either side can opt in. `SessionMemoryAdvisor` uses it to
+`activeView`, are OR-ed so either side can opt in. `SessionMemoryAdvisor` uses it to
 combine its default filter with a
 [per-request override](../chat-client/chat-client.md#per-request-filter-override), and always merges in
 `EventFilter.active()` so the prompt never sees the events a compaction covered:

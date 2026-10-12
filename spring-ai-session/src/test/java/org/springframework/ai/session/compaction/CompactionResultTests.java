@@ -43,7 +43,9 @@ class CompactionResultTests {
 		assertThat(result.isUnchanged()).isTrue();
 		assertThat(result.coveredEventCount()).isZero();
 		assertThat(result.coveredEvents()).isEmpty();
-		assertThat(result.keptEvents()).isEmpty();
+		assertThat(result.pinnedEvents()).isEmpty();
+		assertThat(result.preservedEvents()).isEmpty();
+		assertThat(result.toEvents("s")).isEmpty();
 		assertThat(result.summary()).isEmpty();
 		assertThat(result.tokensEstimatedSaved()).isZero();
 	}
@@ -58,8 +60,8 @@ class CompactionResultTests {
 
 		assertThat(result.isUnchanged()).isFalse();
 		assertThat(result.coveredEventCount()).isEqualTo(1);
-		// kept = pinned first, then preserved: the order of the view
-		assertThat(result.keptEvents()).containsExactly(sys, u2);
+		assertThat(result.pinnedEvents()).containsExactly(sys);
+		assertThat(result.preservedEvents()).containsExactly(u2);
 	}
 
 	@Test

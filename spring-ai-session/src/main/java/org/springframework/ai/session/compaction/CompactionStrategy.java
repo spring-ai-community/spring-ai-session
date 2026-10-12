@@ -28,7 +28,7 @@ package org.springframework.ai.session.compaction;
  * never changed.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 @FunctionalInterface
 public interface CompactionStrategy {

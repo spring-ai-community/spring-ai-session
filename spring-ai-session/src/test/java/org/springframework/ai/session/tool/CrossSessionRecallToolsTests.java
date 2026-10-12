@@ -51,7 +51,7 @@ class CrossSessionRecallToolsTests {
 	}
 
 	private CrossSessionRecallTools toolsFor(String principal) {
-		return CrossSessionRecallTools.builder(this.sessionService, principal).build();
+		return CrossSessionRecallTools.builder(this.sessionService, SessionSelector.principal(principal)).build();
 	}
 
 	@Test
@@ -289,7 +289,9 @@ class CrossSessionRecallToolsTests {
 			this.sessionService.appendMessage(session2.id(), new UserMessage("entry " + i));
 		}
 
-		CrossSessionRecallTools tools = CrossSessionRecallTools.builder(this.sessionService, "alice").pageSize(10).build();
+		CrossSessionRecallTools tools = CrossSessionRecallTools.builder(this.sessionService, SessionSelector.principal("alice"))
+			.pageSize(10)
+			.build();
 
 		String page0 = tools.crossSessionSearch("thinking...", "entry", null, null, 0);
 		String page1 = tools.crossSessionSearch("thinking...", "entry", null, null, 1);
@@ -300,12 +302,11 @@ class CrossSessionRecallToolsTests {
 
 	@Test
 	void builderRejectsNullSessionService() {
-		assertThatIllegalArgumentException().isThrownBy(() -> CrossSessionRecallTools.builder(null, "alice"));
+		assertThatIllegalArgumentException().isThrownBy(() -> CrossSessionRecallTools.builder(null, SessionSelector.principal("alice")));
 	}
 
 	@Test
-	void builderRejectsAnEmptyPrincipalAndANullSelector() {
-		assertThatIllegalArgumentException().isThrownBy(() -> CrossSessionRecallTools.builder(this.sessionService, ""));
+	void builderRejectsANullSelector() {
 		assertThatIllegalArgumentException()
 			.isThrownBy(() -> CrossSessionRecallTools.builder(this.sessionService, (SessionSelector) null));
 	}
