@@ -18,7 +18,9 @@ package org.springaicommunity.session.autoconfigure;
 
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.SessionRepository;
+import org.springframework.ai.session.SessionScopeResolver;
 import org.springframework.ai.session.SessionService;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -51,11 +53,13 @@ import org.springframework.context.annotation.Bean;
 public class SessionServiceAutoConfiguration {
 
 	@Bean
-	DefaultSessionService sessionService(SessionRepository sessionRepository, SessionServiceProperties properties) {
+	DefaultSessionService sessionService(SessionRepository sessionRepository, SessionServiceProperties properties,
+			ObjectProvider<SessionScopeResolver> scopeResolver) {
 		return DefaultSessionService.builder()
 			.sessionRepository(sessionRepository)
 			.defaultTimeToLive(properties.getTimeToLive())
 			.allowSystemMessages(properties.isAllowSystemMessages())
+			.scopeResolver(scopeResolver.getIfAvailable(SessionScopeResolver::none))
 			.build();
 	}
 

@@ -14,3 +14,4 @@
 # limitations under the License.
 #
 org.springaicommunity.session.autoconfigure.SessionServiceAutoConfiguration
+org.springaicommunity.session.autoconfigure.SessionSecurityAutoConfiguration

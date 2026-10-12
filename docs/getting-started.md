@@ -135,7 +135,6 @@ messages after each response, and compacts when a trigger fires.
 @Bean
 SessionMemoryAdvisor sessionMemoryAdvisor(SessionService sessionService) {
     return SessionMemoryAdvisor.builder(sessionService)
-        .defaultUserId("alice")
         // Compact when 20 turns accumulate, keeping the last 10 events
         .compactionTrigger(new TurnCountTrigger(20))
         .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())

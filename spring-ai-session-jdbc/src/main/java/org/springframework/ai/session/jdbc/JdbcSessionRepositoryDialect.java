@@ -47,8 +47,9 @@ public interface JdbcSessionRepositoryDialect {
 	 * {@code event_version} must <em>not</em> be modified.
 	 *
 	 * <p>
-	 * Parameters (in order): {@code id}, {@code user_id}, {@code created_at},
-	 * {@code expires_at}, {@code metadata}.
+	 * Parameters (in order): {@code id}, {@code user_id} (the 0.10 owner column, written
+	 * with the principal name or an empty string), {@code created_at}, {@code expires_at},
+	 * {@code metadata}.
 	 */
 	String getUpsertSessionSql();
 

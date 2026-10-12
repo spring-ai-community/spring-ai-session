@@ -297,7 +297,7 @@ Then store the session's system prompt. It stays active and protected from compa
 until you store a new one:
 
 ```java
-Session session = sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+Session session = sessionService.create(CreateSessionRequest.builder().build());
 sessionService.appendMessage(session.id(), new SystemMessage("Answer in French."));
 ```
 

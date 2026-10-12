@@ -16,8 +16,11 @@
 
 package org.springframework.ai.session.jdbc;
 
+import java.sql.Connection;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import javax.sql.DataSource;
@@ -44,14 +47,17 @@ import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.test.AbstractSessionRepositoryContractTests;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
@@ -96,9 +102,8 @@ class JdbcSessionRepositoryTests {
 		Instant expiry = Instant.ofEpochMilli(Instant.now().plusSeconds(3600).toEpochMilli());
 		Session session = Session.builder()
 			.id(UUID.randomUUID().toString())
-			.userId("user-meta")
 			.expiresAt(expiry)
-			.metadata(java.util.Map.of("model", "gpt-4o"))
+			.metadata(java.util.Map.of(SessionAttributes.PRINCIPAL_NAME, "user-meta", "model", "gpt-4o"))
 			.build();
 		this.repository.save(session);
 
@@ -119,8 +124,7 @@ class JdbcSessionRepositoryTests {
 
 		Session updated = Session.builder()
 			.id(session.id())
-			.userId(session.userId())
-			.metadata(java.util.Map.of("newKey", "newVal"))
+			.metadata(java.util.Map.of(SessionAttributes.PRINCIPAL_NAME, "user-meta", "newKey", "newVal"))
 			.build();
 		this.repository.save(updated);
 
@@ -229,6 +233,98 @@ class JdbcSessionRepositoryTests {
 	}
 
 	// -------------------------------------------------------------------------
+	// Indexed attributes and the 0.10 user_id column
+	// -------------------------------------------------------------------------
+
+	@Test
+	void aSessionRowWrittenBeforeZeroElevenHasItsOwnerAsPrincipal() {
+		String legacy = UUID.randomUUID().toString();
+		String migrated = UUID.randomUUID().toString();
+		java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
+		String insert = "INSERT INTO AI_SESSION (id, user_id, created_at, expires_at, metadata, event_version)"
+				+ " VALUES (?, ?, ?, ?, ?, 0)";
+		this.jdbcTemplate.update(insert, legacy, "alice", now, null, null);
+		this.jdbcTemplate.update(insert, migrated, "alice", now, null, "{\"principalName\":\"bob\"}");
+
+		// user_id is the principal when the metadata has none...
+		assertThat(SessionAttributes.principalName(this.repository.findById(legacy))).isEqualTo("alice");
+		// ...and the metadata wins when it has one
+		assertThat(SessionAttributes.principalName(this.repository.findById(migrated))).isEqualTo("bob");
+	}
+
+	@Test
+	void theSchemaScriptIndexesLegacyOwnersOnce() throws Exception {
+		String legacy = UUID.randomUUID().toString();
+		String owner = "legacy-owner-" + UUID.randomUUID();
+		this.jdbcTemplate.update("INSERT INTO AI_SESSION (id, user_id, created_at, event_version) VALUES (?, ?, ?, 0)",
+				legacy, owner, java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, owner)).isEmpty();
+
+		// Re-running the bundled script copies user_id into the index, and only once
+		for (int run = 0; run < 2; run++) {
+			try (Connection connection = this.dataSource.getConnection()) {
+				ScriptUtils.executeSqlScript(connection,
+						new ClassPathResource("org/springframework/ai/session/jdbc/schema-h2.sql"));
+			}
+		}
+
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, owner)).extracting(Session::id)
+			.containsExactly(legacy);
+		assertThat(this.jdbcTemplate.queryForObject("SELECT COUNT(*) FROM AI_SESSION_INDEX WHERE session_id = ?",
+				Integer.class, legacy)).isEqualTo(1);
+	}
+
+	@Test
+	void theWriterDecidesWhichAttributesAreIndexed() {
+		JdbcSessionRepository tenantAware = JdbcSessionRepository.builder()
+			.dataSource(this.dataSource)
+			.dialect(new H2JdbcSessionRepositoryDialect())
+			.indexedAttributes(Set.of("tenant"))
+			.build();
+		assertThat(tenantAware.getIndexedAttributes()).containsExactlyInAnyOrder("tenant",
+				SessionAttributes.PRINCIPAL_NAME);
+		String tenant = "acme-" + UUID.randomUUID();
+		Session indexed = tenantAware.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.metadata(Map.of("tenant", tenant, SessionAttributes.PRINCIPAL_NAME, "alice"))
+			.build());
+		Session notIndexed = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.metadata(Map.of("tenant", tenant, SessionAttributes.PRINCIPAL_NAME, "alice"))
+			.build());
+
+		// Both repositories read the same table: what matters is who wrote the row
+		assertThat(tenantAware.findByIndex("tenant", tenant)).extracting(Session::id).containsExactly(indexed.id());
+		assertThat(this.repository.findByIndex("tenant", tenant)).extracting(Session::id)
+			.containsExactly(indexed.id());
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "alice")).extracting(Session::id)
+			.contains(indexed.id(), notIndexed.id());
+		// Re-saving with the tenant-aware repository indexes the missing attribute
+		tenantAware.save(notIndexed);
+		assertThat(tenantAware.findByIndex("tenant", tenant)).hasSize(2);
+	}
+
+	@Test
+	void indexedValuesMatchOnTheirFirstFiveHundredAndTwelveCharacters() {
+		String prefix = "p-" + UUID.randomUUID() + "-";
+		String value = prefix + "x".repeat(JdbcSessionRepository.MAX_INDEXED_VALUE_LENGTH);
+		Session session = this.repository
+			.save(Session.builder().id(UUID.randomUUID().toString()).metadata("tenant", "irrelevant").metadata(SessionAttributes.PRINCIPAL_NAME, value).build());
+
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, value)).extracting(Session::id)
+			.containsExactly(session.id());
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME,
+				value.substring(0, JdbcSessionRepository.MAX_INDEXED_VALUE_LENGTH)))
+			.extracting(Session::id)
+			.containsExactly(session.id());
+		// A value that differs only after the indexed prefix is not told apart
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, value + "tail")).extracting(Session::id)
+			.containsExactly(session.id());
+		// The stored metadata keeps the full value
+		assertThat(SessionAttributes.principalName(this.repository.findById(session.id()))).isEqualTo(value);
+	}
+
+	// -------------------------------------------------------------------------
 	// Versioning and CAS
 	// -------------------------------------------------------------------------
 
@@ -295,7 +391,7 @@ class JdbcSessionRepositoryTests {
 			.sessionRepository(this.repository)
 			.allowSystemMessages(true)
 			.build();
-		Session session = service.create(CreateSessionRequest.builder().userId("user-sys").build());
+		Session session = service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-sys").build());
 		service.appendMessage(session.id(), new SystemMessage("Answer in French."));
 		for (int i = 1; i <= 3; i++) {
 			service.appendMessage(session.id(), new UserMessage("question " + i));
@@ -340,8 +436,11 @@ class JdbcSessionRepositoryTests {
 	// Helpers
 	// -------------------------------------------------------------------------
 
-	private Session buildSession(String userId) {
-		return Session.builder().id(UUID.randomUUID().toString()).userId(userId).build();
+	private Session buildSession(String principal) {
+		return Session.builder()
+			.id(UUID.randomUUID().toString())
+			.metadata(SessionAttributes.PRINCIPAL_NAME, principal)
+			.build();
 	}
 
 	private void appendEntry(String sessionId, int n) {

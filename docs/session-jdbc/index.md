@@ -9,7 +9,8 @@ and H2 out of the box.
 ## Tables
 
 ```
-AI_SESSION          — session metadata (id, user_id, TTL, metadata JSON, event_version)
+AI_SESSION          — session metadata (id, TTL, metadata JSON, event_version)
+AI_SESSION_INDEX    — indexed metadata attributes (session_id, attr_name, attr_value), FK → AI_SESSION
 AI_SESSION_EVENT    — event log (FK → AI_SESSION, ON DELETE CASCADE)
 ```
 
@@ -99,7 +100,7 @@ JdbcSessionRepository.builder()
 // Create a session
 Session session = sessions.save(Session.builder()
     .id(UUID.randomUUID().toString())
-    .userId("alice")
+    .metadata(SessionAttributes.PRINCIPAL_NAME, "alice")
     .build());
 
 // Append a message event
@@ -140,8 +141,18 @@ rows that boundary names plus every row from the boundary on, ordered by `seq`, 
 compaction, so it is read whole. A session without a boundary is read whole too, minus
 rows a 0.10 compaction flagged `archived`; that column is no longer written.
 
-**Cross-session search** — `findEventsByUserId` is one query that joins `AI_SESSION` and
-`AI_SESSION_EVENT`, filters, sorts by timestamp and applies the page in the database.
+**Indexed attributes** — on every save the repository copies the metadata entries whose
+keys are configured as indexed (`JdbcSessionRepository.builder().indexedAttributes(...)`,
+always including `SessionAttributes.PRINCIPAL_NAME`) into `AI_SESSION_INDEX`, one row per
+attribute, on the first 512 characters of the value. `findByIndex(name, value)` is one
+query over that table joined to `AI_SESSION`. The `user_id` column of 0.10 is no longer
+part of the model: it is still written with the principal name (so a database that
+declares it `NOT NULL` keeps working), a row whose metadata has no principal is read with
+`user_id` as its principal, and the schema script copies `user_id` into the index once.
+
+**Cross-session search** — `findEvents(sessionIds, filter)` is one query over the given
+sessions (`session_id IN (...)`) that filters, sorts by timestamp and applies the page in
+the database.
 
 **`synthetic` column** — stored as a dedicated `BOOLEAN` column (not only in the metadata
 JSON blob) so `EventFilter.excludeSynthetic()` translates to a SQL predicate instead of

@@ -27,6 +27,7 @@ import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -100,7 +101,7 @@ class SessionServiceAutoConfigurationTests {
 			.run(context -> {
 				assertThat(context.getBean(SessionServiceProperties.class).isAllowSystemMessages()).isFalse();
 				SessionService service = context.getBean(SessionService.class);
-				Session session = service.create(CreateSessionRequest.builder().userId("alice").build());
+				Session session = service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 				assertThatIllegalArgumentException()
 					.isThrownBy(() -> service.appendMessage(session.id(), new SystemMessage("Answer in French.")))
 					.withMessageContaining("spring.ai.session.allow-system-messages=true");
@@ -113,7 +114,7 @@ class SessionServiceAutoConfigurationTests {
 			.withPropertyValues("spring.ai.session.allow-system-messages=true")
 			.run(context -> {
 				SessionService service = context.getBean(SessionService.class);
-				Session session = service.create(CreateSessionRequest.builder().userId("alice").build());
+				Session session = service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 				service.appendMessage(session.id(), new SystemMessage("Answer in French."));
 				assertThat(service.getMessages(session.id())).extracting(m -> m.getText())
 					.containsExactly("Answer in French.");

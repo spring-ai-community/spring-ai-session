@@ -59,7 +59,7 @@ class CompactionLogOrderTests {
 			.builder(chatClient)
 			.maxEventsToKeep(4)
 			.build();
-		String id = this.service.create(CreateSessionRequest.builder().userId("user-order").build()).id();
+		String id = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-order").build()).id();
 
 		// Pass 1: the system message stored inside turn 1 is pinned first
 		append(id, user("u1"), system("sys-1"), assistant("a1"), user("u2"), assistant("a2"), user("u3"),
@@ -102,7 +102,7 @@ class CompactionLogOrderTests {
 
 	@Test
 	void slidingWindowCompactionPinsAMidConversationSystemMessageFirst() {
-		String id = this.service.create(CreateSessionRequest.builder().userId("user-order").build()).id();
+		String id = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-order").build()).id();
 		append(id, user("u1"), assistant("a1"), user("u2"), system("sys-1"), assistant("a2"), user("u3"),
 				assistant("a3"));
 

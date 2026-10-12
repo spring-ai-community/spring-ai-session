@@ -51,7 +51,6 @@ expanded prompt, the **after** phase appends the assistant message and compacts 
 
 ```java
 SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
-    .defaultUserId("alice")
     // Compact when 20 turns accumulate, using LLM summarization to retain context
     .compactionTrigger(new TurnCountTrigger(20))
     .compactionStrategy(
@@ -153,31 +152,29 @@ String response = client.prompt()
     .content();
 ```
 
-If no session exists for the given ID, the advisor creates one automatically using the
-`USER_ID_CONTEXT_KEY` value from the request context, falling back to `defaultUserId`.
-`defaultUserId` defaults to `"default-user"`, so set one of them if you later look
-sessions up by user, e.g. with `findByUserId` or `CrossSessionRecallTools`.
+If no session exists for the given ID, the advisor creates one through
+`SessionService.create`. The session's scope, the principal name under
+`SessionAttributes.PRINCIPAL_NAME`, normally comes from the service's
+`SessionScopeResolver`. Creation metadata passed with `SESSION_METADATA_CONTEXT_KEY` is
+applied as the request's own metadata, so an attribute set there wins over the resolver,
+and an authorizing service decides whether the caller may set it:
 
-!!! note "Ownership enforcement"
-    When `USER_ID_CONTEXT_KEY` is present and the session already exists, the advisor
-    checks that the supplied user ID matches `session.userId()`. A mismatch throws
-    `IllegalStateException` — this prevents one user from reading or appending to
-    another user's session if session IDs are ever guessable or shared.
+```java
+client.prompt()
+    .user("Hello!")
+    .advisors(a -> a
+        .param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "session-abc")
+        .param(SessionMemoryAdvisor.SESSION_METADATA_CONTEXT_KEY, Map.of("agent", "support"))
+    )
+    .call()
+    .content();
+```
 
-    The check is **skipped** when `USER_ID_CONTEXT_KEY` is absent so that callers
-    which rely solely on `defaultUserId` (or do their own authorization upstream) are
-    not affected.
-
-    ```java
-    client.prompt()
-        .user("Hello!")
-        .advisors(a -> a
-            .param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "session-abc")
-            .param(SessionMemoryAdvisor.USER_ID_CONTEXT_KEY, "alice")  // enforced
-        )
-        .call()
-        .content();
-    ```
+!!! note "Who may use a session"
+    The advisor does not decide that. Every read and append goes through the
+    `SessionService`, and with the security module an `AuthorizingSessionService` checks
+    each call against the caller: a session is denied to anyone but its principal. See
+    [Scope and Security](../session-management/scope-and-security.md).
 
 ---
 
@@ -186,7 +183,7 @@ sessions up by user, e.g. with `findByUserId` or `CrossSessionRecallTools`.
 | Key constant | String value | Purpose |
 |---|---|---|
 | `SESSION_ID_CONTEXT_KEY` | `"chat_memory_conversation_id"` (= `ChatMemory.CONVERSATION_ID`) | Routes the request to a session |
-| `USER_ID_CONTEXT_KEY` | `"chat_memory_user_id"` | Used when auto-creating a session; also enforces ownership on existing sessions when set |
+| `SESSION_METADATA_CONTEXT_KEY` | `"chat_memory_session_metadata"` | A `Map<String, Object>` of metadata for a session the advisor creates on first use; ignored for an existing session |
 | `EVENT_FILTER_CONTEXT_KEY` | `"chat_memory_event_filter_id"` | Per-request `EventFilter` merged with the advisor-level filter |
 
 ---

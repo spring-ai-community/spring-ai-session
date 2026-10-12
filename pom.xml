@@ -67,6 +67,7 @@
         <module>spring-ai-session</module>
         <module>spring-ai-session-jdbc</module>
         <module>spring-ai-session-test</module>
+        <module>spring-ai-session-security</module>
         <module>auto-configurations/session/spring-ai-autoconfigure-session</module>
         <module>auto-configurations/session/spring-ai-autoconfigure-session-jdbc</module>
         <module>boot-starters/spring-ai-starter-session-jdbc</module>

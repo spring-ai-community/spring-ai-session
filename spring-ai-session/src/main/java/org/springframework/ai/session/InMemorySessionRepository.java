@@ -18,10 +18,12 @@ package org.springframework.ai.session;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -66,7 +68,6 @@ public final class InMemorySessionRepository implements SessionRepository {
 			// Update: keep the original creation time, like the JDBC upsert does.
 			Session updated = Session.builder()
 				.id(session.id())
-				.userId(session.userId())
 				.createdAt(existing.session().createdAt())
 				.expiresAt(session.expiresAt())
 				.metadata(session.metadata())
@@ -90,12 +91,14 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public List<Session> findByUserId(String userId) {
-		Assert.hasText(userId, "userId must not be null or empty");
+	public List<Session> findByIndex(String name, String value) {
+		Assert.hasText(name, "name must not be null or empty");
+		Assert.notNull(value, "value must not be null");
 		return this.store.values()
 			.stream()
-			.filter(d -> userId.equals(d.session().userId()))
 			.map(SessionData::session)
+			.filter(s -> s.metadata().containsKey(name) && value.equals(String.valueOf(s.metadata().get(name))))
+			.sorted(Comparator.comparing(Session::createdAt).thenComparing(Session::id))
 			.toList();
 	}
 
@@ -194,13 +197,14 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public List<SessionEvent> findEventsByUserId(String userId, EventFilter filter) {
-		Assert.hasText(userId, "userId must not be null or empty");
+	public List<SessionEvent> findEvents(Collection<String> sessionIds, EventFilter filter) {
+		Assert.notNull(sessionIds, "sessionIds must not be null");
 		Assert.notNull(filter, "filter must not be null");
 		EventFilter perSession = filter.withoutWindow();
-		List<SessionEvent> matches = this.store.values()
-			.stream()
-			.filter(d -> userId.equals(d.session().userId()))
+		List<SessionEvent> matches = sessionIds.stream()
+			.distinct()
+			.map(this.store::get)
+			.filter(Objects::nonNull)
 			.flatMap(d -> perSession.apply(d.events()).stream())
 			.sorted(Comparator.comparing(SessionEvent::getTimestamp).thenComparing(SessionEvent::getId))
 			.toList();

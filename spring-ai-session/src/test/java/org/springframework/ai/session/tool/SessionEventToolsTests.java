@@ -30,6 +30,7 @@ import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.SessionAttributes;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -51,7 +52,7 @@ class SessionEventToolsTests {
 			.build();
 		this.tools = SessionEventTools.builder(this.sessionService).build();
 
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("test-user").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "test-user").build());
 		this.sessionId = session.id();
 	}
 
@@ -184,7 +185,7 @@ class SessionEventToolsTests {
 	@Test
 	void missingSessionIdReturnsErrorInsteadOfSearchingDefaultSession() {
 		Session defaultSession = this.sessionService
-			.create(CreateSessionRequest.builder().id("default").userId("other-user").build());
+			.create(CreateSessionRequest.builder().id("default").metadata(SessionAttributes.PRINCIPAL_NAME, "other-user").build());
 		this.sessionService.appendMessage(defaultSession.id(), new UserMessage("secret from another user"));
 
 		String result = this.tools.conversationSearch("thinking...", "secret", 0, new ToolContext(Map.of()));

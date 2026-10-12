@@ -14,10 +14,13 @@ The event log is stored separately in the repository and fetched on demand.
 | Field | Description |
 |-------|-------------|
 | `id` | Unique session identifier |
-| `userId` | Owning user or agent — required, used for isolation |
 | `createdAt` | Creation timestamp |
 | `expiresAt` | Expiry instant. Sessions created through `SessionService.create` always get one: the request's `timeToLive`, or the service's default (60 days, configurable). `null` (no expiry) is only possible for a `Session` built directly with `Session.builder().expiresAt(null)`. |
-| `metadata` | Arbitrary key/value pairs (model info, tags, etc.) |
+| `metadata` | Arbitrary key/value pairs: the scope attributes (`SessionAttributes.PRINCIPAL_NAME` for the owning principal), model info, tags, etc. |
+
+A session has no owner field. Who it belongs to is a metadata attribute, filled by a
+`SessionScopeResolver` and looked up with `findByIndex(name, value)`; see
+[Scope and Security](scope-and-security.md).
 
 Keeping `Session` metadata-only means it can be passed across boundaries cheaply and stays
 immutable: every event write goes through dedicated repository methods (`appendEvent`,
@@ -35,7 +38,7 @@ SessionService service = DefaultSessionService.builder()
 Session session = service.create(
     CreateSessionRequest.builder()
         .id("my-session-id")           // optional; a UUID is generated when omitted
-        .userId("alice")
+        .metadata(SessionAttributes.PRINCIPAL_NAME, "alice") // or let a SessionScopeResolver fill it
         .timeToLive(Duration.ofHours(2)) // optional; defaults to 60 days
         .metadata("agentType", "research-assistant")
         .build()
@@ -228,8 +231,10 @@ classDiagram
         <<interface>>
         +create(request) Session
         +findById(id) Session
+        +findByIndex(name, value) List
         +appendEvent(event)
         +getEvents(id, filter) List
+        +findEvents(ids, filter) List
         +getActiveMessages(id) List
         +compact(id, trigger, strategy) CompactionResult
         +deleteExpiredSessions(before) int
@@ -240,10 +245,11 @@ classDiagram
         +save(session) Session
         +saveIfAbsent(session) boolean
         +findById(id) Session
+        +findByIndex(name, value) List
         +deleteExpiredSessions(before) int
         +appendEvent(event)
         +findEvents(id, filter) List
-        +findEventsByUserId(userId, filter) List
+        +findEvents(ids, filter) List
         +getEventVersion(id) long
         +appendEvents(id, events, version) boolean
     }
@@ -252,7 +258,6 @@ classDiagram
 
     class Session {
         id
-        userId
         createdAt
         expiresAt
         metadata
@@ -395,9 +400,10 @@ the rows the newest boundary names plus the rows from the boundary on and let
 extend it back to the nearest preceding one among the matching events, unless the filter
 searches text or no such event exists (`EventFilter.applyTurnAwareWindow` spells out the
 rule; the JDBC repository does it with one bounded extra query). The contract kit checks
-this on every store. `findEventsByUserId(userId, filter)` has a default that loops over
-the user's sessions and windows the union in memory; a store that can join sessions and
-events should override it with one sorted, paged query.
+this on every store. `findEvents(sessionIds, filter)` has a default that loops over the
+given sessions and windows the union in memory; a store that can query several sessions
+at once should override it with one sorted, paged query. `findByIndex(name, value)` is the
+one scoped lookup: every store indexes `SessionAttributes.PRINCIPAL_NAME`.
 
 **Events have one persisted shape.** `SessionEventCodec` encodes a `SessionEvent` into
 its event type, message type, text and a JSON payload (the message parts, or the payload
@@ -483,11 +489,7 @@ sequenceDiagram
 
 ```java
 // 1. Create (service built as in the Session section above)
-Session session = service.create(
-    CreateSessionRequest.builder()
-        .userId("alice")
-        .build()
-);
+Session session = service.create(CreateSessionRequest.builder().build());
 
 // 2. Append events (shorthand wraps a Message in a SessionEvent automatically)
 service.appendMessage(session.id(), new UserMessage("What is Spring AI?"));

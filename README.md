@@ -68,7 +68,6 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 SessionService sessionService = DefaultSessionService.builder().sessionRepository(InMemorySessionRepository.builder().build()).build();
 
 SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
-    .defaultUserId("alice")
     .compactionTrigger(new TurnCountTrigger(20))
     .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
     .build();

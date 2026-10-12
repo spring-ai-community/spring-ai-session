@@ -27,6 +27,7 @@ import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.jdbc.JdbcSessionRepository;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration;
@@ -82,12 +83,12 @@ class JdbcSessionRepositoryMysqlAutoConfigurationIT {
 		this.contextRunner.run(context -> {
 			var repo = context.getBean(JdbcSessionRepository.class);
 			String sessionId = UUID.randomUUID().toString();
-			Session session = Session.builder().id(sessionId).userId("user-mysql").build();
+			Session session = Session.builder().id(sessionId).metadata(SessionAttributes.PRINCIPAL_NAME, "user-mysql").build();
 
 			repo.save(session);
 
 			assertThat(repo.findById(sessionId)).isNotNull()
-				.satisfies(s -> assertThat(s.userId()).isEqualTo("user-mysql"));
+				.satisfies(s -> assertThat(SessionAttributes.principalName(s)).isEqualTo("user-mysql"));
 		});
 	}
 
@@ -96,7 +97,7 @@ class JdbcSessionRepositoryMysqlAutoConfigurationIT {
 		this.contextRunner.run(context -> {
 			var repo = context.getBean(JdbcSessionRepository.class);
 			String sessionId = UUID.randomUUID().toString();
-			repo.save(Session.builder().id(sessionId).userId("user-mysql-events").build());
+			repo.save(Session.builder().id(sessionId).metadata(SessionAttributes.PRINCIPAL_NAME, "user-mysql-events").build());
 
 			SessionEvent event1 = SessionEvent.builder()
 				.id(UUID.randomUUID().toString())
@@ -126,7 +127,7 @@ class JdbcSessionRepositoryMysqlAutoConfigurationIT {
 		this.contextRunner.run(context -> {
 			var repo = context.getBean(JdbcSessionRepository.class);
 			String sessionId = UUID.randomUUID().toString();
-			repo.save(Session.builder().id(sessionId).userId("user-mysql-delete").build());
+			repo.save(Session.builder().id(sessionId).metadata(SessionAttributes.PRINCIPAL_NAME, "user-mysql-delete").build());
 
 			repo.appendEvent(SessionEvent.builder()
 				.id(UUID.randomUUID().toString())
@@ -142,14 +143,14 @@ class JdbcSessionRepositoryMysqlAutoConfigurationIT {
 	}
 
 	@Test
-	void findByUserId() {
+	void findByIndex() {
 		this.contextRunner.run(context -> {
 			var repo = context.getBean(JdbcSessionRepository.class);
 			String userId = "user-mysql-multi-" + UUID.randomUUID();
-			repo.save(Session.builder().id(UUID.randomUUID().toString()).userId(userId).build());
-			repo.save(Session.builder().id(UUID.randomUUID().toString()).userId(userId).build());
+			repo.save(Session.builder().id(UUID.randomUUID().toString()).metadata(SessionAttributes.PRINCIPAL_NAME, userId).build());
+			repo.save(Session.builder().id(UUID.randomUUID().toString()).metadata(SessionAttributes.PRINCIPAL_NAME, userId).build());
 
-			assertThat(repo.findByUserId(userId)).hasSize(2);
+			assertThat(repo.findByIndex(SessionAttributes.PRINCIPAL_NAME, userId)).hasSize(2);
 		});
 	}
 

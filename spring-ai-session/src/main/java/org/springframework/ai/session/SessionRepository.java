@@ -18,6 +18,7 @@ package org.springframework.ai.session;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 
@@ -61,7 +62,18 @@ public interface SessionRepository {
 
 	@Nullable Session findById(String sessionId);
 
-	List<Session> findByUserId(String userId);
+	/**
+	 * Returns the sessions whose {@link Session#metadata() metadata} holds {@code value}
+	 * under {@code name}, in a stable store-defined order (creation time, then id).
+	 * <p>
+	 * This is the one scoped lookup of the store, in the shape of Spring Session's
+	 * {@code findByIndexNameAndIndexValue}: the store indexes attributes, it has no notion
+	 * of ownership. Every store indexes {@link SessionAttributes#PRINCIPAL_NAME}; a store
+	 * that cannot index every key documents which other keys it answers for.
+	 * @param name the metadata key
+	 * @param value the value, compared as a string
+	 */
+	List<Session> findByIndex(String name, String value);
 
 	/**
 	 * Deletes the session with the given ID.
@@ -193,24 +205,25 @@ public interface SessionRepository {
 	List<SessionEvent> findEvents(String sessionId, EventFilter filter);
 
 	/**
-	 * Returns the events of <em>every</em> session of the given user that match the
-	 * filter, ordered by timestamp across sessions (ties broken in a stable, store-defined
-	 * order), with the filter's {@link EventFilter#lastN()} or page applied to that
-	 * combined order as a plain window (turns do not exist across sessions).
+	 * Returns the events of the given sessions that match the filter, ordered by timestamp
+	 * across sessions (ties broken in a stable, store-defined order), with the filter's
+	 * {@link EventFilter#lastN()} or page applied to that combined order as a plain window
+	 * (turns do not exist across sessions). The caller chooses the sessions, typically
+	 * through {@link #findByIndex} or a {@link SessionSelector}.
 	 * <p>
-	 * The default runs the filter without its window over each session of the user,
-	 * sorts the union and applies the window in memory, which costs the total number of
-	 * matches on every call. Stores that can join sessions and events should override it
-	 * with a single sorted, paged query.
-	 * @param userId the user whose sessions are searched
+	 * The default runs the filter without its window over each session, sorts the union
+	 * and applies the window in memory, which costs the total number of matches on every
+	 * call. Stores that can query several sessions at once should override it with a
+	 * single sorted, paged query.
+	 * @param sessionIds the sessions to search; an unknown id contributes nothing
 	 * @param filter the filter; its window applies to the combined result
-	 * @return the matching events, oldest first
+	 * @return the matching events, oldest first; empty when {@code sessionIds} is empty
 	 */
-	default List<SessionEvent> findEventsByUserId(String userId, EventFilter filter) {
+	default List<SessionEvent> findEvents(Collection<String> sessionIds, EventFilter filter) {
 		EventFilter perSession = filter.withoutWindow();
 		List<SessionEvent> matches = new ArrayList<>();
-		for (Session session : findByUserId(userId)) {
-			matches.addAll(findEvents(session.id(), perSession));
+		for (String sessionId : sessionIds) {
+			matches.addAll(findEvents(sessionId, perSession));
 		}
 		matches.sort(Comparator.comparing(SessionEvent::getTimestamp).thenComparing(SessionEvent::getId));
 		return filter.applyWindow(matches);

@@ -19,6 +19,7 @@ package org.springframework.ai.session.advisor;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -143,10 +144,13 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	public static final String SESSION_ID_CONTEXT_KEY = ChatMemory.CONVERSATION_ID;
 
 	/**
-	 * Context key used to pass the user ID into the advisor per-request. Set via:
-	 * {@code .advisors(a -> a.param(SessionMemoryAdvisor.USER_ID_CONTEXT_KEY, "my-user-id"))}
+	 * Context key for the metadata of a session the advisor creates on first use. The
+	 * value must be a {@code Map<String, Object>}; it is ignored for an existing session.
+	 * Scope attributes such as the principal name are normally not passed this way but
+	 * resolved by the service's {@code SessionScopeResolver}. Set via:
+	 * {@code .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_METADATA_CONTEXT_KEY, Map.of("agent", "support")))}
 	 */
-	public static final String USER_ID_CONTEXT_KEY = "chat_memory_user_id";
+	public static final String SESSION_METADATA_CONTEXT_KEY = "chat_memory_session_metadata";
 
 	/**
 	 * Context key for a per-request {@link EventFilter} that is merged over the
@@ -157,8 +161,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	public static final String EVENT_FILTER_CONTEXT_KEY = "chat_memory_event_filter_id";
 
 	private final SessionService sessionService;
-
-	private final String defaultUserId;
 
 	private final int order;
 
@@ -176,12 +178,11 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	@Nullable private final CompactionStrategy compactionStrategy;
 
-	private SessionMemoryAdvisor(SessionService sessionService, String defaultUserId, int order, Scheduler scheduler,
+	private SessionMemoryAdvisor(SessionService sessionService, int order, Scheduler scheduler,
 			EventFilter eventFilter, MessageFilter messageFilter, SessionEventRequestIdGenerator requestEventIdGenerator,
 			SessionEventResponseIdGenerator responseEventIdGenerator, @Nullable CompactionTrigger compactionTrigger,
 			@Nullable CompactionStrategy compactionStrategy) {
 		this.sessionService = sessionService;
-		this.defaultUserId = defaultUserId;
 		this.order = order;
 		this.scheduler = scheduler;
 		this.eventFilter = eventFilter;
@@ -214,15 +215,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			session = createSession(sessionId, request.context());
 		}
 
-		// Enforce ownership when the caller explicitly identifies a user via
-		// USER_ID_CONTEXT_KEY. Skipped when no per-request user ID is set so that
-		// callers that rely solely on defaultUserId are not broken.
-		Object userIdValue = request.context().get(USER_ID_CONTEXT_KEY);
-		if (userIdValue instanceof String requestUserId && !requestUserId.isBlank()
-				&& !requestUserId.equals(session.userId())) {
-			throw new IllegalStateException(
-					"Session '" + sessionId + "' does not belong to user '" + requestUserId + "'. Access denied.");
-		}
+		// Whether the caller may use this session is not decided here: an authorizing
+		// SessionService (see the security module) checks every read and append.
 
 		// 2. Retrieve history applying the configured filter (default: all events)
 
@@ -553,13 +547,12 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	/**
 	 * Creates the session on first use. {@code SessionService.create} inserts atomically,
 	 * so if a concurrent request for the same new session ID created it first, this
-	 * request's create is rejected and the <em>stored</em> session is re-read instead —
-	 * the ownership check in {@code before()} then runs against its actual owner.
+	 * request's create is rejected and the <em>stored</em> session is re-read instead.
 	 */
 	private Session createSession(String sessionId, Map<String, @Nullable Object> context) {
 		try {
 			return this.sessionService
-				.create(CreateSessionRequest.builder().id(sessionId).userId(getUserId(context)).build());
+				.create(CreateSessionRequest.builder().id(sessionId).metadata(sessionMetadata(context)).build());
 		}
 		catch (IllegalStateException ex) {
 			Session existing = this.sessionService.findById(sessionId);
@@ -570,9 +563,22 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		}
 	}
 
-	private String getUserId(Map<String, @Nullable Object> context) {
-		Object value = context.get(USER_ID_CONTEXT_KEY);
-		return (value instanceof String s && !s.isBlank()) ? s : this.defaultUserId;
+	private static Map<String, Object> sessionMetadata(Map<String, @Nullable Object> context) {
+		Object value = context.get(SESSION_METADATA_CONTEXT_KEY);
+		if (value == null) {
+			return Map.of();
+		}
+		if (!(value instanceof Map<?, ?> map)) {
+			throw new IllegalArgumentException("Advisor context value for '" + SESSION_METADATA_CONTEXT_KEY
+					+ "' must be a Map but was " + value.getClass().getName());
+		}
+		Map<String, Object> metadata = new HashMap<>();
+		map.forEach((k, v) -> {
+			if (k != null && v != null) {
+				metadata.put(String.valueOf(k), v);
+			}
+		});
+		return metadata;
 	}
 
 	/**
@@ -661,8 +667,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		private final SessionService sessionService;
 
-		private String defaultUserId = "default-user";
-
 		// Deliberately higher (lower-precedence) than ToolCallingAdvisor's default order
 		// (HIGHEST_PRECEDENCE + 300): with ascending order sort, the lower value runs
 		// outer, so this places SessionMemoryAdvisor nested inside a default-configured
@@ -689,11 +693,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		private Builder(SessionService sessionService) {
 			Assert.notNull(sessionService, "sessionService must not be null");
 			this.sessionService = sessionService;
-		}
-
-		public Builder defaultUserId(String defaultUserId) {
-			this.defaultUserId = defaultUserId;
-			return this;
 		}
 
 		public Builder order(int order) {
@@ -777,7 +776,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 				throw new IllegalArgumentException(
 						"compactionTrigger and compactionStrategy must be set together — set both or neither");
 			}
-			return new SessionMemoryAdvisor(this.sessionService, this.defaultUserId, this.order, this.scheduler,
+			return new SessionMemoryAdvisor(this.sessionService, this.order, this.scheduler,
 					this.eventFilter, this.messageFilter, this.requestEventIdGenerator, this.responseEventIdGenerator,
 					this.compactionTrigger, this.compactionStrategy);
 		}

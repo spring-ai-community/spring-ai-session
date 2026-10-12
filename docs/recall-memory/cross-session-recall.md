@@ -1,7 +1,7 @@
 # Cross-Session Recall
 
-`CrossSessionRecallTools` searches **every session belonging to one user**, not just the
-session the current request is scoped to. It exists for background/maintenance agents —
+`CrossSessionRecallTools` searches **every session a `SessionSelector` selects**, typically
+all the sessions of one principal, not just the session the current request is scoped to. It exists for background/maintenance agents —
 the motivating case is a memory-consolidation agent that periodically mines a user's full
 conversation history for signal (corrections, explicit "remember this" requests,
 decisions) — not for the live conversational agent answering the user directly.
@@ -12,16 +12,16 @@ decisions) — not for the live conversational agent answering the user directly
 
 | | [`conversation_search`](recall-storage.md) | `cross_session_search` |
 |---|---|---|
-| Scope | One session | Every session belonging to one user |
-| Session/user resolved from | `ToolContext`, per request (the caller passes `ChatMemory.CONVERSATION_ID`) | Bound once at **construction time** |
+| Scope | One session | Every session the bound `SessionSelector` selects |
+| Sessions resolved from | `ToolContext`, per request (the caller passes `ChatMemory.CONVERSATION_ID`) | Bound once at **construction time** |
 | Who can change the scope | The calling application, via `.toolContext(...)` | Nobody at runtime — fixed for the tool instance's lifetime |
 | Intended caller | The live conversational agent, mid-chat | A background/maintenance agent running out-of-band |
 | Query power | Single keyword | Multi-term (`ANY`/`ALL`), plus `since` date scoping |
 | Result shape | `timestamp`, `type`, `text` | Same, plus `sessionId` |
 
 !!! warning "Register it only on background agents"
-    The user is bound in Java code, never taken as a tool parameter, so a manipulated
-    prompt cannot make the tool scan another user's sessions. Register it only on an
+    The selector is bound in Java code, never taken as a tool parameter, so a manipulated
+    prompt cannot make the tool scan someone else's sessions. Register it only on an
     isolated background-agent `ChatClient`, never alongside `conversation_search` on the
     live user-facing agent.
 
@@ -30,11 +30,13 @@ decisions) — not for the live conversational agent answering the user directly
 ## Registration
 
 ```java
+// The sessions of one principal (SessionAttributes.PRINCIPAL_NAME)
 CrossSessionRecallTools tools = CrossSessionRecallTools.builder(sessionService, "alice").build();
 
-// Custom page size (default EventFilter.DEFAULT_PAGE_SIZE = 10)
-CrossSessionRecallTools tools = CrossSessionRecallTools.builder(sessionService, "alice")
-    .pageSize(20)
+// Any selection: an indexed attribute, or a fixed set of ids
+CrossSessionRecallTools tenantTools = CrossSessionRecallTools
+    .builder(sessionService, SessionSelector.byIndex("tenant", "acme"))
+    .pageSize(20)   // default EventFilter.DEFAULT_PAGE_SIZE = 10
     .build();
 
 ChatClient client = ChatClient.builder(chatModel)
@@ -64,7 +66,7 @@ bound SQL parameter), so an unbounded count would let one call grow the query wi
 limit. It is a sanity limit, not a security boundary: every term is always bound, never
 concatenated into SQL.
 
-Results from all of the user's sessions are sorted chronologically and returned as a JSON
+Results from all the selected sessions are sorted chronologically and returned as a JSON
 array:
 
 ```json
@@ -80,14 +82,17 @@ When nothing matches: `"No results found."` is returned.
 
 ## Design notes
 
-- **Read-only.** `CrossSessionRecallTools` has no append/compact/delete capability — it can
-  only call `SessionService.findEventsByUserId(...)`.
-- **One query per page.** Each call runs a single `findEventsByUserId(userId, filter)`
-  with the page in the filter. The JDBC repository answers it with one query that joins
-  sessions and events, sorts by timestamp and applies the page in the database; the
-  in-memory repository sorts and windows the union in memory. A custom repository gets
-  the in-memory behaviour from the default method and should override it with a pushed
-  down query.
+- **Read-only.** `CrossSessionRecallTools` has no append/compact/delete capability — it
+  only calls the selector and `SessionService.findEvents(sessionIds, filter)`.
+- **One query per page.** Each call resolves the selector, then runs a single
+  `findEvents(sessionIds, filter)` with the page in the filter. The JDBC repository
+  answers it with one query over the given sessions that sorts by timestamp and applies
+  the page in the database; the in-memory repository sorts and windows the union in
+  memory. A custom repository gets the in-memory behaviour from the default method and
+  should override it with a pushed down query.
+- **Authorization applies.** Behind an `AuthorizingSessionService` the selection is
+  narrowed to the sessions the caller is granted; see
+  [Scope and Security](../session-management/scope-and-security.md).
 - **Synthetic summaries are skipped.** The filter sets `excludeSynthetic(true)`: a
   summary only paraphrases real events that are still in the log, covered or not, so
   searching it too would return the same facts twice.

@@ -40,6 +40,7 @@ import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -66,7 +67,7 @@ final class DialectScenarios {
 		try {
 			Instant instant = Instant.parse("2026-03-08T06:30:00.123456Z");
 			String sessionId = UUID.randomUUID().toString();
-			repository.save(Session.builder().id(sessionId).userId("user-tz").createdAt(instant).expiresAt(instant).build());
+			repository.save(Session.builder().id(sessionId).metadata(SessionAttributes.PRINCIPAL_NAME, "user-tz").createdAt(instant).expiresAt(instant).build());
 			repository.appendEvent(SessionEvent.builder()
 				.sessionId(sessionId)
 				.timestamp(instant)
@@ -95,7 +96,7 @@ final class DialectScenarios {
 
 	private static String newSession(JdbcSessionRepository repository) {
 		String sessionId = UUID.randomUUID().toString();
-		repository.save(Session.builder().id(sessionId).userId("user-like").build());
+		repository.save(Session.builder().id(sessionId).metadata(SessionAttributes.PRINCIPAL_NAME, "user-like").build());
 		return sessionId;
 	}
 
@@ -116,7 +117,7 @@ final class DialectScenarios {
 			.sessionRepository(repository)
 			.allowSystemMessages(true)
 			.build();
-		String id = service.create(CreateSessionRequest.builder().userId("user-order").build()).id();
+		String id = service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-order").build()).id();
 
 		appendAll(service, id, "u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5", "a5");
 		service.compact(id, request -> true, strategy);

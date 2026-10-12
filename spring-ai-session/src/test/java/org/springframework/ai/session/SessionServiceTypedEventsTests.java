@@ -42,7 +42,7 @@ class SessionServiceTypedEventsTests {
 		.build();
 
 	private Session sessionWithStatusEvents() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 		this.service.appendMessage(session.id(), new UserMessage("q1"));
 		this.service.appendEvent(status(session.id(), "RUNNING"));
 		this.service.appendMessage(session.id(), new AssistantMessage("a1"));

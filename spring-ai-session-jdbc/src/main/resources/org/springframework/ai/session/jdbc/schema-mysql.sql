@@ -2,7 +2,10 @@
 -- script safe to re-run (spring.ai.session.repository.jdbc.initialize-schema=always).
 CREATE TABLE IF NOT EXISTS AI_SESSION (
     id            VARCHAR(255)  NOT NULL PRIMARY KEY,
-    user_id       VARCHAR(255)  NOT NULL,
+    -- Not part of the model since 0.11.0: the owner is the indexed metadata attribute
+    -- 'principalName' (AI_SESSION_INDEX). Still written with that attribute, and read as it
+    -- for rows whose metadata has none, so existing databases keep working
+    user_id       VARCHAR(255)  NOT NULL DEFAULT '',
     created_at    DATETIME(6)   NOT NULL,
     expires_at    DATETIME(6),
     metadata      LONGTEXT,
@@ -10,6 +13,27 @@ CREATE TABLE IF NOT EXISTS AI_SESSION (
     INDEX idx_ai_session_user_id (user_id),
     INDEX idx_ai_session_expires_at (expires_at)
 );
+
+-- Indexed metadata attributes: one row per session and indexed attribute name (by
+-- default the principal name). findByIndex(name, value) is one query over this table.
+CREATE TABLE IF NOT EXISTS AI_SESSION_INDEX (
+    session_id    VARCHAR(255)  NOT NULL,
+    attr_name     VARCHAR(255)  NOT NULL,
+    attr_value    VARCHAR(512)  NOT NULL,
+    PRIMARY KEY (session_id, attr_name),
+    INDEX idx_ai_session_index_name_value (attr_name, attr_value),
+    CONSTRAINT fk_ai_session_index_session
+        FOREIGN KEY (session_id) REFERENCES AI_SESSION (id) ON DELETE CASCADE
+);
+
+-- Sessions written before 0.11.0 have their owner in user_id only: index it once as the
+-- principal name. Safe to re-run.
+INSERT INTO AI_SESSION_INDEX (session_id, attr_name, attr_value)
+SELECT s.id, 'principalName', s.user_id
+FROM AI_SESSION s
+WHERE s.user_id <> ''
+  AND NOT EXISTS (SELECT 1 FROM AI_SESSION_INDEX i
+                  WHERE i.session_id = s.id AND i.attr_name = 'principalName');
 
 CREATE TABLE IF NOT EXISTS AI_SESSION_EVENT (
     seq             BIGINT        NOT NULL AUTO_INCREMENT,

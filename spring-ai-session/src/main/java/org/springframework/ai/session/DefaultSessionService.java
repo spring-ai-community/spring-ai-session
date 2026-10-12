@@ -19,8 +19,10 @@ package org.springframework.ai.session;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.jspecify.annotations.Nullable;
@@ -47,13 +49,17 @@ public class DefaultSessionService implements SessionService {
 
 	private final boolean allowSystemMessages;
 
+	private final SessionScopeResolver scopeResolver;
+
 	private DefaultSessionService(SessionRepository sessionRepository, Duration defaultTimeToLive,
-			boolean allowSystemMessages) {
+			boolean allowSystemMessages, SessionScopeResolver scopeResolver) {
 		Assert.notNull(sessionRepository, "sessionRepository must not be null");
 		Assert.notNull(defaultTimeToLive, "defaultTimeToLive must not be null");
+		Assert.notNull(scopeResolver, "scopeResolver must not be null");
 		this.sessionRepository = sessionRepository;
 		this.defaultTimeToLive = defaultTimeToLive;
 		this.allowSystemMessages = allowSystemMessages;
+		this.scopeResolver = scopeResolver;
 	}
 
 	@Override
@@ -67,12 +73,16 @@ public class DefaultSessionService implements SessionService {
 		String sessionId = (request.id() != null && !request.id().isBlank()) ? request.id()
 				: UUID.randomUUID().toString();
 
+		// The caller's scope (principal, tenant) fills the attributes the request left out;
+		// an explicit request attribute wins, and an authorization layer in front of this
+		// service decides whether the caller may set it.
+		Map<String, Object> metadata = new HashMap<>(request.metadata());
+		this.scopeResolver.resolve().forEach(metadata::putIfAbsent);
 		Session session = Session.builder()
 			.id(sessionId)
-			.userId(request.userId())
 			.createdAt(now)
 			.expiresAt(expiresAt)
-			.metadata(new HashMap<>(request.metadata()))
+			.metadata(metadata)
 			.build();
 
 		// Insert-only and atomic: never silently overwrite an existing session (an upsert
@@ -92,9 +102,10 @@ public class DefaultSessionService implements SessionService {
 	}
 
 	@Override
-	public List<Session> findByUserId(String userId) {
-		Assert.hasText(userId, "userId must not be null or empty");
-		return this.sessionRepository.findByUserId(userId);
+	public List<Session> findByIndex(String name, String value) {
+		Assert.hasText(name, "name must not be null or empty");
+		Assert.notNull(value, "value must not be null");
+		return this.sessionRepository.findByIndex(name, value);
 	}
 
 	@Override
@@ -124,10 +135,10 @@ public class DefaultSessionService implements SessionService {
 	}
 
 	@Override
-	public List<SessionEvent> findEventsByUserId(String userId, EventFilter filter) {
-		Assert.hasText(userId, "userId must not be null or empty");
+	public List<SessionEvent> findEvents(Collection<String> sessionIds, EventFilter filter) {
+		Assert.notNull(sessionIds, "sessionIds must not be null");
 		Assert.notNull(filter, "filter must not be null");
-		return this.sessionRepository.findEventsByUserId(userId, filter);
+		return this.sessionRepository.findEvents(sessionIds, filter);
 	}
 
 	@Override
@@ -220,6 +231,8 @@ public class DefaultSessionService implements SessionService {
 
 		private boolean allowSystemMessages = false;
 
+		private SessionScopeResolver scopeResolver = SessionScopeResolver.none();
+
 		public Builder sessionRepository(SessionRepository sessionRepository) {
 			Assert.notNull(sessionRepository, "sessionRepository must not be null");
 			this.sessionRepository = sessionRepository;
@@ -248,8 +261,21 @@ public class DefaultSessionService implements SessionService {
 			return this;
 		}
 
+		/**
+		 * The resolver of the caller's scope attributes, merged into the metadata of every
+		 * created session for the keys the request did not set. Defaults to
+		 * {@link SessionScopeResolver#none()}; the Spring Security auto-configuration sets
+		 * one that stores the principal name.
+		 */
+		public Builder scopeResolver(SessionScopeResolver scopeResolver) {
+			Assert.notNull(scopeResolver, "scopeResolver must not be null");
+			this.scopeResolver = scopeResolver;
+			return this;
+		}
+
 		public DefaultSessionService build() {
-			return new DefaultSessionService(this.sessionRepository, this.defaultTimeToLive, this.allowSystemMessages);
+			return new DefaultSessionService(this.sessionRepository, this.defaultTimeToLive, this.allowSystemMessages,
+					this.scopeResolver);
 		}
 
 	}

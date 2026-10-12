@@ -56,9 +56,13 @@ public class JdbcSessionRepositoryAutoConfiguration {
 	@Bean
 	@ConditionalOnMissingBean(SessionRepository.class)
 	@DependsOnDatabaseInitialization
-	JdbcSessionRepository jdbcSessionRepository(DataSource dataSource) {
+	JdbcSessionRepository jdbcSessionRepository(DataSource dataSource, JdbcSessionRepositoryProperties properties) {
 		JdbcSessionRepositoryDialect dialect = JdbcSessionRepositoryDialect.from(dataSource);
-		return JdbcSessionRepository.builder().dataSource(dataSource).dialect(dialect).build();
+		return JdbcSessionRepository.builder()
+			.dataSource(dataSource)
+			.dialect(dialect)
+			.indexedAttributes(properties.getIndexedAttributes())
+			.build();
 	}
 
 	@Bean

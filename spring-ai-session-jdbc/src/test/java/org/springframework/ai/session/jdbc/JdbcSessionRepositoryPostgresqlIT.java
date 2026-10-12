@@ -42,6 +42,7 @@ import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.test.AbstractSessionRepositoryContractTests;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -104,7 +105,7 @@ class JdbcSessionRepositoryPostgresqlIT {
 	@Test
 	void appendConcurrentWithCompactionIsOrderedAfterRetainedEvents() throws Exception {
 		String sessionId = UUID.randomUUID().toString();
-		this.repository.save(Session.builder().id(sessionId).userId("user-pg").build());
+		this.repository.save(Session.builder().id(sessionId).metadata(SessionAttributes.PRINCIPAL_NAME, "user-pg").build());
 
 		SessionEvent oldUser = event(sessionId, new UserMessage("old question"));
 		SessionEvent oldAssistant = event(sessionId, new AssistantMessage("old answer"));

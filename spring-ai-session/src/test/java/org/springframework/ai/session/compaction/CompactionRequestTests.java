@@ -25,6 +25,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionAttributes;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -111,7 +112,7 @@ class CompactionRequestTests {
 	// --- helper ---
 
 	private CompactionRequest requestWith(List<SessionEvent> events) {
-		Session session = Session.builder().id(SESSION_ID).userId("test-user").build();
+		Session session = Session.builder().id(SESSION_ID).metadata(SessionAttributes.PRINCIPAL_NAME, "test-user").build();
 		return CompactionRequest.of(session, new ArrayList<>(events));
 	}
 

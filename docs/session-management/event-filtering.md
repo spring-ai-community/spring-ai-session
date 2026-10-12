@@ -113,7 +113,7 @@ The extension is bounded by one turn and skipped when it cannot apply:
 - **No turn start before the window.** A window that lands in a preamble of stored
   system messages, or a `messageTypes` filter that hides `USER` events, returns the plain
   window.
-- **Pages are plain**, and so are cross-session reads (`findEventsByUserId`), where turns
+- **Pages are plain**, and so are cross-session reads (`findEvents(sessionIds, filter)`), where turns
   do not exist.
 
 `EventFilter.apply(List)` is the reference implementation; the JDBC repository pushes the

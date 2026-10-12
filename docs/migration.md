@@ -68,8 +68,8 @@ What changes in the API:
   (validate that every event belongs to the session and has a new id, check the version,
   append) and honours `EventFilter.compactedView()` in `findEvents`: read the newest
   `COMPACTION` event, fetch the events it names plus everything from it on, and hand them
-  to `EventFilter.apply`, which projects, filters and windows. `findEventsByUserId` with a
-  compacted view can fall back to the default per-session loop. The contract test kit
+  to `EventFilter.apply`, which projects, filters and windows. `findEvents(sessionIds, filter)`
+  with a compacted view can fall back to the default per-session loop. The contract test kit
   checks all of it; its protected `plan(...)` and `apply(...)` helpers are replaced by
   `compact(sessionId, pinned, summary, preserved)` and `event(sessionId, message)`.
 - **`SessionEvent.METADATA_COMPACTION_ID`** is set on every summary event to the id of its
@@ -94,6 +94,52 @@ What changes in behaviour:
   `archived` from its view, so a session compacted by 0.10.0 keeps the view it had until
   its first 0.11.0 compaction, whose boundary then takes over. The column can be dropped
   once no such session remains. The in-memory repository holds nothing across versions.
+
+### Breaking: scope and ownership leave the session model
+
+`Session.userId` modelled an application concern and authorized nothing: the service never
+compared the caller with the owner. It is gone. Who a session belongs to is now an
+attribute in its metadata, resolved from the caller, indexed by the repository and
+enforced by an authorization layer in front of the service, the way Spring Session and
+Spring Security divide the work. See [Scope and Security](session-management/scope-and-security.md).
+
+| Before | After |
+|---|---|
+| `Session.userId()`, `Session.builder().userId(...)`, `CreateSessionRequest.builder().userId(...)` (required) | removed; `metadata` carries `SessionAttributes.PRINCIPAL_NAME` (`"principalName"`). `SessionAttributes.principalName(session)` reads it; `Session.builder().metadata(key, value)` is new |
+| `SessionRepository.findByUserId(userId)`, `SessionService.findByUserId(userId)` | `findByIndex(name, value)`: the sessions whose metadata holds `value` under `name`. The principal is indexed by every store; JDBC indexes other keys when told to (`indexedAttributes`) |
+| `findEventsByUserId(userId, filter)` on the repository and the service | `findEvents(Collection<String> sessionIds, EventFilter filter)`; the caller chooses the sessions, through `findByIndex` or a `SessionSelector` |
+| `CrossSessionRecallTools.builder(sessionService, userId)` | `builder(sessionService, SessionSelector)`; `builder(sessionService, principalName)` remains as the one-principal shorthand |
+| `SessionMemoryAdvisor.USER_ID_CONTEXT_KEY`, `Builder.defaultUserId(...)`, the advisor's ownership check | removed. The session a request creates gets its scope from the service's `SessionScopeResolver`; `SESSION_METADATA_CONTEXT_KEY` passes other creation metadata. Authorization is the `AuthorizingSessionService`'s job |
+| — | new `SessionScopeResolver` (`none()`, `fixed(Map)`; `DefaultSessionService.builder().scopeResolver(...)`), `SessionAttributes`, `SessionSelector` (`principal`, `byIndex`, `of`) |
+| — | JDBC: `JdbcSessionRepository.builder().indexedAttributes(Set)`, `getIndexedAttributes()`, `MAX_INDEXED_VALUE_LENGTH` (512: an indexed value and a lookup value are both cut to their first 512 characters, so longer values match by prefix); property `spring.ai.session.repository.jdbc.indexed-attributes` |
+| — | new module `spring-ai-session-security` (in the BOM): `SecurityContextScopeResolver`, `PrincipalSessionAuthorizationManager`, `AuthorizingSessionService`; auto-configured when Spring Security is present, off with `spring.ai.session.security.enabled=false`. The auto-configured `SessionService` bean is then an `AuthorizingSessionService`, so inject it as `SessionService`, not `DefaultSessionService` |
+
+What to do:
+
+- **Creating sessions.** Drop `.userId(...)`. With Spring Security and the security module
+  nothing replaces it: the principal is resolved. Otherwise configure a
+  `SessionScopeResolver`, or set `.metadata(SessionAttributes.PRINCIPAL_NAME, ...)` on the
+  request.
+- **Looking sessions up.** `findByUserId(x)` becomes
+  `findByIndex(SessionAttributes.PRINCIPAL_NAME, x)`; `findEventsByUserId(x, filter)`
+  becomes `findEvents(ids, filter)` with the ids from that lookup, or
+  `SessionSelector.principal(x).select(service)`.
+- **Authorization.** If you relied on the advisor's `USER_ID_CONTEXT_KEY` check, add the
+  security module: the check it did is now made on every service call, for every caller,
+  not only when the key was passed.
+- **Custom repositories** implement `findByIndex(name, value)` and may override
+  `findEvents(Collection, EventFilter)`; the contract test kit's `newSession(principalName)`
+  helper now stores the principal in the metadata, and `principalSession(id, principalName)`
+  builds such a session.
+- **Streaming with the security module** is limited in this release; see the
+  [streaming note](session-management/scope-and-security.md#with-spring-security). The JDBC schema adds `AI_SESSION_INDEX`
+  (see below).
+
+**Sessions written before 0.11.0** keep their owner: the JDBC row mapper reads `user_id` as
+the principal when the metadata has none, the column is still written with the principal
+name (a database that declares it `NOT NULL` keeps working), and the schema script copies
+`user_id` into `AI_SESSION_INDEX` once (`INSERT … SELECT … WHERE NOT EXISTS`, safe to
+re-run). Databases managed outside the bundled script need the new table and that copy.
 
 ### Breaking: `SessionEventCodec` encodes events, not messages
 
@@ -122,6 +168,30 @@ ALTER TABLE AI_SESSION_EVENT ALTER COLUMN message_type DROP NOT NULL;
 ALTER TABLE AI_SESSION_EVENT ADD COLUMN event_type VARCHAR(32) NOT NULL DEFAULT 'MESSAGE';
 ALTER TABLE AI_SESSION_EVENT ADD COLUMN payload LONGTEXT;
 ALTER TABLE AI_SESSION_EVENT MODIFY message_type VARCHAR(20) NULL;
+```
+
+`AI_SESSION` gains the `AI_SESSION_INDEX` table for indexed metadata attributes (see the
+scope section above). `user_id` is kept and still written on every save; the default
+only matches the bundled script:
+
+```sql
+-- PostgreSQL, H2 and MySQL (the bundled MySQL script declares the index inline)
+CREATE TABLE AI_SESSION_INDEX (
+    session_id VARCHAR(255) NOT NULL,
+    attr_name  VARCHAR(255) NOT NULL,
+    attr_value VARCHAR(512) NOT NULL,
+    PRIMARY KEY (session_id, attr_name),
+    CONSTRAINT fk_ai_session_index_session
+        FOREIGN KEY (session_id) REFERENCES AI_SESSION (id) ON DELETE CASCADE
+);
+CREATE INDEX idx_ai_session_index_name_value ON AI_SESSION_INDEX (attr_name, attr_value);
+ALTER TABLE AI_SESSION ALTER COLUMN user_id SET DEFAULT '';   -- MySQL: ALTER ... MODIFY user_id VARCHAR(255) NOT NULL DEFAULT ''
+
+-- Once: the owner of existing sessions becomes their principal attribute
+INSERT INTO AI_SESSION_INDEX (session_id, attr_name, attr_value)
+SELECT s.id, 'principalName', s.user_id FROM AI_SESSION s
+WHERE s.user_id <> '' AND NOT EXISTS (SELECT 1 FROM AI_SESSION_INDEX i
+                                      WHERE i.session_id = s.id AND i.attr_name = 'principalName');
 ```
 
 See the bundled `schema-{h2,postgresql,mysql}.sql` for the full DDL per dialect.

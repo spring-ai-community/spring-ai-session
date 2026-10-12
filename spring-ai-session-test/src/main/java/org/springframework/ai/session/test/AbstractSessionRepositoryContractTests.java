@@ -48,6 +48,7 @@ import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.EventFilter.MatchMode;
 import org.springframework.ai.session.Session;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.compaction.CompactionBoundary;
@@ -108,7 +109,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 
 		assertThat(found).isNotNull();
 		assertThat(found.id()).isEqualTo(session.id());
-		assertThat(found.userId()).isEqualTo("user-1");
+		assertThat(SessionAttributes.principalName(found)).isEqualTo("user-1");
 	}
 
 	@Test
@@ -117,26 +118,60 @@ public abstract class AbstractSessionRepositoryContractTests {
 	}
 
 	@Test
-	void findByUserIdReturnsOnlyThatUsersSessions() {
+	void findByIndexReturnsTheSessionsWithThatAttributeValue() {
 		String alice = "alice-" + UUID.randomUUID();
 		String bob = "bob-" + UUID.randomUUID();
-		Session first = newSession(alice);
-		Session second = newSession(alice);
+		Instant t0 = Instant.parse("2026-02-01T00:00:00Z");
+		// Saved newest first: the lookup orders by creation time, then id
+		Session second = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.createdAt(t0.plusSeconds(60))
+			.metadata(SessionAttributes.PRINCIPAL_NAME, alice)
+			.build());
+		Session first = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.createdAt(t0)
+			.metadata(SessionAttributes.PRINCIPAL_NAME, alice)
+			.build());
 		newSession(bob);
 
-		assertThat(this.repository.findByUserId(alice)).extracting(Session::id)
-			.containsExactlyInAnyOrder(first.id(), second.id());
-		assertThat(this.repository.findByUserId(bob)).hasSize(1);
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, alice)).extracting(Session::id)
+			.containsExactly(first.id(), second.id());
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, bob)).hasSize(1);
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "nobody-" + UUID.randomUUID()))
+			.isEmpty();
+		assertThat(this.repository.findByIndex("no-such-attribute", alice)).isEmpty();
+	}
+
+	@Test
+	void findByIndexComparesTheValueAsAString() {
+		String id = UUID.randomUUID().toString();
+		this.repository.save(Session.builder().id(id).metadata(SessionAttributes.PRINCIPAL_NAME, 4242L).build());
+
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "4242")).extracting(Session::id)
+			.containsExactly(id);
+	}
+
+	@Test
+	void aSessionWithoutTheAttributeIsNotIndexed() {
+		String id = UUID.randomUUID().toString();
+		this.repository.save(Session.builder().id(id).metadata(Map.of("agent", "support")).build());
+
+		assertThat(this.repository.findById(id)).isNotNull();
+		assertThat(SessionAttributes.principalName(this.repository.findById(id))).isNull();
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "")).isEmpty();
 	}
 
 	@Test
 	void saveIfAbsentNeverOverwritesAnExistingSession() {
 		String id = UUID.randomUUID().toString();
 
-		assertThat(this.repository.saveIfAbsent(Session.builder().id(id).userId("alice").build())).isTrue();
-		assertThat(this.repository.saveIfAbsent(Session.builder().id(id).userId("mallory").build())).isFalse();
+		assertThat(this.repository.saveIfAbsent(principalSession(id, "alice"))).isTrue();
+		assertThat(this.repository.saveIfAbsent(principalSession(id, "mallory"))).isFalse();
 
-		assertThat(this.repository.findById(id).userId()).isEqualTo("alice");
+		assertThat(SessionAttributes.principalName(this.repository.findById(id))).isEqualTo("alice");
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "mallory")).extracting(Session::id)
+			.doesNotContain(id);
 	}
 
 	@Test
@@ -151,7 +186,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 				String userId = "user-" + i;
 				results.add(executor.submit(() -> {
 					start.await();
-					return this.repository.saveIfAbsent(Session.builder().id(id).userId(userId).build());
+					return this.repository.saveIfAbsent(principalSession(id, userId));
 				}));
 			}
 			start.countDown();
@@ -173,22 +208,30 @@ public abstract class AbstractSessionRepositoryContractTests {
 	void saveOfAnExistingSessionKeepsCreatedAtAndEvents() {
 		String id = UUID.randomUUID().toString();
 		Instant created = Instant.parse("2026-01-01T00:00:00Z");
-		this.repository.save(Session.builder().id(id).userId("user-1").createdAt(created).build());
+		this.repository.save(Session.builder()
+			.id(id)
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "user-1")
+			.createdAt(created)
+			.build());
 		append(id, user("kept"));
 
 		Session updated = this.repository.save(Session.builder()
 			.id(id)
-			.userId("user-2")
 			.createdAt(Instant.parse("2026-06-01T00:00:00Z"))
-			.metadata(Map.of("key", "value"))
+			.metadata(Map.of("key", "value", SessionAttributes.PRINCIPAL_NAME, "user-2"))
 			.build());
 
 		assertThat(updated.createdAt()).isEqualTo(created);
 		Session found = this.repository.findById(id);
 		assertThat(found.createdAt()).isEqualTo(created);
-		assertThat(found.userId()).isEqualTo("user-2");
+		assertThat(SessionAttributes.principalName(found)).isEqualTo("user-2");
 		assertThat(found.metadata()).containsEntry("key", "value");
 		assertThat(texts(id, EventFilter.all())).containsExactly("kept");
+		// The index follows the metadata
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "user-1")).extracting(Session::id)
+			.doesNotContain(id);
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "user-2")).extracting(Session::id)
+			.contains(id);
 	}
 
 	@Test
@@ -200,6 +243,8 @@ public abstract class AbstractSessionRepositoryContractTests {
 
 		assertThat(this.repository.findById(session.id())).isNull();
 		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).isEmpty();
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "user-4")).extracting(Session::id)
+			.doesNotContain(session.id());
 	}
 
 	@Test
@@ -209,9 +254,17 @@ public abstract class AbstractSessionRepositoryContractTests {
 		String expired = UUID.randomUUID().toString();
 		String extended = UUID.randomUUID().toString();
 		String noTtl = UUID.randomUUID().toString();
-		this.repository.save(Session.builder().id(expired).userId(userId).expiresAt(now.minusSeconds(60)).build());
-		this.repository.save(Session.builder().id(extended).userId(userId).expiresAt(now.plusSeconds(60)).build());
-		this.repository.save(Session.builder().id(noTtl).userId(userId).build());
+		this.repository.save(Session.builder()
+			.id(expired)
+			.metadata(SessionAttributes.PRINCIPAL_NAME, userId)
+			.expiresAt(now.minusSeconds(60))
+			.build());
+		this.repository.save(Session.builder()
+			.id(extended)
+			.metadata(SessionAttributes.PRINCIPAL_NAME, userId)
+			.expiresAt(now.plusSeconds(60))
+			.build());
+		this.repository.save(principalSession(noTtl, userId));
 		append(expired, user("gone"));
 		append(extended, user("kept"));
 
@@ -495,22 +548,22 @@ public abstract class AbstractSessionRepositoryContractTests {
 	}
 
 	@Test
-	void findEventsByUserIdWindowsArePlain() {
-		String userId = "user-cross-window-" + UUID.randomUUID();
-		Session session = newSession(userId);
+	void findEventsAcrossSessionsWindowsArePlain() {
+		Session session = newSession("user-cross-window-" + UUID.randomUUID());
 		append(session.id(), user("u1"), assistant("a1"));
 
-		assertThat(this.repository.findEventsByUserId(userId, EventFilter.lastN(1)))
+		assertThat(this.repository.findEvents(List.of(session.id()), EventFilter.lastN(1)))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("a1");
 	}
 
 	@Test
-	void findEventsByUserIdOrdersByTimestampAcrossSessionsAndPages() {
+	void findEventsAcrossSessionsOrdersByTimestampAndPages() {
 		String userId = "user-cross-" + UUID.randomUUID();
 		Session first = newSession(userId);
 		Session second = newSession(userId);
 		Session other = newSession("someone-else-" + UUID.randomUUID());
+		List<String> sessionIds = List.of(first.id(), second.id());
 		Instant base = Instant.parse("2026-04-01T00:00:00Z");
 		appendAt(first.id(), base.plusSeconds(10), "first-1");
 		appendAt(second.id(), base.plusSeconds(20), "second-1");
@@ -518,15 +571,26 @@ public abstract class AbstractSessionRepositoryContractTests {
 		appendAt(second.id(), base.plusSeconds(40), "second-2");
 		appendAt(other.id(), base.plusSeconds(25), "other");
 
-		assertThat(this.repository.findEventsByUserId(userId, EventFilter.all()))
+		assertThat(this.repository.findEvents(sessionIds, EventFilter.all()))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("first-1", "second-1", "first-2", "second-2");
-		assertThat(this.repository.findEventsByUserId(userId, EventFilter.builder().page(1).pageSize(3).build()))
+		assertThat(this.repository.findEvents(sessionIds, EventFilter.builder().page(1).pageSize(3).build()))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("second-2");
-		assertThat(this.repository.findEventsByUserId(userId, EventFilter.keywordSearch("second")))
+		assertThat(this.repository.findEvents(sessionIds, EventFilter.keywordSearch("second")))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("second-1", "second-2");
+		// The selection is the caller's: the index lookup is one way to make it
+		List<String> byIndex = this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, userId)
+			.stream()
+			.map(Session::id)
+			.toList();
+		assertThat(byIndex).containsExactlyInAnyOrderElementsOf(sessionIds);
+		// No sessions, no events; an unknown id contributes nothing
+		assertThat(this.repository.findEvents(List.of(), EventFilter.all())).isEmpty();
+		assertThat(this.repository.findEvents(List.of(first.id(), UUID.randomUUID().toString()), EventFilter.all()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("first-1", "first-2");
 	}
 
 	// --- Compaction: an append-only log and a projected view ---
@@ -744,10 +808,11 @@ public abstract class AbstractSessionRepositoryContractTests {
 		List<SessionEvent> log = this.repository.findEvents(first.id(), EventFilter.all());
 		compact(first.id(), List.of(), List.of(), List.of(log.get(1)));
 
-		assertThat(this.repository.findEventsByUserId(userId, EventFilter.active()))
+		List<String> sessionIds = List.of(first.id(), second.id());
+		assertThat(this.repository.findEvents(sessionIds, EventFilter.active()))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactlyInAnyOrder("f2", "s1");
-		assertThat(this.repository.findEventsByUserId(userId, EventFilter.all()).stream().filter(SessionEvent::hasMessage))
+		assertThat(this.repository.findEvents(sessionIds, EventFilter.all()).stream().filter(SessionEvent::hasMessage))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactlyInAnyOrder("f1", "f2", "s1");
 	}
@@ -859,9 +924,14 @@ public abstract class AbstractSessionRepositoryContractTests {
 
 	// --- Helpers ---
 
-	/** Saves a new session with a random id for the given user. */
-	protected Session newSession(String userId) {
-		return this.repository.save(Session.builder().id(UUID.randomUUID().toString()).userId(userId).build());
+	/** Saves a new session with a random id for the given principal. */
+	protected Session newSession(String principalName) {
+		return this.repository.save(principalSession(UUID.randomUUID().toString(), principalName));
+	}
+
+	/** A session with the given id whose metadata names the principal. */
+	protected static Session principalSession(String id, String principalName) {
+		return Session.builder().id(id).metadata(SessionAttributes.PRINCIPAL_NAME, principalName).build();
 	}
 
 	/** Appends each message as its own event. */

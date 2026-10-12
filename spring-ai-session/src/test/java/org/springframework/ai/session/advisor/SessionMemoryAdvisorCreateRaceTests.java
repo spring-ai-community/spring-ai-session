@@ -28,9 +28,9 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionAttributes;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
@@ -45,27 +45,17 @@ class SessionMemoryAdvisorCreateRaceTests {
 	private static final String SESSION_ID = "contended-session";
 
 	@Test
-	void ownershipIsCheckedAgainstTheConcurrentlyCreatedSession() {
-		SessionService sessionService = sessionServiceWhereCreateLosesTheRaceTo("bob");
-		SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService).build();
-
-		assertThatIllegalStateException()
-			.isThrownBy(() -> advisor.before(request("alice"), mock(AdvisorChain.class)))
-			.withMessageContaining("does not belong to user 'alice'");
-	}
-
-	@Test
-	void sameUserLosingTheRaceContinuesWithTheStoredSession() {
+	void losingTheCreateRaceContinuesWithTheStoredSession() {
 		SessionService sessionService = sessionServiceWhereCreateLosesTheRaceTo("alice");
 		SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService).build();
 
-		ChatClientRequest result = advisor.before(request("alice"), mock(AdvisorChain.class));
+		ChatClientRequest result = advisor.before(request(), mock(AdvisorChain.class));
 
 		assertThat(result.prompt().getInstructions()).extracting(m -> m.getText()).containsExactly("hello");
 	}
 
-	private static SessionService sessionServiceWhereCreateLosesTheRaceTo(String winnerUserId) {
-		Session stored = Session.builder().id(SESSION_ID).userId(winnerUserId).build();
+	private static SessionService sessionServiceWhereCreateLosesTheRaceTo(String winner) {
+		Session stored = Session.builder().id(SESSION_ID).metadata(SessionAttributes.PRINCIPAL_NAME, winner).build();
 		SessionService sessionService = mock(SessionService.class);
 		// Not found on the first lookup, created by the concurrent winner right after.
 		given(sessionService.findById(SESSION_ID)).willReturn(null, stored);
@@ -74,11 +64,10 @@ class SessionMemoryAdvisorCreateRaceTests {
 		return sessionService;
 	}
 
-	private static ChatClientRequest request(String userId) {
+	private static ChatClientRequest request() {
 		return ChatClientRequest.builder()
 			.prompt(new Prompt(List.of(new UserMessage("hello"))))
-			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, SESSION_ID,
-					SessionMemoryAdvisor.USER_ID_CONTEXT_KEY, userId))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, SESSION_ID))
 			.build();
 	}
 

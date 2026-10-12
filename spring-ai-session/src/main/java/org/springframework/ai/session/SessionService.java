@@ -17,6 +17,7 @@
 package org.springframework.ai.session;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
@@ -45,7 +46,12 @@ public interface SessionService {
 
 	@Nullable Session findById(String sessionId);
 
-	List<Session> findByUserId(String userId);
+	/**
+	 * Returns the sessions whose metadata holds {@code value} under {@code name}; see
+	 * {@link SessionRepository#findByIndex}. The sessions of a principal are
+	 * {@code findByIndex(SessionAttributes.PRINCIPAL_NAME, name)}.
+	 */
+	List<Session> findByIndex(String name, String value);
 
 	void delete(String sessionId);
 
@@ -94,12 +100,13 @@ public interface SessionService {
 	}
 
 	/**
-	 * Returns the matching events of <em>every</em> session of the user, ordered by
-	 * timestamp across sessions, with the filter's window (last-N or page) applied to that
-	 * combined order. Backed by {@link SessionRepository#findEventsByUserId}, which stores
-	 * push down to one sorted, paged query.
+	 * Returns the matching events of the given sessions, ordered by timestamp across
+	 * sessions, with the filter's window (last-N or page) applied to that combined order.
+	 * Backed by {@link SessionRepository#findEvents(Collection, EventFilter)}, which stores
+	 * push down to one sorted, paged query. The sessions of a principal come from
+	 * {@link #findByIndex} or a {@link SessionSelector}.
 	 */
-	List<SessionEvent> findEventsByUserId(String userId, EventFilter filter);
+	List<SessionEvent> findEvents(Collection<String> sessionIds, EventFilter filter);
 
 	/**
 	 * Convenience: returns the messages of <em>all</em> events as a flat {@link Message}

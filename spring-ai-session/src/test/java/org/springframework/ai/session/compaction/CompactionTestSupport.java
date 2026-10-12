@@ -26,6 +26,7 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionAttributes;
 
 /**
  * Helpers shared by the strategy tests: event factories and the texts of a result.
@@ -121,7 +122,7 @@ final class CompactionTestSupport {
 	}
 
 	static CompactionRequest request(List<SessionEvent> view) {
-		Session session = Session.builder().id(SESSION_ID).userId("test-user").build();
+		Session session = Session.builder().id(SESSION_ID).metadata(SessionAttributes.PRINCIPAL_NAME, "test-user").build();
 		return CompactionRequest.of(session, new ArrayList<>(view));
 	}
 

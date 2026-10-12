@@ -29,6 +29,7 @@ This single dependency gives you:
 |---|---|
 | `JdbcSessionRepository` | `spring-ai-autoconfigure-session-jdbc` |
 | `DefaultSessionService` | `spring-ai-autoconfigure-session` |
+| `SecurityContextScopeResolver`, `AuthorizationManager<Session>`, and the `SessionService` wrapped in an `AuthorizingSessionService` | `spring-ai-autoconfigure-session`, when `spring-ai-session-security` and Spring Security are on the classpath; see [Scope and Security](../session-management/scope-and-security.md) |
 
 ---
 
@@ -66,6 +67,7 @@ Boot's `DatabaseInitializationProperties` and inherits these:
 | `schema` | `classpath:org/springframework/ai/session/jdbc/schema-@@platform@@.sql` | DDL script location; `@@platform@@` is resolved to the detected database platform |
 | `platform` | _(auto-detected)_ | Overrides platform detection used to resolve `@@platform@@` in `schema` |
 | `continue-on-error` | `true` | Whether to continue startup if the DDL script fails (Spring Boot's default for these properties) |
+| `indexed-attributes` | _(empty)_ | Metadata keys to index in `AI_SESSION_INDEX` besides `principalName`, so `findByIndex` can answer for them |
 
 ### Service: `spring.ai.session`
 
@@ -73,6 +75,7 @@ Boot's `DatabaseInitializationProperties` and inherits these:
 |---|---|---|
 | `time-to-live` | `60d` | Default time-to-live of sessions created by the auto-configured `DefaultSessionService` (any `Duration`, e.g. `2h`, `30d`) |
 | `allow-system-messages` | `false` | Whether a `SystemMessage` may be stored in a session. Disabled by default; see [System Messages](../session-management/system-messages.md) |
+| `security.enabled` | `true` | Whether to scope and authorize sessions with Spring Security when it is on the classpath; see [Scope and Security](../session-management/scope-and-security.md) |
 
 ---
 

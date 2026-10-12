@@ -36,6 +36,7 @@ import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionAttributes;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -58,7 +59,7 @@ class IdempotentSessionEventIdGeneratorTests {
 		this.sessionService = DefaultSessionService.builder()
 			.sessionRepository(InMemorySessionRepository.builder().build())
 			.build();
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("test-user").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "test-user").build());
 		this.sessionId = session.id();
 	}
 

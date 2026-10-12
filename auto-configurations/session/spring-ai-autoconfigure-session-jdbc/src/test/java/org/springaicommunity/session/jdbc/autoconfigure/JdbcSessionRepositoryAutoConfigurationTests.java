@@ -21,6 +21,7 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.jdbc.JdbcSessionRepository;
@@ -123,8 +124,19 @@ class JdbcSessionRepositoryAutoConfigurationTests {
 	}
 
 	@Test
+	void indexedAttributesDefaultToThePrincipalAndAreBoundFromProperties() {
+		this.contextRunner.run(context -> assertThat(context.getBean(JdbcSessionRepository.class).getIndexedAttributes())
+			.containsExactly(SessionAttributes.PRINCIPAL_NAME));
+		this.contextRunner
+			.withPropertyValues(JdbcSessionRepositoryProperties.CONFIG_PREFIX + ".indexed-attributes=tenant,team")
+			.run(context -> assertThat(context.getBean(JdbcSessionRepository.class).getIndexedAttributes())
+				.containsExactlyInAnyOrder("tenant", "team", SessionAttributes.PRINCIPAL_NAME));
+	}
+
+	@Test
 	void defaultProperties() {
 		var props = new JdbcSessionRepositoryProperties();
+		assertThat(props.getIndexedAttributes()).isEmpty();
 		assertThat(props.getInitializeSchema()).isEqualTo(DatabaseInitializationMode.EMBEDDED);
 		assertThat(props.getDefaultSchemaLocation())
 			.isEqualTo("classpath:org/springframework/ai/session/jdbc/schema-@@platform@@.sql");

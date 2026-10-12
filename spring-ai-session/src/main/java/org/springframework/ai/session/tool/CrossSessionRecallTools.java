@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventFilter.MatchMode;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionSelector;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -40,15 +41,16 @@ import org.springframework.util.StringUtils;
  * {@code SessionEventTools#conversationSearch} resolves exactly one session from the
  * live request's {@code ToolContext} — the right scope for a conversational agent
  * answering "what did we discuss earlier in <em>this</em> conversation." This class
- * instead searches <strong>every session belonging to one user</strong>, which is what a
+ * instead searches <strong>every session a {@link SessionSelector} selects</strong>, which is what a
  * background maintenance agent (e.g. Auto-Dream's Dreamer) needs to mine historical
  * signal spanning many past conversations.
  *
  * <p>
- * Unlike {@code conversation_search}, the target user is bound at construction time via
- * {@link #builder(SessionService, String)} rather than accepted as a tool-call parameter
- * — a misbehaving prompt cannot talk this tool into scanning a different user's sessions,
- * because the model never gets to choose which user it searches.
+ * Unlike {@code conversation_search}, the sessions searched are bound at construction
+ * time via {@link #builder(SessionService, SessionSelector)} (or
+ * {@link #builder(SessionService, String)} for one principal) rather than accepted as a
+ * tool-call parameter — a misbehaving prompt cannot talk this tool into scanning someone
+ * else's sessions, because the model never gets to choose which sessions it searches.
  *
  * <p>
  * Read-only: this class has no append/compact/delete capability.
@@ -73,28 +75,38 @@ public class CrossSessionRecallTools {
 
 	private final SessionService sessionService;
 
-	private final String userId;
+	private final SessionSelector selector;
 
 	private final int pageSize;
 
-	private CrossSessionRecallTools(SessionService sessionService, String userId, int pageSize) {
+	private CrossSessionRecallTools(SessionService sessionService, SessionSelector selector, int pageSize) {
 		this.sessionService = sessionService;
-		this.userId = userId;
+		this.selector = selector;
 		this.pageSize = pageSize;
 	}
 
 	/**
-	 * @param sessionService the session store to search
-	 * @param userId the user whose sessions this instance is scoped to — fixed for the
-	 * lifetime of the instance, never supplied by the model
+	 * A builder for tools bound to the sessions the selector chooses, for example
+	 * {@link SessionSelector#principal(String)} or {@link SessionSelector#byIndex}.
 	 */
-	public static Builder builder(SessionService sessionService, String userId) {
-		return new Builder(sessionService, userId);
+	public static Builder builder(SessionService sessionService, SessionSelector selector) {
+		return new Builder(sessionService, selector);
 	}
 
 	/**
-	 * Searches every session belonging to the configured user for events matching the
-	 * given criteria, aggregated and returned in chronological order across sessions.
+	 * A builder for tools bound to the sessions of one principal
+	 * ({@link org.springframework.ai.session.SessionAttributes#PRINCIPAL_NAME}).
+	 */
+	public static Builder builder(SessionService sessionService, String principalName) {
+		if (!StringUtils.hasText(principalName)) {
+			throw new IllegalArgumentException("principalName must not be empty");
+		}
+		return new Builder(sessionService, SessionSelector.principal(principalName));
+	}
+
+	/**
+	 * Searches every selected session for events matching the given criteria, aggregated
+	 * and returned in chronological order across sessions.
 	 * @param innerThought agent's private reasoning (not returned to the caller)
 	 * @param query case-insensitive keyword, or comma-separated keywords
 	 * @param matchMode {@code "any"} (default) or {@code "all"} — how multiple
@@ -105,7 +117,7 @@ public class CrossSessionRecallTools {
 	 * @return JSON array of matching events, or {@code "No results found."} if empty
 	 */
 	@Tool(name = "cross_session_search",
-			description = "Search across ALL of a user's sessions (not just the current one) for events matching "
+			description = "Search across ALL the sessions this tool is bound to (not just the current one) for events matching "
 					+ "the given criteria. Intended for maintenance/analysis agents that need historical signal "
 					+ "spanning many past conversations, not for use by a live conversational agent (which should "
 					+ "prefer conversation_search). Returns paginated results ordered chronologically.")
@@ -123,15 +135,20 @@ public class CrossSessionRecallTools {
 
 		int pageNumber = (page != null) ? Math.max(0, page) : 0;
 
-		logger.debug("[cross_session_search] userId: {}, innerThought: {}, query: {}, matchMode: {}, since: {}, page: {}",
-				this.userId, innerThought, query, matchMode, since, pageNumber);
+		logger.debug("[cross_session_search] innerThought: {}, query: {}, matchMode: {}, since: {}, page: {}",
+				innerThought, query, matchMode, since, pageNumber);
 
 		EventFilter filter = buildFilter(query, matchMode, since, pageNumber);
 
-		// One query across the user's sessions, sorted and paged by the store. A keyword
+		List<String> sessionIds = this.selector.select(this.sessionService);
+		if (sessionIds.isEmpty()) {
+			return "No results found.";
+		}
+
+		// One query across the selected sessions, sorted and paged by the store. A keyword
 		// only matches an event with text, so the text guard below is a safety net rather
 		// than a second filter.
-		List<SessionEvent> pageResults = this.sessionService.findEventsByUserId(this.userId, filter)
+		List<SessionEvent> pageResults = this.sessionService.findEvents(sessionIds, filter)
 			.stream()
 			.filter(event -> StringUtils.hasText(event.getMessage().getText()))
 			.toList();
@@ -157,7 +174,7 @@ public class CrossSessionRecallTools {
 			.excludeSynthetic(true);
 
 		// A blank query would apply no keyword filter and return every event of every
-		// session of this user — reject it rather than silently widening the search.
+		// selected session — reject it rather than silently widening the search.
 		if (!StringUtils.hasText(query)) {
 			throw new IllegalArgumentException("query must contain at least one search term");
 		}
@@ -171,8 +188,8 @@ public class CrossSessionRecallTools {
 		if (terms.isEmpty()) {
 			// e.g. query = "," or ", " — has visible characters so it isn't blank,
 			// but splits into zero usable terms. Silently falling through to "no
-			// keyword filter" would turn a narrow search into "return everything for
-			// this user", so reject it explicitly instead.
+			// keyword filter" would turn a narrow search into "return everything", so
+			// reject it explicitly instead.
 			throw new IllegalArgumentException(
 					"query '" + query + "' contained no usable search terms after splitting on ','");
 		}
@@ -215,19 +232,19 @@ public class CrossSessionRecallTools {
 
 		private final SessionService sessionService;
 
-		private final String userId;
+		private final SessionSelector selector;
 
 		private int pageSize = EventFilter.DEFAULT_PAGE_SIZE;
 
-		private Builder(SessionService sessionService, String userId) {
+		private Builder(SessionService sessionService, SessionSelector selector) {
 			if (sessionService == null) {
 				throw new IllegalArgumentException("sessionService must not be null");
 			}
-			if (!StringUtils.hasText(userId)) {
-				throw new IllegalArgumentException("userId must not be empty");
+			if (selector == null) {
+				throw new IllegalArgumentException("selector must not be null");
 			}
 			this.sessionService = sessionService;
-			this.userId = userId;
+			this.selector = selector;
 		}
 
 		/**
@@ -243,7 +260,7 @@ public class CrossSessionRecallTools {
 		}
 
 		public CrossSessionRecallTools build() {
-			return new CrossSessionRecallTools(this.sessionService, this.userId, this.pageSize);
+			return new CrossSessionRecallTools(this.sessionService, this.selector, this.pageSize);
 		}
 
 	}

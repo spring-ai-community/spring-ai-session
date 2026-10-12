@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -60,7 +61,7 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void storingASystemMessageIsRejectedByDefault() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		assertThatIllegalArgumentException()
 			.isThrownBy(() -> this.service.appendMessage(session.id(), new SystemMessage("Answer in French.")))
@@ -76,7 +77,7 @@ class DefaultSessionServiceTests {
 			.sessionRepository(InMemorySessionRepository.builder().build())
 			.allowSystemMessages(true)
 			.build();
-		Session session = permissive.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = permissive.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		permissive.appendMessage(session.id(), new SystemMessage("Answer in French."));
 
@@ -86,7 +87,7 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void conversationMessagesAreUnaffectedByTheSystemMessageRule() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		this.service.appendMessage(session.id(), new UserMessage("hi"));
 		this.service.appendMessage(session.id(), new AssistantMessage("hello"));
@@ -99,11 +100,11 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void createReturnsSession() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		assertThat(session).isNotNull();
 		assertThat(session.id()).isNotBlank();
-		assertThat(session.userId()).isEqualTo("user-1");
+		assertThat(SessionAttributes.principalName(session)).isEqualTo("user-1");
 		assertThat(this.service.getEvents(session.id())).isEmpty();
 	}
 
@@ -111,7 +112,7 @@ class DefaultSessionServiceTests {
 	void createAppliesDefaultTimeToLiveWhenRequestHasNone() {
 		// Builder default is 60 days.
 		Instant before = Instant.now();
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		assertThat(session.expiresAt()).isBetween(before.plus(Duration.ofDays(60)).minusSeconds(5),
 				Instant.now().plus(Duration.ofDays(60)).plusSeconds(5));
@@ -125,7 +126,7 @@ class DefaultSessionServiceTests {
 			.build();
 
 		Instant before = Instant.now();
-		Session session = customService.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = customService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		assertThat(session.expiresAt()).isBetween(before.plus(Duration.ofHours(2)).minusSeconds(5),
 				Instant.now().plus(Duration.ofHours(2)).plusSeconds(5));
@@ -135,19 +136,19 @@ class DefaultSessionServiceTests {
 	void createPrefersRequestTimeToLiveOverDefault() {
 		Instant before = Instant.now();
 		Session session = this.service
-			.create(CreateSessionRequest.builder().userId("user-1").timeToLive(Duration.ofMinutes(30)).build());
+			.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").timeToLive(Duration.ofMinutes(30)).build());
 
 		assertThat(session.expiresAt()).isBefore(before.plus(Duration.ofHours(1)));
 	}
 
 	@Test
-	void createWithExistingIdIsRejectedAndDoesNotReassignOwner() {
-		Session original = this.service.create(CreateSessionRequest.builder().id("fixed-id").userId("alice").build());
+	void createWithExistingIdIsRejectedAndDoesNotReassignThePrincipal() {
+		Session original = this.service.create(CreateSessionRequest.builder().id("fixed-id").metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 
-		assertThatIllegalStateException().isThrownBy(() -> this.service.create(CreateSessionRequest.builder().id("fixed-id").userId("mallory").build()))
+		assertThatIllegalStateException().isThrownBy(() -> this.service.create(CreateSessionRequest.builder().id("fixed-id").metadata(SessionAttributes.PRINCIPAL_NAME, "mallory").build()))
 			.withMessageContaining("already exists");
 
-		assertThat(this.service.findById(original.id()).userId()).isEqualTo("alice");
+		assertThat(SessionAttributes.principalName(this.service.findById(original.id()))).isEqualTo("alice");
 	}
 
 	@Test
@@ -161,7 +162,7 @@ class DefaultSessionServiceTests {
 				String userId = "user-" + i;
 				results.add(executor.submit(() -> {
 					start.await();
-					return this.service.create(CreateSessionRequest.builder().id("contended").userId(userId).build());
+					return this.service.create(CreateSessionRequest.builder().id("contended").metadata(SessionAttributes.PRINCIPAL_NAME, userId).build());
 				}));
 			}
 			start.countDown();
@@ -178,7 +179,7 @@ class DefaultSessionServiceTests {
 			}
 			assertThat(winners).hasSize(1);
 			assertThat(rejected).isEqualTo(callers - 1);
-			assertThat(this.service.findById("contended").userId()).isEqualTo(winners.get(0).userId());
+			assertThat(SessionAttributes.principalName(this.service.findById("contended"))).isEqualTo(SessionAttributes.principalName(winners.get(0)));
 		}
 		finally {
 			executor.shutdownNow();
@@ -187,7 +188,7 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void appendMessageThenGetMessagesReturnsThatMessage() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		this.service.appendMessage(session.id(), new UserMessage("hello"));
 
@@ -198,7 +199,7 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void appendMultipleMessagesPreservesOrder() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		this.service.appendMessage(session.id(), new UserMessage("first"));
 		this.service.appendMessage(session.id(), new UserMessage("second"));
@@ -213,7 +214,7 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void deleteRemovesSession() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		this.service.delete(session.id());
 
@@ -221,18 +222,45 @@ class DefaultSessionServiceTests {
 	}
 
 	@Test
-	void findByUserIdReturnsAllSessions() {
-		this.service.create(CreateSessionRequest.builder().userId("alice").build());
-		this.service.create(CreateSessionRequest.builder().userId("alice").build());
-		this.service.create(CreateSessionRequest.builder().userId("bob").build());
+	void theScopeResolverFillsTheAttributesARequestLeftOut() {
+		SessionService scoped = DefaultSessionService.builder()
+			.sessionRepository(InMemorySessionRepository.builder().build())
+			.scopeResolver(SessionScopeResolver.fixed(Map.of(SessionAttributes.PRINCIPAL_NAME, "alice", "tenant", "acme")))
+			.build();
 
-		assertThat(this.service.findByUserId("alice")).hasSize(2);
-		assertThat(this.service.findByUserId("bob")).hasSize(1);
+		Session resolved = scoped.create(CreateSessionRequest.builder().metadata("agent", "support").build());
+		Session explicit = scoped.create(CreateSessionRequest.builder().metadata("tenant", "globex").build());
+
+		assertThat(resolved.metadata()).containsEntry(SessionAttributes.PRINCIPAL_NAME, "alice")
+			.containsEntry("tenant", "acme")
+			.containsEntry("agent", "support");
+		// An explicit request attribute wins over the resolver
+		assertThat(explicit.metadata()).containsEntry(SessionAttributes.PRINCIPAL_NAME, "alice")
+			.containsEntry("tenant", "globex");
+		assertThat(scoped.findByIndex("tenant", "acme")).extracting(Session::id).containsExactly(resolved.id());
+	}
+
+	@Test
+	void withoutAResolverASessionHasOnlyTheRequestsMetadata() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+
+		assertThat(session.metadata()).isEmpty();
+		assertThat(SessionAttributes.principalName(session)).isNull();
+	}
+
+	@Test
+	void findByIndexReturnsTheSessionsOfAPrincipal() {
+		this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
+		this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
+		this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "bob").build());
+
+		assertThat(this.service.findByIndex(SessionAttributes.PRINCIPAL_NAME, "alice")).hasSize(2);
+		assertThat(this.service.findByIndex(SessionAttributes.PRINCIPAL_NAME, "bob")).hasSize(1);
 	}
 
 	@Test
 	void compactWithSlidingWindowKeepsOnlyMaxEvents() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		for (int i = 1; i <= 5; i++) {
 			this.service.appendMessage(session.id(), new UserMessage("msg-" + i));
@@ -264,7 +292,7 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void compactAppendsTheSummaryEventsAfterTheBoundaryAndTagsThem() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 		for (int i = 1; i <= 4; i++) {
 			this.service.appendMessage(session.id(), new UserMessage("msg-" + i));
 		}
@@ -297,7 +325,7 @@ class DefaultSessionServiceTests {
 		// Regression for issue #21: compaction must cover (not delete) events so the
 		// Recall Storage keyword search can still surface them after the active context
 		// window has moved on.
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 		this.service.appendMessage(session.id(), new UserMessage("the secret code is alpha-7"));
 		for (int i = 1; i <= 5; i++) {
 			this.service.appendMessage(session.id(), new UserMessage("filler-" + i));
@@ -316,7 +344,7 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void compactNoOpWhenTriggerDoesNotFire() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 		this.service.appendMessage(session.id(), new UserMessage("only message"));
 
 		// Trigger never fires — no compaction, no repository write
@@ -329,7 +357,7 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void compactNoOpWhenStrategyCoversNothing() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 		this.service.appendMessage(session.id(), new UserMessage("only message"));
 
 		// Trigger fires but window is larger than event count — strategy returns no-op
@@ -342,7 +370,7 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void compactWithPreloadedSessionProducesSameResultAsSessionIdOverload() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		for (int i = 1; i <= 5; i++) {
 			this.service.appendMessage(session.id(), new UserMessage("msg-" + i));
@@ -362,7 +390,7 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void getEventsWithFilterAppliesFilter() {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		this.service.appendMessage(session.id(), new UserMessage("a"));
 		this.service.appendMessage(session.id(), new UserMessage("b"));
@@ -376,7 +404,7 @@ class DefaultSessionServiceTests {
 
 	@Test
 	void concurrentCompactionOnlyAppliesOnce() throws InterruptedException {
-		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		for (int i = 1; i <= 5; i++) {
 			this.service.appendMessage(session.id(), new UserMessage("msg-" + i));
@@ -427,11 +455,11 @@ class DefaultSessionServiceTests {
 	@Test
 	void deleteExpiredSessionsRemovesOnlyExpiredSessions() {
 		Session active = this.service.create(CreateSessionRequest.builder()
-			.userId("u1")
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "u1")
 			.timeToLive(java.time.Duration.ofHours(1))
 			.build());
 		Session expired = this.service.create(CreateSessionRequest.builder()
-			.userId("u2")
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "u2")
 			.timeToLive(java.time.Duration.ofSeconds(-1)) // already in the past
 			.build());
 
@@ -445,7 +473,7 @@ class DefaultSessionServiceTests {
 	@Test
 	void deleteExpiredSessionsReturnsZeroWhenNoneExpired() {
 		this.service.create(CreateSessionRequest.builder()
-			.userId("u1")
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "u1")
 			.timeToLive(java.time.Duration.ofHours(1))
 			.build());
 

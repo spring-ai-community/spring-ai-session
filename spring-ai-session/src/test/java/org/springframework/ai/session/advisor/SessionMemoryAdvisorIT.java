@@ -47,6 +47,7 @@ import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.MessageFilter;
 import org.springframework.ai.session.Session;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
@@ -87,7 +88,7 @@ class SessionMemoryAdvisorIT {
 
 	@BeforeEach
 	void createSession() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("test-user").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "test-user").build());
 		this.sessionId = session.id();
 	}
 
@@ -538,38 +539,40 @@ class SessionMemoryAdvisorIT {
 		return this.advisor.before(request, mock(AdvisorChain.class)).prompt().getInstructions();
 	}
 
-	// --- Ownership enforcement ---
+	// --- Session metadata on first use ---
 
 	@Test
-	void beforeAllowsAccessWhenUserIdMatchesSessionOwner() {
-		// Session was created with userId "test-user" in @BeforeEach.
-		// A request that carries the same user ID must succeed.
-		ChatClientRequest request = buildRequestWithUserId(this.sessionId, "hello", "test-user");
-		AdvisorChain chain = mock(AdvisorChain.class);
+	void beforeCreatesTheSessionWithTheContextMetadata() {
+		String newId = "created-with-metadata-" + System.nanoTime();
+		ChatClientRequest request = buildRequestWithMetadata(newId, "hello", Map.of("agent", "support"));
 
-		// Must not throw
-		this.advisor.before(request, chain);
+		this.advisor.before(request, mock(AdvisorChain.class));
+
+		Session created = this.sessionService.findById(newId);
+		assertThat(created).isNotNull();
+		assertThat(created.metadata()).containsEntry("agent", "support");
 	}
 
 	@Test
-	void beforeDeniesAccessWhenUserIdDoesNotMatchSessionOwner() {
-		// Session belongs to "test-user". A different user must be rejected.
-		ChatClientRequest request = buildRequestWithUserId(this.sessionId, "hello", "other-user");
-		AdvisorChain chain = mock(AdvisorChain.class);
+	void beforeIgnoresTheContextMetadataForAnExistingSession() {
+		ChatClientRequest request = buildRequestWithMetadata(this.sessionId, "hello", Map.of("agent", "support"));
 
-		assertThatThrownBy(() -> this.advisor.before(request, chain)).isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("does not belong to user");
+		this.advisor.before(request, mock(AdvisorChain.class));
+
+		assertThat(this.sessionService.findById(this.sessionId).metadata()).doesNotContainKey("agent");
 	}
 
 	@Test
-	void beforeSkipsOwnershipCheckWhenNoUserIdInContext() {
-		// Backward-compat: callers that don't set USER_ID_CONTEXT_KEY must still be able
-		// to access existing sessions.
-		ChatClientRequest request = buildRequest(this.sessionId, "hello");
-		AdvisorChain chain = mock(AdvisorChain.class);
+	void beforeRejectsAContextMetadataValueThatIsNotAMap() {
+		ChatClientRequest request = ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(new UserMessage("hello"))))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "new-" + System.nanoTime(),
+					SessionMemoryAdvisor.SESSION_METADATA_CONTEXT_KEY, "not a map"))
+			.build();
 
-		// Must not throw even though session.userId() is "test-user"
-		this.advisor.before(request, chain);
+		assertThatThrownBy(() -> this.advisor.before(request, mock(AdvisorChain.class)))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining(SessionMemoryAdvisor.SESSION_METADATA_CONTEXT_KEY);
 	}
 
 	// --- Per-request EventFilter override ---
@@ -988,7 +991,7 @@ class SessionMemoryAdvisorIT {
 		assertThat(describe(full.prompt().getInstructions())).containsExactly("Weather and time?", "call:call-1",
 				"result:call-1", "Sunny, at noon.", "Thanks");
 
-		String partial = this.sessionService.create(CreateSessionRequest.builder().userId("test-user").build()).id();
+		String partial = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "test-user").build()).id();
 		this.sessionService.appendMessage(partial, new UserMessage("Weather and time?"));
 		this.sessionService.appendMessage(partial, twoCalls);
 		this.sessionService.appendMessage(partial, toolResponse("call-1"));
@@ -1099,12 +1102,13 @@ class SessionMemoryAdvisorIT {
 			.build();
 	}
 
-	private static ChatClientRequest buildRequestWithUserId(String sessionId, String userText, String userId) {
+	private static ChatClientRequest buildRequestWithMetadata(String sessionId, String userText,
+			Map<String, Object> metadata) {
 		Prompt prompt = new Prompt(List.of(new UserMessage(userText)));
 		return ChatClientRequest.builder()
 			.prompt(prompt)
 			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId,
-					SessionMemoryAdvisor.USER_ID_CONTEXT_KEY, userId))
+					SessionMemoryAdvisor.SESSION_METADATA_CONTEXT_KEY, metadata))
 			.build();
 	}
 

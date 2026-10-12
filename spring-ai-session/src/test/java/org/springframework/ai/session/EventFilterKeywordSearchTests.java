@@ -40,7 +40,7 @@ class EventFilterKeywordSearchTests {
 	@BeforeEach
 	void setUp() {
 		this.repository = InMemorySessionRepository.builder().build();
-		Session session = Session.builder().id(SESSION_ID).userId("test-user").build();
+		Session session = Session.builder().id(SESSION_ID).metadata(SessionAttributes.PRINCIPAL_NAME, "test-user").build();
 		this.repository.save(session);
 	}
 

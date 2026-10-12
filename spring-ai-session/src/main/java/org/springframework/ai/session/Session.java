@@ -31,6 +31,12 @@ import org.springframework.util.Assert;
  * in {@link SessionRepository} and retrieved on demand via {@link SessionService}.
  *
  * <p>
+ * A session has no owner field. Who it belongs to is an attribute in its
+ * {@link #metadata()}, under a well-known key such as
+ * {@link SessionAttributes#PRINCIPAL_NAME}, put there by the application or a
+ * {@link SessionScopeResolver} and looked up through {@link SessionRepository#findByIndex}.
+ *
+ * <p>
  * Mutations return new instances; the original is never modified.
  *
  * @author Christian Tzolov
@@ -40,18 +46,14 @@ public final class Session {
 
 	private final String id;
 
-	private final String userId;
-
 	private final Instant createdAt;
 
 	@Nullable private final Instant expiresAt;
 
 	private final Map<String, Object> metadata;
 
-	private Session(String id, String userId, Instant createdAt, @Nullable Instant expiresAt,
-			Map<String, Object> metadata) {
+	private Session(String id, Instant createdAt, @Nullable Instant expiresAt, Map<String, Object> metadata) {
 		this.id = id;
-		this.userId = userId;
 		this.createdAt = createdAt;
 		this.expiresAt = expiresAt;
 		this.metadata = Map.copyOf(metadata);
@@ -60,11 +62,6 @@ public final class Session {
 	/** Unique identifier for this session. */
 	public String id() {
 		return this.id;
-	}
-
-	/** The actor (user or agent) who owns this session. Critical for isolation. */
-	public String userId() {
-		return this.userId;
 	}
 
 	/** When this session was created. */
@@ -82,7 +79,10 @@ public final class Session {
 		return this.expiresAt;
 	}
 
-	/** Arbitrary metadata: model info, tags, agent type, etc. */
+	/**
+	 * Arbitrary metadata: the scope attributes ({@link SessionAttributes}), model info,
+	 * tags, agent type, etc.
+	 */
 	public Map<String, Object> metadata() {
 		return this.metadata;
 	}
@@ -95,8 +95,6 @@ public final class Session {
 
 		private String id = "";
 
-		private String userId = "";
-
 		private Instant createdAt = Instant.now();
 
 		@Nullable private Instant expiresAt = Instant.now().plus(Duration.ofDays(60));
@@ -105,11 +103,6 @@ public final class Session {
 
 		public Builder id(String id) {
 			this.id = id;
-			return this;
-		}
-
-		public Builder userId(String userId) {
-			this.userId = userId;
 			return this;
 		}
 
@@ -132,10 +125,15 @@ public final class Session {
 			return this;
 		}
 
+		/** Adds one metadata entry. */
+		public Builder metadata(String key, Object value) {
+			this.metadata.put(key, value);
+			return this;
+		}
+
 		public Session build() {
 			Assert.hasText(this.id, "id must not be null or empty");
-			Assert.hasText(this.userId, "userId must not be null or empty");
-			return new Session(this.id, this.userId, this.createdAt, this.expiresAt, this.metadata);
+			return new Session(this.id, this.createdAt, this.expiresAt, this.metadata);
 		}
 
 	}

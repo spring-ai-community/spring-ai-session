@@ -22,10 +22,13 @@ import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
-import org.springframework.util.Assert;
-
 /**
  * Parameters for creating a new {@link Session}.
+ *
+ * <p>
+ * Scope attributes such as {@link SessionAttributes#PRINCIPAL_NAME} go into the
+ * {@link #metadata()}; a {@link SessionScopeResolver} configured on the service fills the
+ * ones a request leaves out.
  *
  * @author Christian Tzolov
  * @since 2.0.0
@@ -34,16 +37,12 @@ public final class CreateSessionRequest {
 
 	@Nullable private final String id;
 
-	private final String userId;
-
 	@Nullable private final Duration timeToLive;
 
 	private final Map<String, Object> metadata;
 
-	private CreateSessionRequest(String id, String userId, Duration timeToLive, Map<String, Object> metadata) {
-		Assert.hasText(userId, "userId must not be null or empty");
+	private CreateSessionRequest(@Nullable String id, @Nullable Duration timeToLive, Map<String, Object> metadata) {
 		this.id = id;
-		this.userId = userId;
 		this.timeToLive = timeToLive;
 		this.metadata = Map.copyOf(metadata);
 	}
@@ -54,10 +53,6 @@ public final class CreateSessionRequest {
 	 */
 	@Nullable public String id() {
 		return this.id;
-	}
-
-	public String userId() {
-		return this.userId;
 	}
 
 	@Nullable public Duration timeToLive() {
@@ -76,8 +71,6 @@ public final class CreateSessionRequest {
 
 		@Nullable private String id;
 
-		private String userId = "";
-
 		@Nullable private Duration timeToLive;
 
 		private Map<String, Object> metadata = new HashMap<>();
@@ -87,11 +80,6 @@ public final class CreateSessionRequest {
 		 */
 		public Builder id(@Nullable String id) {
 			this.id = id;
-			return this;
-		}
-
-		public Builder userId(String userId) {
-			this.userId = userId;
 			return this;
 		}
 
@@ -111,7 +99,7 @@ public final class CreateSessionRequest {
 		}
 
 		public CreateSessionRequest build() {
-			return new CreateSessionRequest(this.id, this.userId, this.timeToLive, this.metadata);
+			return new CreateSessionRequest(this.id, this.timeToLive, this.metadata);
 		}
 
 	}

@@ -65,12 +65,16 @@ public class ResearcherTool {
         if (this.sessionService.findById(childId) == null) {
             Session parent = this.sessionService.findById(parentId);
             try {
-                this.sessionService.create(CreateSessionRequest.builder()
+                CreateSessionRequest.Builder child = CreateSessionRequest.builder()
                     .id(childId)
-                    .userId(parent.userId())
                     .metadata(PARENT_SESSION_ID, parentId)
-                    .metadata(AGENT, "researcher")
-                    .build());
+                    .metadata(AGENT, "researcher");
+                // Same owner as the parent (a SessionScopeResolver would do this too)
+                String principal = (parent != null) ? SessionAttributes.principalName(parent) : null;
+                if (principal != null) {
+                    child.metadata(SessionAttributes.PRINCIPAL_NAME, principal);
+                }
+                this.sessionService.create(child.build());
             }
             catch (IllegalStateException alreadyCreated) {
                 // a concurrent delegation created it first
@@ -101,15 +105,15 @@ orchestrator.prompt()
     .content();
 ```
 
-To find a conversation's sub-agent sessions, filter the user's sessions on the metadata
-key:
+To find a conversation's sub-agent sessions, look the metadata key up:
 
 ```java
-List<Session> children = sessionService.findByUserId(userId)
-    .stream()
-    .filter(s -> parentId.equals(s.metadata().get(ResearcherTool.PARENT_SESSION_ID)))
-    .toList();
+List<Session> children = sessionService.findByIndex(ResearcherTool.PARENT_SESSION_ID, parentId);
 ```
+
+The in-memory repository answers for any key; the JDBC repository indexes the keys it is
+told to, so add `PARENT_SESSION_ID` with `JdbcSessionRepository.builder().indexedAttributes(...)`
+or `spring.ai.session.repository.jdbc.indexed-attributes`.
 
 **Stable or per-task session ids.**
 - **Stable id** (`parentId + ":researcher"`): the sub-agent remembers its earlier tasks in
@@ -129,8 +133,8 @@ List<Session> children = sessionService.findByUserId(userId)
 
 **Things to know:**
 - **Parent link.** The link between parent and child sessions is only the metadata
-  convention above, not a library API. Finding a parent's children means scanning
-  `findByUserId`.
+  convention above, not a library API. Finding a parent's children is a `findByIndex`
+  on that key.
 - **Lifecycle.** Sub-agent sessions are not deleted with the parent. Give them the same
   time to live as the parent (`CreateSessionRequest.builder().timeToLive(...)`), or delete
   them yourself.
