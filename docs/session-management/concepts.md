@@ -20,8 +20,8 @@ The event log is stored separately in the repository and fetched on demand.
 | `metadata` | Arbitrary key/value pairs (model info, tags, etc.) |
 
 Keeping `Session` metadata-only means it can be passed across boundaries cheaply and stays
-immutable: every event mutation goes through dedicated repository methods (`appendEvent`,
-`applyCompaction`), and compaction strategies receive the event list as an explicit
+immutable: every event write goes through dedicated repository methods (`appendEvent`,
+`appendEvents`), and compaction strategies receive the event list as an explicit
 parameter.
 
 Sessions are created through `SessionService`, which is the primary API for the entire
@@ -59,8 +59,11 @@ in a `payload` map instead of a message.
 | `type` | What the event records; `MESSAGE` (the default) for a conversation message |
 | `message` | The Spring AI message of a `MESSAGE` event — no duplication of content. `getMessage()` throws for any other type; test with `hasMessage()` first |
 | `payload` | The JSON-serializable data of an event that is not a message; empty for a message event |
-| `metadata` | Framework flags such as `METADATA_SYNTHETIC` and `METADATA_COMPACTION_SOURCE` |
-| `archived` | `true` once compaction has moved the event out of the active window; it stays in the log and remains searchable (see [Event lifecycle](#event-lifecycle)) |
+| `metadata` | Framework flags such as `METADATA_SYNTHETIC`, `METADATA_COMPACTION_SOURCE` and `METADATA_COMPACTION_ID` |
+
+An event is appended once and never changed. Compaction does not flag it: it appends a
+`COMPACTION` event that defines the active view from then on (see
+[Event lifecycle](#event-lifecycle)).
 
 ### Event types
 
@@ -71,11 +74,11 @@ in a `payload` map instead of a message.
 | `INTERRUPT` | A caller interrupted the running turn | no |
 | `TOOL_CONFIRMATION` | A caller allowed or denied a tool call that was waiting for confirmation | no |
 | `USAGE` | Token usage of a model call, or a cumulative snapshot | no |
-| `COMPACTION` | The log was compacted; what was archived and inserted | no |
+| `COMPACTION` | A compaction boundary: which earlier events are pinned, which summary events stand in for the covered ones, and which recent events are preserved. The newest one defines the active view. Its payload is a `CompactionBoundary` | no |
 | `THREAD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED` | The lifecycle of a delegated child session and the messages exchanged with it | no |
 
-`EventFilter.active()` returns the active conversation: `MESSAGE` events that compaction has not
-archived. `EventFilter.all()` returns every event of every type; use
+`EventFilter.active()` returns the active conversation: the `MESSAGE` events of the compacted
+view. `EventFilter.all()` returns every event of every type, boundaries included; use
 `EventFilter.builder().eventTypes(...)` to select types. `SessionService.getMessages()` and
 `getActiveMessages()` skip events that are not messages.
 
@@ -93,17 +96,17 @@ SessionEvent idle = SessionEvent.builder()
 
 | Message type | `SessionEvent.isSynthetic()` | Meaning | Compaction |
 |---|---|---|---|
-| `UserMessage` | `false` | Real user input. It starts a [turn](#turn) | Archived with its turn |
-| `AssistantMessage` (no tool calls) | `false` | Agent response | Archived with its turn |
-| `AssistantMessage` (with tool calls) | `false` | Agent tool invocation | Archived with its turn, never separated from its tool results |
-| `ToolResponseMessage` | `false` | Tool output | Archived with its turn |
-| `SystemMessage` | `false` | A stored system prompt: configuration, not conversation. Storing one is opt-in | The latest one is kept; earlier ones are archived. Never summarized. See [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins) |
-| `UserMessage` | `true` | Synthetic shadow prompt opening a summary turn | Kept by the sliding-window, turn-window and token-count strategies. Archived by the next recursive summary, which replaces it |
+| `UserMessage` | `false` | Real user input. It starts a [turn](#turn) | Covered with its turn |
+| `AssistantMessage` (no tool calls) | `false` | Agent response | Covered with its turn |
+| `AssistantMessage` (with tool calls) | `false` | Agent tool invocation | Covered with its turn, never separated from its tool results |
+| `ToolResponseMessage` | `false` | Tool output | Covered with its turn |
+| `SystemMessage` | `false` | A stored system prompt: configuration, not conversation. Storing one is opt-in | The latest one is pinned first in the view; earlier ones are covered. Never summarized. See [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins) |
+| `UserMessage` | `true` | Synthetic shadow prompt opening a summary turn | Pinned by the sliding-window, turn-window and token-count strategies. Covered by the next recursive summary, which replaces it |
 | `AssistantMessage` | `true` | Synthetic summary text closing a summary turn | As above. Its text is fed to the next recursive summary as the prior summary |
 | `SystemMessage` | `true` | Legacy summary format from earlier versions | As above. Still read as a prior summary by the recursive strategy |
 
 With `RecursiveSummarizationCompactionStrategy`, real events other than system messages
-are summarized before they are archived.
+are summarized before they are covered.
 
 ### Building events
 
@@ -131,7 +134,8 @@ SessionEvent deterministic = SessionEvent.builder()
 ```
 
 Builder defaults: `id` is a random UUID, `timestamp` is `Instant.now()`, `metadata` is
-empty. Only `sessionId` and `message` are required.
+empty. For a message event only `sessionId` and `message` are required; any other
+type needs `type` and may carry a `payload`.
 
 ---
 
@@ -163,8 +167,8 @@ it does not inflate the count used by `TurnCountTrigger`.
 
 ## Synthetic Summary Turn
 
-When `RecursiveSummarizationCompactionStrategy` compacts a session it replaces archived
-events with two synthetic events that form a coherent conversation turn:
+When `RecursiveSummarizationCompactionStrategy` compacts a session it stands two synthetic
+events, forming a coherent conversation turn, in for the events it covers:
 
 ```
 [USER  / synthetic] "Summarize the conversation we had so far."
@@ -179,10 +183,10 @@ models always see a valid user↔assistant alternation.
 All compaction strategies set synthetic events and stored system messages aside before
 processing real events (for system messages, see
 [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins)).
-The sliding-window, turn-window and token-count strategies keep synthetic events unchanged,
-where they are in the log. `RecursiveSummarizationCompactionStrategy` instead folds the previous
-summary into the new one and **replaces** it: the superseded synthetic events are archived
-in place, like the real events they summarized.
+The sliding-window, turn-window and token-count strategies pin the earlier summary turns at
+the front of the view. `RecursiveSummarizationCompactionStrategy` instead folds the previous
+summary into the new one and **replaces** it: the superseded synthetic events are covered,
+like the real events they summarized, and stay in the log.
 
 Build a synthetic summary turn explicitly:
 
@@ -241,7 +245,7 @@ classDiagram
         +findEvents(id, filter) List
         +findEventsByUserId(userId, filter) List
         +getEventVersion(id) long
-        +applyCompaction(id, plan, version) boolean
+        +appendEvents(id, events, version) boolean
     }
     class InMemorySessionRepository
     class JdbcSessionRepository
@@ -257,9 +261,10 @@ classDiagram
         id
         sessionId
         timestamp
+        type
         message
+        payload
         metadata
-        archived
         +isSynthetic() boolean
     }
     class Message {
@@ -285,57 +290,66 @@ classDiagram
 
 ### Event lifecycle
 
-An event is appended once and never edited. Its content never changes; only its state
-does:
+The log is append-only: an event is appended once and never edited, moved or flagged. What
+changes over time is not the event but the **view**, the part of the log that is sent to
+the model. Compaction appends a `COMPACTION` boundary event that names, by id, the events
+the view starts with; everything appended after the boundary is in the view too, and
+everything else before it is **covered**:
 
 ```mermaid
 stateDiagram-v2
     direction LR
-    [*] --> Active : appendEvent
-    Active --> Archived : compaction archives it
-    Active --> Deleted : session deleted or expired
-    Archived --> Deleted : session deleted or expired
+    [*] --> InView : appendEvent
+    InView --> Covered : a boundary is appended that does not name it
+    InView --> Deleted : session deleted or expired
+    Covered --> Deleted : session deleted or expired
     Deleted --> [*]
 
-    note right of Active : sent to the model (EventFilter.active)
-    note right of Archived : kept and searchable, not sent to the model
+    note right of InView : sent to the model (EventFilter.active)
+    note right of Covered : kept and searchable, not sent to the model
 ```
 
-- **Active:** part of the active context window. Appending an event with an id that
+- **In the view:** part of the active context window. Appending an event with an id that
   already exists is an idempotent replay and changes nothing.
-- **Archived:** compaction moved it out of the active window, for example an old turn, a
-  stored system message superseded by a newer one, or a synthetic summary that a newer
-  summary replaces. The latest stored system message always stays active.
+- **Covered:** the newest boundary does not name it, for example an old turn, a stored
+  system message superseded by a newer one, or a synthetic summary that a newer summary
+  replaces. The latest stored system message is always named (pinned). A later boundary
+  only ever names events from the view it compacted, so a covered event stays covered.
 - **Deleted:** gone from the log. This only happens when the whole session is deleted
   (`delete`, or `deleteExpiredSessions` for expired sessions). Compaction never deletes.
 
-**Archiving instead of deleting**
+**The view is a projection**
 
-Compaction marks the real events it removes from the active window as archived
-(`SessionEvent.isArchived()`) via `applyCompaction`, so the full verbatim history stays in
-the log. What an integration sends to the model is the `EventFilter.active()` view, while
+A read with `EventFilter.compactedView()` (which `EventFilter.active()` sets) returns the
+events the newest boundary names, in its order (pinned, summary, preserved), followed by
+everything appended since; `CompactionBoundary.project(log)` is the reference
+implementation. What an integration sends to the model is that view, while
 [Recall Storage](../recall-memory/recall-storage.md) searches (`EventFilter.keywordSearch(...)`) span the
-whole log, archived events included. This makes the MemGPT recall pattern work: the agent
+whole log, covered events included. This makes the MemGPT recall pattern work: the agent
 can surface any prior exchange after it has been compacted out of context. A replaced
-synthetic summary is archived too, so the log also shows what the model was told before
+synthetic summary is covered too, so the log also shows what the model was told before
 each pass. The Recall Storage tools leave synthetic events out of their results by default,
 because a summary only paraphrases real events that are still in the log.
 
-In the JDBC repository, newly archived events are flagged with an in-place `UPDATE`.
-Compaction never reorders the log: only when a summary is inserted is the part of the log
-after it re-inserted, so the archived history before that point (normally all of it) is
-never re-read or re-written.
+The view is the conversation. Compaction reads message events only, so a boundary names
+message events: a `STATUS` or `USAGE` event logged before the boundary is not in the view,
+while one logged after it is. Read runtime state from the log, with `eventTypes` and
+without `compactedView`.
+
+Nothing is ever rewritten. In the JDBC repository a compaction is one batch insert, and a
+view read is one query for the rows the boundary names plus the rows from the boundary on.
+The boundary record is also what makes a compaction observable after the fact: it says
+which strategy ran, how many events it covered and what it estimated to save.
 
 ### Optimistic concurrency
 
 `SessionRepository.getEventVersion(sessionId)` is a monotonically increasing counter,
 incremented on every `appendEvent` that appends a new event and on every successful
-`applyCompaction` call. `DefaultSessionService.compact` reads it before fetching the
-active events, turns the strategy's result into a `CompactionPlan` (which events to
-archive, which new events to insert before which existing event) and
-passes both to `applyCompaction(sessionId, plan, expectedVersion)`. If another writer
-changed the log in between, this compare-and-swap (CAS) returns `false`, and the caller
-treats it as a no-op rather than retrying. Durable implementations should map it to a
+`appendEvents` call. `DefaultSessionService.compact` reads it before fetching the view,
+builds the summary events and the boundary from the strategy's result, and passes them to
+`appendEvents(sessionId, events, expectedVersion)`. If another writer changed the log in
+between, this compare-and-swap (CAS) returns `false`, and the caller treats it as a no-op
+rather than retrying. Durable implementations should map it to a
 database-level optimistic-lock column, as the JDBC repository does; a Redis
 implementation, for example, would use `WATCH`.
 
@@ -344,8 +358,7 @@ implementation, for example, would use `WATCH`.
 A retried `appendEvent` call for an id that was already committed is a no-op, not an
 error or a duplicate, and does not increment the event-log version.
 `InMemorySessionRepository` checks the session's events for the id before appending.
-`JdbcSessionRepository` inserts and treats a primary-key violation on the event `id` as a
-replay.
+`JdbcSessionRepository` looks the id up first and inserts only when it is new.
 
 In JDBC the event `id` is the primary key of the whole `AI_SESSION_EVENT` table, not just
 of one session. Reusing an id that already belongs to a *different* session throws
@@ -371,12 +384,14 @@ backend has to reimplement it. Core ships three helpers for this, and a test kit
 checks the whole contract.
 
 **Reads push the filter down.** `findEvents(sessionId, filter)` must not read the whole
-log for a `lastN` or a page. Evaluate `excludeArchived`, `excludeSynthetic`,
+log for a `lastN` or a page. Evaluate `excludeSynthetic`, `eventTypes`,
 `messageTypes`, the time range, `lastN`, `page`/`pageSize` and, where the store can, the
 keywords in the query itself. `EventFilter.apply(List)` is the reference implementation of
 the read contract for a log held as a list; use it only for what the store cannot express,
 as the JDBC repository does for `pattern` (a Java regex cannot be translated to portable
-SQL). A `lastN` window must keep turns whole: when its oldest event is not a `USER` event,
+SQL). A `compactedView` read is the exception: the view is bounded by compaction, so fetch
+the rows the newest boundary names plus the rows from the boundary on and let
+`EventFilter.apply` project, filter and window them, as the JDBC repository does. A `lastN` window must keep turns whole: when its oldest event is not a `USER` event,
 extend it back to the nearest preceding one among the matching events, unless the filter
 searches text or no such event exists (`EventFilter.applyTurnAwareWindow` spells out the
 rule; the JDBC repository does it with one bounded extra query). The contract kit checks
@@ -384,15 +399,16 @@ this on every store. `findEventsByUserId(userId, filter)` has a default that loo
 the user's sessions and windows the union in memory; a store that can join sessions and
 events should override it with one sorted, paged query.
 
-**Messages have one persisted shape.** `SessionEventCodec` encodes a `Message` into its
-type, text and a JSON `data` payload (tool calls or tool responses), and decodes it back.
-Stores that keep columns or fields use it so every backend stores the same thing.
+**Events have one persisted shape.** `SessionEventCodec` encodes a `SessionEvent` into
+its event type, message type, text and a JSON payload (the message parts, or the payload
+of a non-message event), and decodes it back. Stores that keep columns or fields use it so
+every backend stores the same thing.
 
-**Compaction is a plan.** `applyCompaction(sessionId, plan, expectedVersion)` receives a
-`CompactionPlan` with two parts: `archiveIds` to flag archived in place, and `inserts`,
-each a group of new events that goes immediately before an existing anchor event, or at
-the end when the anchor is `null`. Existing events never move and are never removed. `CompactionPlan.applyTo(log)` is the reference merge for a log
-held as a list; list-based stores can call it directly.
+**Compaction is an append.** `appendEvents(sessionId, events, expectedVersion)` appends a
+`COMPACTION` boundary event and its summary events in one version-checked write. Existing
+events never move, change or disappear; the boundary names the view by id, and
+`CompactionBoundary.project(log)` is the reference projection for a log held as a list,
+which `EventFilter.apply` already uses.
 
 **Run the contract tests.** The `spring-ai-session-test` artifact contains
 `AbstractSessionRepositoryContractTests`, the suite the built-in in-memory, H2, PostgreSQL
@@ -418,8 +434,9 @@ class MySessionRepositoryContractTests extends AbstractSessionRepositoryContract
 ```
 
 It covers idempotent append, the version rules, `saveIfAbsent` under concurrent creates,
-expiry cleanup, every filter criterion and window, and every compaction rule (archive in
-place, insert before an anchor, append, stale version, unknown ids).
+expiry cleanup, every filter criterion and window, and every compaction rule (an atomic
+append under a stale version, rejected ids, and the view a boundary defines, across chained
+boundaries).
 
 ---
 
@@ -446,15 +463,15 @@ sequenceDiagram
         App->>Svc: getActiveMessages(id)
         Svc->>Repo: findEvents(id, EventFilter.active())
         Repo-->>Svc: active events
-        Svc-->>App: active window (archived events excluded)
+        Svc-->>App: the view (covered events excluded)
         App->>LLM: system prompt (supplied per request) + active window + user message
         LLM-->>App: reply
         App->>Svc: appendMessage(id, user message), appendMessage(id, reply)
         Svc->>Repo: appendEvent(...)
         opt the compaction trigger fires
             App->>Svc: compact(id, trigger, strategy)
-            Svc->>Repo: getEventVersion, findEvents, applyCompaction(plan) (CAS)
-            Note over Repo: old events archived, still searchable
+            Svc->>Repo: getEventVersion, findEvents, appendEvents(boundary + summary) (CAS)
+            Note over Repo: old events covered, still in the log and searchable
         end
     end
 
@@ -479,7 +496,7 @@ service.appendMessage(session.id(), new AssistantMessage("Spring AI is..."));
 // 3. Retrieve the active context window as a Message list (for passing to an LLM)
 List<Message> history = service.getActiveMessages(session.id());
 
-//    ...or the full recorded history, including events archived by compaction
+//    ...or the full recorded history, including events covered by compaction
 List<Message> fullHistory = service.getMessages(session.id());
 
 // 4. Retrieve as SessionEvent list (for filtering, inspection, compaction)

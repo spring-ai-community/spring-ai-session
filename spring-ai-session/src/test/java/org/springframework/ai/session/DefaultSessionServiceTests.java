@@ -35,7 +35,9 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.compaction.CompactionResult;
+import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -239,25 +241,60 @@ class DefaultSessionServiceTests {
 		CompactionResult result = this.service.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
-		assertThat(result.archivedEventCount()).isEqualTo(3);
-		assertThat(result.compactedEvents()).hasSize(2);
+		assertThat(result.coveredEventCount()).isEqualTo(3);
+		assertThat(result.preservedEvents()).hasSize(2);
 
 		// Active window keeps only the last two events
 		List<SessionEvent> active = this.service.getEvents(session.id(), EventFilter.active());
 		assertThat(active).extracting(e -> e.getMessage().getText()).containsExactly("msg-4", "msg-5");
 
-		// The three compacted events are archived, not deleted — still available for Recall
-		// Storage search via the full (unfiltered) view.
+		// The three covered events stay in the log, followed by the boundary that records
+		// the compaction; nothing is deleted or changed.
 		List<SessionEvent> all = this.service.getEvents(session.id());
-		assertThat(all).extracting(e -> e.getMessage().getText())
+		assertThat(this.service.getMessages(session.id())).extracting(Message::getText)
 			.containsExactly("msg-1", "msg-2", "msg-3", "msg-4", "msg-5");
-		assertThat(all.stream().filter(SessionEvent::isArchived).map(e -> e.getMessage().getText()))
-			.containsExactly("msg-1", "msg-2", "msg-3");
+		assertThat(all).hasSize(6);
+		assertThat(all.get(5).getType()).isEqualTo(EventType.COMPACTION);
+		CompactionBoundary boundary = CompactionBoundary.from(all.get(5));
+		assertThat(boundary.coveredEventCount()).isEqualTo(3);
+		assertThat(boundary.preservedEventIds()).containsExactly(all.get(3).getId(), all.get(4).getId());
+		assertThat(boundary.summaryEventIds()).isEmpty();
+		assertThat(boundary.strategy()).isEqualTo("sliding-window");
+	}
+
+	@Test
+	void compactAppendsTheSummaryEventsAfterTheBoundaryAndTagsThem() {
+		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
+		for (int i = 1; i <= 4; i++) {
+			this.service.appendMessage(session.id(), new UserMessage("msg-" + i));
+		}
+		// A strategy that summarizes everything but the last event
+		CompactionStrategy summarizing = request -> {
+			List<SessionEvent> view = request.events();
+			return new CompactionResult(view.subList(0, 3), List.of(), view.subList(3, 4),
+					List.of(new UserMessage("Summarize."), new AssistantMessage("first three messages")), 10, "custom");
+		};
+
+		CompactionResult result = this.service.compact(session.id(), req -> true, summarizing);
+
+		assertThat(result.coveredEventCount()).isEqualTo(3);
+		List<SessionEvent> all = this.service.getEvents(session.id());
+		assertThat(all).hasSize(7);
+		SessionEvent boundary = all.get(4);
+		assertThat(boundary.getType()).isEqualTo(EventType.COMPACTION);
+		List<SessionEvent> summary = all.subList(5, 7);
+		assertThat(summary).allMatch(SessionEvent::isSynthetic)
+			.allMatch(e -> boundary.getId().equals(e.getMetadata().get(SessionEvent.METADATA_COMPACTION_ID)))
+			.allMatch(e -> "custom".equals(e.getMetadata().get(SessionEvent.METADATA_COMPACTION_SOURCE)));
+		assertThat(CompactionBoundary.from(boundary).summaryEventIds())
+			.containsExactly(summary.get(0).getId(), summary.get(1).getId());
+		assertThat(this.service.getActiveMessages(session.id())).extracting(Message::getText)
+			.containsExactly("Summarize.", "first three messages", "msg-4");
 	}
 
 	@Test
 	void compactedEventsRemainSearchableViaRecallStorage() {
-		// Regression for issue #21: compaction must archive (not delete) events so the
+		// Regression for issue #21: compaction must cover (not delete) events so the
 		// Recall Storage keyword search can still surface them after the active context
 		// window has moved on.
 		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
@@ -268,14 +305,13 @@ class DefaultSessionServiceTests {
 
 		this.service.compact(session.id(), req -> true, SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
-		// The first message is archived out of the active window...
+		// The first message is covered, out of the active window...
 		assertThat(this.service.getEvents(session.id(), EventFilter.active()))
 			.noneMatch(e -> e.getMessage().getText().contains("alpha-7"));
 		// ...but a keyword search (the Recall Storage filter) still finds it.
 		List<SessionEvent> recalled = this.service.getEvents(session.id(), EventFilter.keywordSearch("alpha-7"));
 		assertThat(recalled).hasSize(1);
 		assertThat(recalled.get(0).getMessage().getText()).isEqualTo("the secret code is alpha-7");
-		assertThat(recalled.get(0).isArchived()).isTrue();
 	}
 
 	@Test
@@ -287,13 +323,12 @@ class DefaultSessionServiceTests {
 		CompactionResult result = this.service.compact(session.id(), req -> false,
 				SlidingWindowCompactionStrategy.builder().maxEvents(10).build());
 
-		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.archivedEventCount()).isZero();
+		assertThat(result.isUnchanged()).isTrue();
 		assertThat(this.service.getEvents(session.id())).hasSize(1);
 	}
 
 	@Test
-	void compactNoOpWhenStrategyArchivesNothing() {
+	void compactNoOpWhenStrategyCoversNothing() {
 		Session session = this.service.create(CreateSessionRequest.builder().userId("user-1").build());
 		this.service.appendMessage(session.id(), new UserMessage("only message"));
 
@@ -301,8 +336,7 @@ class DefaultSessionServiceTests {
 		CompactionResult result = this.service.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(10).build());
 
-		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.archivedEventCount()).isZero();
+		assertThat(result.isUnchanged()).isTrue();
 		assertThat(this.service.getEvents(session.id())).hasSize(1);
 	}
 
@@ -319,8 +353,8 @@ class DefaultSessionServiceTests {
 		CompactionResult result = this.service.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
-		assertThat(result.archivedEventCount()).isEqualTo(3);
-		assertThat(result.compactedEvents()).hasSize(2);
+		assertThat(result.coveredEventCount()).isEqualTo(3);
+		assertThat(result.preservedEvents()).hasSize(2);
 
 		List<SessionEvent> active = this.service.getEvents(session.id(), EventFilter.active());
 		assertThat(active).extracting(e -> e.getMessage().getText()).containsExactly("msg-4", "msg-5");
@@ -349,7 +383,7 @@ class DefaultSessionServiceTests {
 		}
 
 		// Two threads race to compact the same session to a window of 2.
-		// The CAS in applyCompaction guarantees that only the first writer lands;
+		// The CAS in appendEvents guarantees that only the first boundary lands;
 		// the second detects a version mismatch and skips silently.
 		CountDownLatch ready = new CountDownLatch(2);
 		CountDownLatch go = new CountDownLatch(1);
@@ -376,13 +410,16 @@ class DefaultSessionServiceTests {
 		executor.shutdown();
 		assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
 
-		// Exactly one compaction must have removed 3 events; the other is a no-op.
-		int totalRemoved = results[0].archivedEventCount() + results[1].archivedEventCount();
-		assertThat(totalRemoved).isEqualTo(3);
+		// Exactly one compaction must have covered 3 events; the other is a no-op.
+		int totalCovered = results[0].coveredEventCount() + results[1].coveredEventCount();
+		assertThat(totalCovered).isEqualTo(3);
 
-		// The surviving active window must be exactly the last 2 messages.
+		// The surviving active window must be exactly the last 2 messages, and exactly
+		// one boundary was appended.
 		List<SessionEvent> active = this.service.getEvents(session.id(), EventFilter.active());
 		assertThat(active).extracting(e -> e.getMessage().getText()).containsExactly("msg-4", "msg-5");
+		assertThat(this.service.getEvents(session.id()).stream().filter(e -> e.getType() == EventType.COMPACTION))
+			.hasSize(1);
 	}
 
 	// --- deleteExpiredSessions ---

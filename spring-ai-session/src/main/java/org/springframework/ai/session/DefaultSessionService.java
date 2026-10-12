@@ -18,6 +18,7 @@ package org.springframework.ai.session;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
@@ -25,7 +26,7 @@ import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 
 import org.springframework.ai.chat.messages.MessageType;
-import org.springframework.ai.session.compaction.CompactionPlan;
+import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.compaction.CompactionRequest;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -149,37 +150,62 @@ public class DefaultSessionService implements SessionService {
 
 		// Read version BEFORE events so the version we pass to the CAS write is
 		// guaranteed to be ≤ the version of the events we subsequently read. If another
-		// writer (append or compaction) mutates the log between our read and our write,
+		// writer (append or compaction) changes the log between our read and our write,
 		// the CAS will detect the version mismatch and return false — we skip silently,
 		// as the concurrent writer already handled the session.
 		long version = this.sessionRepository.getEventVersion(session.id());
 
-		// Operate on the active context window only — already-archived events are
-		// retained for Recall Storage and must not be re-processed (or re-summarized) by
-		// compaction.
-		List<SessionEvent> events = this.sessionRepository.findEvents(session.id(), EventFilter.active());
+		// Operate on the active view only — the events an earlier compaction covered are
+		// retained for Recall Storage and must not be re-processed (or re-summarized).
+		List<SessionEvent> view = this.sessionRepository.findEvents(session.id(), EventFilter.active());
 
-		CompactionRequest request = CompactionRequest.of(session, events);
+		CompactionRequest request = CompactionRequest.of(session, view);
 
 		if (!trigger.shouldCompact(request)) {
-			return new CompactionResult(events, List.of(), 0);
+			return CompactionResult.unchanged();
 		}
 
-		CompactionResult compactionResult = strategy.compact(request);
-
-		// The service holds the active log at the version it will compare-and-swap
-		// against, so it computes the write operations; the repository only applies them.
-		CompactionPlan plan = CompactionPlan.of(session.id(), events, compactionResult);
-		if (!plan.isEmpty()) {
-			boolean replaced = this.sessionRepository.applyCompaction(session.id(), plan, version);
-			if (!replaced) {
-				// CAS rejected — a concurrent writer already mutated the log; skip
-				// silently.
-				return new CompactionResult(events, List.of(), 0);
-			}
+		CompactionResult result = strategy.compact(request);
+		if (result.isUnchanged()) {
+			return result;
 		}
 
-		return compactionResult;
+		// Record the decision as an appended boundary followed by its summary events. The
+		// log is never changed: the boundary names, by id, what the view is from now on.
+		String boundaryId = UUID.randomUUID().toString();
+		Instant now = Instant.now();
+		List<SessionEvent> summaryEvents = result.summary().stream().map(message -> SessionEvent.builder()
+			.sessionId(session.id())
+			.timestamp(now)
+			.message(message)
+			.metadata(SessionEvent.METADATA_SYNTHETIC, true)
+			.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, result.strategy())
+			.metadata(SessionEvent.METADATA_COMPACTION_ID, boundaryId)
+			.build()).toList();
+		CompactionBoundary boundary = new CompactionBoundary(boundaryId, ids(result.pinnedEvents()),
+				ids(summaryEvents), ids(result.preservedEvents()), result.coveredEventCount(),
+				result.tokensEstimatedSaved(), result.strategy());
+		SessionEvent boundaryEvent = SessionEvent.builder()
+			.id(boundaryId)
+			.sessionId(session.id())
+			.timestamp(now)
+			.type(EventType.COMPACTION)
+			.payload(boundary.toPayload())
+			.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, result.strategy())
+			.build();
+		List<SessionEvent> toAppend = new ArrayList<>(1 + summaryEvents.size());
+		toAppend.add(boundaryEvent);
+		toAppend.addAll(summaryEvents);
+
+		if (!this.sessionRepository.appendEvents(session.id(), toAppend, version)) {
+			// CAS rejected — a concurrent writer already changed the log; skip silently.
+			return CompactionResult.unchanged();
+		}
+		return result;
+	}
+
+	private static List<String> ids(List<SessionEvent> events) {
+		return events.stream().map(SessionEvent::getId).toList();
 	}
 
 	public static Builder builder() {

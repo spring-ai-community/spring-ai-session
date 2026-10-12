@@ -16,6 +16,7 @@
 
 package org.springframework.ai.session.compaction;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -23,6 +24,7 @@ import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.session.SessionEvent;
@@ -55,14 +57,19 @@ final class CompactionUtils {
 	 * @return a non-null, non-empty string representing the event
 	 */
 	static String formatEvent(SessionEvent event) {
-		String role = switch (event.getMessageType()) {
+		return formatMessage(event.getMessage());
+	}
+
+	/** Renders a message the way {@link #formatEvent(SessionEvent)} renders its event. */
+	static String formatMessage(Message message) {
+		String role = switch (message.getMessageType()) {
 			case USER -> "User";
 			case ASSISTANT -> "Assistant";
 			case SYSTEM -> "System";
 			case TOOL -> "Tool";
 		};
 
-		if (event.getMessage() instanceof AssistantMessage am && am.hasToolCalls()) {
+		if (message instanceof AssistantMessage am && am.hasToolCalls()) {
 			String calls = am.getToolCalls()
 				.stream()
 				.map(tc -> tc.name() + "(" + tc.arguments() + ")")
@@ -72,7 +79,7 @@ final class CompactionUtils {
 					: role + " [tool calls: " + calls + "]";
 		}
 
-		if (event.getMessage() instanceof ToolResponseMessage trm) {
+		if (message instanceof ToolResponseMessage trm) {
 			String responses = trm.getResponses()
 				.stream()
 				.map(r -> r.name() + " -> " + r.responseData())
@@ -80,7 +87,7 @@ final class CompactionUtils {
 			return role + " [responses: " + responses + "]";
 		}
 
-		String text = event.getMessage().getText();
+		String text = message.getText();
 		return role + ": " + (text != null ? text : "[no text content]");
 	}
 
@@ -101,12 +108,12 @@ final class CompactionUtils {
 	 * <p>
 	 * The latest stored system message is the agent's system prompt ("latest wins"):
 	 * storing a new one replaces the previous one, and it is the integrator's
-	 * responsibility to put the complete intended content in it. Every strategy keeps this
-	 * event in the active window, where it was stored, and never summarizes it (readers
-	 * such as {@code SessionMemoryAdvisor} put it first in the prompt). Earlier stored
-	 * system messages are {@linkplain #supersededSystemEvents superseded} and archived, so
-	 * storing one per turn cannot grow the active window.
-	 * @param events the session events, oldest first
+	 * responsibility to put the complete intended content in it. Every strategy pins this
+	 * event, so it stays at the front of the view whatever the cut, and never summarizes
+	 * it. An earlier stored system message is covered when the cut passes it; one inside
+	 * the preserved window stays there, and readers such as {@code SessionMemoryAdvisor}
+	 * use only the latest one.
+	 * @param events the view, oldest first
 	 * @return the latest stored system event, or an empty list if there is none
 	 */
 	static List<SessionEvent> pinnedSystemEvents(List<SessionEvent> events) {
@@ -118,14 +125,9 @@ final class CompactionUtils {
 		return List.of();
 	}
 
-	/**
-	 * Returns the stored system events superseded by a later one: every
-	 * {@linkplain #isStoredSystemEvent stored system event} other than the
-	 * {@code pinned} one, in order. Strategies archive them (they remain searchable
-	 * through Recall Storage) and never summarize them.
-	 */
-	static List<SessionEvent> supersededSystemEvents(List<SessionEvent> events, List<SessionEvent> pinned) {
-		return events.stream().filter(e -> isStoredSystemEvent(e) && !pinned.contains(e)).toList();
+	/** Returns the synthetic events of the view: the summary a previous compaction left. */
+	static List<SessionEvent> syntheticEvents(List<SessionEvent> events) {
+		return events.stream().filter(SessionEvent::isSynthetic).toList();
 	}
 
 	/**
@@ -151,31 +153,42 @@ final class CompactionUtils {
 	}
 
 	/**
-	 * Result for a pass where the strategy's budget needs no cut. The events are returned
-	 * unchanged when there are no superseded system events; otherwise only the superseded
-	 * ones are archived, so "latest wins" is applied whenever compaction runs.
+	 * Builds the result of a cut. The real events before {@code cutIndex} leave the view,
+	 * together with every other view event that precedes the first preserved event and is
+	 * not pinned (a superseded system message, a prior summary a summarizing strategy
+	 * replaces). The pinned events go first; the real events from {@code cutIndex} on, and
+	 * every non-pinned view event after the first of them, are preserved in log order.
+	 * @param view the view the strategy received, oldest first
+	 * @param pinned the events kept at the front whatever the cut
+	 * @param real the {@linkplain #compactableEvents compactable} events of the view
+	 * @param cutIndex the index into {@code real} of the first preserved real event;
+	 * {@code real.size()} preserves none
+	 * @param summary the messages that stand in for the covered events, or an empty list
+	 * @param summaryTokens the estimated tokens of the summary
+	 * @param tokens the token estimate of an event
+	 * @param strategy the strategy name
+	 * @return the result; {@link CompactionResult#unchanged()} when nothing would leave the
+	 * view
 	 */
-	static CompactionResult unchangedExceptSuperseded(List<SessionEvent> events, List<SessionEvent> superseded,
-			ToIntFunction<SessionEvent> tokens) {
-		if (superseded.isEmpty()) {
-			return new CompactionResult(events, List.of(), 0);
+	static CompactionResult cut(List<SessionEvent> view, List<SessionEvent> pinned, List<SessionEvent> real,
+			int cutIndex, List<Message> summary, int summaryTokens, ToIntFunction<SessionEvent> tokens,
+			String strategy) {
+		Set<SessionEvent> pinnedSet = new HashSet<>(pinned);
+		int preservedFrom = (cutIndex < real.size()) ? view.indexOf(real.get(cutIndex)) : view.size();
+		List<SessionEvent> covered = new ArrayList<>();
+		List<SessionEvent> preserved = new ArrayList<>();
+		for (int i = 0; i < view.size(); i++) {
+			SessionEvent event = view.get(i);
+			if (pinnedSet.contains(event)) {
+				continue;
+			}
+			(i < preservedFrom ? covered : preserved).add(event);
 		}
-		return archiving(events, List.of(), superseded, tokens);
-	}
-
-	/**
-	 * Result for a pass that cut real events: archives the removed real events together
-	 * with the superseded system events. Compaction never reorders events: both the
-	 * archived events and the new active window (every other event) keep their original
-	 * log order, so a kept system message stays where it was stored.
-	 */
-	static CompactionResult archiving(List<SessionEvent> events, List<SessionEvent> removedReal,
-			List<SessionEvent> superseded, ToIntFunction<SessionEvent> tokens) {
-		Set<SessionEvent> toArchive = new HashSet<>(removedReal);
-		toArchive.addAll(superseded);
-		List<SessionEvent> archived = events.stream().filter(toArchive::contains).toList();
-		List<SessionEvent> compacted = events.stream().filter(e -> !toArchive.contains(e)).toList();
-		return new CompactionResult(compacted, archived, archived.stream().mapToInt(tokens).sum());
+		if (covered.isEmpty()) {
+			return CompactionResult.unchanged();
+		}
+		int saved = covered.stream().mapToInt(tokens).sum() - summaryTokens;
+		return new CompactionResult(covered, pinned, preserved, summary, Math.max(0, saved), strategy);
 	}
 
 	/**
@@ -196,7 +209,7 @@ final class CompactionUtils {
 	 * Compaction strategies compute a raw cut point (the index into the real-event list
 	 * where the kept window would start) based on event counts or token budgets. That raw
 	 * cut can land in the middle of a turn — for example at an assistant reply whose user
-	 * message would be archived. Snapping to the nearest turn start guarantees that the
+	 * message would be covered. Snapping to the nearest turn start guarantees that the
 	 * kept window always begins at a complete turn, preserving conversation semantics.
 	 * @param real the list of non-synthetic session events
 	 * @param rawCutIndex the initial cut point; must be in {@code [0, real.size()]}
@@ -212,14 +225,14 @@ final class CompactionUtils {
 	}
 
 	/**
-	 * Guards against a cut that would archive the entire real-event window. When
+	 * Guards against a cut that would cover the entire real-event window. When
 	 * {@code cutIndex == real.size()} — e.g. because the most recent turn alone exceeds
 	 * the strategy's budget, so {@link #snapToTurnStart} found no later turn start — the
 	 * cut is moved back to the last {@linkplain #isTurnStart turn start} so that the
 	 * current turn is always kept in the active window, even if it exceeds the budget.
 	 * When there is no {@code USER} event at all (no turn boundary to cut at), returns
-	 * {@code 0}, so nothing is archived. Returns {@code cutIndex} unchanged when it
-	 * already keeps at least one event.
+	 * {@code 0}, so nothing is covered. Returns {@code cutIndex} unchanged when it already
+	 * keeps at least one event.
 	 * @param real the list of non-synthetic session events
 	 * @param cutIndex the snapped cut point; must be in {@code [0, real.size()]}
 	 * @return an index that keeps at least the last complete turn, or {@code 0} when
@@ -234,8 +247,16 @@ final class CompactionUtils {
 				return i;
 			}
 		}
-		// No turn boundary to cut at: archive nothing rather than the whole window
+		// No turn boundary to cut at: cover nothing rather than the whole window
 		return 0;
+	}
+
+	/** Concatenates two event lists. */
+	static List<SessionEvent> concat(List<SessionEvent> first, List<SessionEvent> second) {
+		List<SessionEvent> all = new ArrayList<>(first.size() + second.size());
+		all.addAll(first);
+		all.addAll(second);
+		return all;
 	}
 
 }

@@ -48,7 +48,11 @@ public enum EventType {
 	/** Token usage of a model call or a cumulative usage snapshot. */
 	USAGE,
 
-	/** The log was compacted; the payload describes what was archived and inserted. */
+	/**
+	 * A compaction boundary: the payload names, by id, the events that make up the
+	 * active view from here on (see
+	 * {@link org.springframework.ai.session.compaction.CompactionBoundary}).
+	 */
 	COMPACTION,
 
 	/** A child session (a delegated thread) was created from this session. */

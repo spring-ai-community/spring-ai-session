@@ -92,18 +92,4 @@ class SessionEventTests {
 		assertThatThrownBy(() -> event.getPayload().put("c", 3)).isInstanceOf(UnsupportedOperationException.class);
 	}
 
-	@Test
-	void asArchivedKeepsTypeMessageAndPayload() {
-		SessionEvent status = SessionEvent.builder().sessionId("s").type(EventType.STATUS).payload("k", "v").build();
-		SessionEvent archived = status.asArchived();
-
-		assertThat(archived.isArchived()).isTrue();
-		assertThat(archived.getType()).isEqualTo(EventType.STATUS);
-		assertThat(archived.getPayload()).containsEntry("k", "v");
-		assertThat(archived).isEqualTo(status);
-
-		SessionEvent message = SessionEvent.builder().sessionId("s").message(new UserMessage("hi")).build();
-		assertThat(message.asArchived().getMessage().getText()).isEqualTo("hi");
-	}
-
 }

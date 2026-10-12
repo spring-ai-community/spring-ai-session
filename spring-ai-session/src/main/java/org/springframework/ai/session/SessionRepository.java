@@ -23,14 +23,13 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
-import org.springframework.ai.session.compaction.CompactionPlan;
-
 /**
  * Persistence contract for {@link Session} objects and their event logs.
  *
  * <p>
- * Implementations must be thread-safe. Events are stored separately from session metadata
- * and are mutated via dedicated methods to keep session metadata immutable.
+ * Implementations must be thread-safe. Events are stored separately from session metadata.
+ * The event log is append-only: nothing ever updates, moves or removes an event, and
+ * compaction is recorded by appending (see {@link #appendEvents}).
  *
  * @author Christian Tzolov
  * @since 2.0.0
@@ -105,50 +104,48 @@ public interface SessionRepository {
 	void appendEvent(SessionEvent event);
 
 	/**
-	 * Atomically applies a compaction plan to the session's event log using an optimistic
-	 * compare-and-swap. The plan is applied only if the current event-log version equals
-	 * {@code expectedVersion}; otherwise the call is a no-op and returns {@code false}
-	 * (another writer mutated the log between the caller's read and this write).
+	 * Atomically appends several events to the session's event log, in order, using an
+	 * optimistic compare-and-swap: the events are appended only if the current event-log
+	 * version equals {@code expectedVersion}; otherwise nothing is written and
+	 * {@code false} is returned (another writer changed the log between the caller's read
+	 * and this write). On success the version is incremented once, whatever the number of
+	 * events.
 	 *
 	 * <p>
-	 * Archived events are <em>retained</em> in the log (soft-deleted via
-	 * {@link SessionEvent#isArchived()}) so they remain searchable by the Recall Storage
-	 * tools. Compaction never removes or reorders existing events. On success:
-	 * <ul>
-	 * <li>the events in {@link CompactionPlan#archiveIds()} are flagged archived <em>in
-	 * place</em>;</li>
-	 * <li>each {@link CompactionPlan.Insert} group is inserted immediately before its
-	 * anchor event, or appended at the end of the log when the anchor is {@code null};</li>
-	 * <li>every other event stays where it is.</li>
-	 * </ul>
-	 * {@link CompactionPlan#applyTo(List)} is the reference implementation of these rules
-	 * for a log held as a list.
+	 * This is how compaction is recorded: {@link SessionService#compact} appends one
+	 * {@link EventType#COMPACTION} boundary event followed by its summary events. The log is
+	 * append-only; compaction never flags, moves or removes an existing event. The boundary
+	 * defines the active view from then on (see
+	 * {@link org.springframework.ai.session.compaction.CompactionBoundary#project(List)}),
+	 * and the version check keeps two concurrent compactions from both landing.
 	 *
 	 * <p>
 	 * Callers should read {@link #getEventVersion} <em>before</em> reading events via
 	 * {@link #findEvents}, then pass that version here. If this method returns
-	 * {@code false} the caller should treat the compaction as a no-op — the concurrent
-	 * writer already handled the session.
-	 * @param sessionId the session whose log is being compacted
-	 * @param plan the plan; its archive ids and anchor ids must be in the session's log,
-	 * otherwise implementations reject the whole call with
-	 * {@link IllegalArgumentException} and change nothing
+	 * {@code false} the caller should treat the write as not done — the concurrent writer
+	 * already handled the session.
+	 * @param sessionId the session whose log is appended to; every event must belong to it
+	 * @param events the events, in the order they are appended; at least one, and their
+	 * ids must be new
 	 * @param expectedVersion the event-log version the caller observed
-	 * @return {@code true} when the plan was applied, {@code false} on a version mismatch
-	 * @throws IllegalArgumentException if the session does not exist
+	 * @return {@code true} when the events were appended, {@code false} on a version
+	 * mismatch
+	 * @throws IllegalArgumentException if the session does not exist, {@code events} is
+	 * empty, an event belongs to another session, or an event id is already in the log or
+	 * appears twice in the batch
 	 */
-	boolean applyCompaction(String sessionId, CompactionPlan plan, long expectedVersion);
+	boolean appendEvents(String sessionId, List<SessionEvent> events, long expectedVersion);
 
 	/**
 	 * Returns the current event-log version for the given session. The version is
 	 * incremented atomically on every {@link #appendEvent} call that actually appends a
-	 * new event, and on every successful {@link #applyCompaction} call (an idempotent
-	 * replay of an already-applied {@link #appendEvent} does not increment it). Returns
-	 * {@code 0} when the session does not exist or has no events yet.
+	 * new event, and on every successful {@link #appendEvents} call (an idempotent replay
+	 * of an already-applied {@link #appendEvent} does not increment it). Returns {@code 0}
+	 * when the session does not exist or has no events yet.
 	 * <p>
 	 * Read this <em>before</em> calling {@link #findEvents} to obtain a version that is
 	 * guaranteed to be ≤ the version of the events you subsequently read, which is the
-	 * safe ordering for passing to {@link #applyCompaction(String, CompactionPlan, long)}.
+	 * safe ordering for passing to {@link #appendEvents(String, List, long)}.
 	 */
 	long getEventVersion(String sessionId);
 
@@ -166,9 +163,20 @@ public interface SessionRepository {
 	 * reference implementation; {@code JdbcSessionRepository} pushes it down as one
 	 * bounded extra query when the window lands mid-turn.
 	 * <p>
-	 * <strong>Push the filter down.</strong> The cost of a read must not grow with the
-	 * size of the whole log: an implementation is expected to evaluate
-	 * {@link EventFilter#excludeArchived()}, {@link EventFilter#excludeSynthetic()},
+	 * <strong>The compacted view.</strong> With {@link EventFilter#compactedView()} the
+	 * filter applies to the active view of the log rather than the whole log: the events
+	 * named by the newest {@link EventType#COMPACTION} boundary (pinned, summary,
+	 * preserved, in that order) and everything appended after it. A log without a boundary
+	 * is its own view.
+	 * {@link org.springframework.ai.session.compaction.CompactionBoundary#project(List)} is
+	 * the reference implementation; a store may fetch only the view's rows (the named ids
+	 * and the rows from the boundary on) and hand them to {@link EventFilter#apply(List)},
+	 * as {@code JdbcSessionRepository} does. The view is bounded by compaction, so it is
+	 * read whole and windowed in memory.
+	 * <p>
+	 * <strong>Push the filter down.</strong> For a read of the whole log the cost must not
+	 * grow with its size: an implementation is expected to evaluate
+	 * {@link EventFilter#excludeSynthetic()}, {@link EventFilter#eventTypes()},
 	 * {@link EventFilter#messageTypes()}, the time range, {@link EventFilter#lastN()},
 	 * {@link EventFilter#page()} / {@link EventFilter#pageSize()} and, where the store
 	 * can, the keywords in its query, and to fall back to {@link EventFilter#apply(List)}
@@ -177,7 +185,7 @@ public interface SessionRepository {
 	 * <p>
 	 * <strong>Existence contract:</strong> returns an empty list when the session does
 	 * not exist, rather than throwing. This differs from {@link #appendEvent} and
-	 * {@link #applyCompaction}, which throw {@link IllegalArgumentException} for unknown
+	 * {@link #appendEvents}, which throw {@link IllegalArgumentException} for unknown
 	 * sessions. The silent-empty behaviour allows callers to query event history without
 	 * first checking whether the session exists (the "read before write" pattern used by
 	 * {@code SessionMemoryAdvisor}).

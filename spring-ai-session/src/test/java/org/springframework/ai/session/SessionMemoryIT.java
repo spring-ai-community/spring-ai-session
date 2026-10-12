@@ -183,8 +183,8 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(4).build());
 
-		assertThat(result.archivedEventCount()).isPositive();
-		assertThat(result.compactedEvents()).hasSizeLessThanOrEqualTo(4);
+		assertThat(result.coveredEventCount()).isPositive();
+		assertThat(result.preservedEvents()).hasSizeLessThanOrEqualTo(4);
 
 		// The active window is trimmed to the kept events...
 		List<SessionEvent> active = this.sessionService.getEvents(session.id(), EventFilter.active());
@@ -192,7 +192,7 @@ class SessionMemoryIT {
 		// Window must start on a turn boundary (user message)
 		assertThat(active.get(0).getMessageType().getValue()).isEqualTo("user");
 
-		// ...but archived events are retained for Recall Storage (nothing is deleted)
+		// ...but covered events are retained for Recall Storage (nothing is deleted)
 		List<Message> all = this.sessionService.getMessages(session.id());
 		assertThat(all).hasSize(12);
 	}
@@ -209,7 +209,7 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
-		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText())
+		assertThat(result.coveredEvents()).extracting(e -> e.getMessage().getText())
 			.doesNotContain("Answer in French.");
 		assertThat(this.sessionService.getActiveMessages(session.id())).extracting(Message::getText)
 			.containsExactly("Answer in French.", "question 5", "answer 5");
@@ -227,7 +227,7 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				TurnWindowCompactionStrategy.builder().maxTurns(2).build());
 
-		assertThat(result.archivedEventCount()).isPositive();
+		assertThat(result.coveredEventCount()).isPositive();
 
 		// Active window: 2 turns × 2 messages per turn = 4 messages
 		List<SessionEvent> active = this.sessionService.getEvents(session.id(), EventFilter.active());
@@ -235,7 +235,7 @@ class SessionMemoryIT {
 		assertThat(active.get(0).getMessage().getText()).isEqualTo("user turn 4");
 		assertThat(active.get(3).getMessage().getText()).isEqualTo("assistant reply 5");
 
-		// Archived turns are retained (not deleted) — full history still available
+		// Covered turns are retained (not deleted) — full history still available
 		assertThat(this.sessionService.getMessages(session.id())).hasSize(10);
 		// ...while getActiveMessages() returns only the active window
 		assertThat(this.sessionService.getActiveMessages(session.id())).extracting(m -> m.getText())
@@ -255,12 +255,10 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				TokenCountCompactionStrategy.builder().maxTokens(20).build());
 
-		assertThat(result.archivedEventCount()).isPositive();
-		assertThat(result.compactedEvents().size()).isLessThan(10);
+		assertThat(result.coveredEventCount()).isPositive();
+		assertThat(result.preservedEvents().size()).isLessThan(10);
 		// Kept window must start on a user message (turn boundary)
-		if (!result.compactedEvents().isEmpty()) {
-			assertThat(result.compactedEvents().get(0).getMessageType().getValue()).isEqualTo("user");
-		}
+		assertThat(result.keptEvents().get(0).getMessageType().getValue()).isEqualTo("user");
 	}
 
 	@Test
@@ -274,8 +272,7 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(100).build());
 
-		assertThat(result.archivedEventCount()).isEqualTo(0);
-		assertThat(result.compactedEvents()).hasSize(2);
+		assertThat(result.isUnchanged()).isTrue();
 	}
 
 	@Test
@@ -305,9 +302,10 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(1).build());
 
-		// Synthetic events must survive compaction
-		long syntheticCount = result.compactedEvents().stream().filter(SessionEvent::isSynthetic).count();
-		assertThat(syntheticCount).isEqualTo(2);
+		// Synthetic events must survive compaction: a window pins the prior summary
+		assertThat(result.pinnedEvents()).hasSize(2).allMatch(SessionEvent::isSynthetic);
+		assertThat(this.sessionService.getActiveMessages(session.id())).extracting(Message::getText)
+			.startsWith("Summarize the conversation.", "User sent 4 messages.");
 	}
 
 	// --- Spring Boot configuration ---

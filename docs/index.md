@@ -38,8 +38,8 @@ how the main types fit together.
 
 ## Key Features
 
-- **Full history kept** — compaction archives events in place and never deletes them, so
-  the full history stays searchable
+- **Full history kept** — the event log is append-only: compaction records a boundary and
+  never changes or deletes an event, so the full history stays searchable
 - **Composable event filtering** — by message type, time range, single or multi-term
   keyword (`ANY`/`ALL`), regular expression, last-N, or pagination
 - **Four compaction strategies** out of the box:
@@ -48,7 +48,7 @@ how the main types fit together.
     - `TokenCountCompactionStrategy` — keep a token-budget-bounded suffix
     - `RecursiveSummarizationCompactionStrategy` — LLM-powered rolling summary
 - **Two compaction triggers** — turn count and token count (composable with OR semantics)
-- **Optimistic concurrency** — compare-and-swap `applyCompaction` makes compaction safe
+- **Optimistic concurrency** — a compare-and-swap `appendEvents` makes compaction safe
   under concurrent requests without locking
 - **Multi-agent** — give each sub-agent its own session, with its own memory and
   compaction; see [Multi-Agent](session-management/multi-agent.md)

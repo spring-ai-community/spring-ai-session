@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS AI_SESSION_EVENT (
     -- Unused since 0.11.0 (parts moved to payload); still read for rows written before
     message_data    TEXT,
     synthetic       BOOLEAN       NOT NULL DEFAULT FALSE,
+    -- Not written since 0.11.0 (compaction appends a boundary row instead); still read
+    -- for sessions a 0.10 compaction flagged and that have no boundary yet
     archived        BOOLEAN       NOT NULL DEFAULT FALSE,
     -- Unused since 0.10.0 (branch support was removed); kept for existing databases
     branch          VARCHAR(500),

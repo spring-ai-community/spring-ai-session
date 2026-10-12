@@ -36,10 +36,12 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.test.AbstractSessionRepositoryContractTests;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -196,16 +198,34 @@ class JdbcSessionRepositoryTests {
 				"{\"compactionSource\":\"test\"}");
 
 		List<SessionEvent> events = this.repository.findEvents(session.id(), EventFilter.all());
-		assertThat(events).extracting(SessionEvent::getType).containsOnly(org.springframework.ai.session.EventType.MESSAGE);
+		assertThat(events).extracting(SessionEvent::getType).containsOnly(EventType.MESSAGE);
 		assertThat(events.get(0).getMessage().getText()).isEqualTo("what is the weather?");
 		assertThat(((AssistantMessage) events.get(1).getMessage()).getToolCalls()).extracting(t -> t.name())
 			.containsExactly("get_weather");
 		assertThat(((ToolResponseMessage) events.get(2).getMessage()).getResponses()).extracting(r -> r.responseData())
 			.containsExactly("sunny");
 		assertThat(events.get(3).isSynthetic()).isTrue();
-		assertThat(events.get(3).isArchived()).isTrue();
 		assertThat(events.get(3).getMetadata()).containsEntry("compactionSource", "test");
+		// A row flagged archived by a 0.10 compaction is left out of the view until the
+		// session's first boundary...
 		assertThat(this.repository.findEvents(session.id(), EventFilter.active())).hasSize(3);
+
+		// ...after which only the boundary decides: a boundary that names the flagged row
+		// puts it in the view
+		String boundaryId = UUID.randomUUID().toString();
+		CompactionBoundary boundary = new CompactionBoundary(boundaryId, List.of(), List.of(), List.of("legacy-4"), 3,
+				0, "test");
+		SessionEvent boundaryEvent = SessionEvent.builder()
+			.id(boundaryId)
+			.sessionId(session.id())
+			.type(EventType.COMPACTION)
+			.payload(boundary.toPayload())
+			.build();
+		assertThat(this.repository.appendEvents(session.id(), List.of(boundaryEvent),
+				this.repository.getEventVersion(session.id()))).isTrue();
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("it is sunny");
 	}
 
 	// -------------------------------------------------------------------------
@@ -223,8 +243,8 @@ class JdbcSessionRepositoryTests {
 	}
 
 	@Test
-	void repeatedRecursiveSummarizationNeverReordersTheLog() {
-		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
+	void repeatedRecursiveSummarizationOnlyAppendsAndProjectsTheView() {
+		DialectScenarios.repeatedRecursiveSummarizationOnlyAppendsAndProjectsTheView(this.repository);
 	}
 
 	@Test
@@ -291,7 +311,7 @@ class JdbcSessionRepositoryTests {
 	}
 
 	@Test
-	void compactionWithoutNewEventsDoesNotReinsertKeptRows() {
+	void compactionAppendsABoundaryAndRewritesNoRow() {
 		Session session = buildSession("user-seq");
 		this.repository.save(session);
 		for (String text : List.of("u1", "a1", "u2", "a2", "u3", "a3")) {
@@ -304,9 +324,13 @@ class JdbcSessionRepositoryTests {
 
 		service.compact(session.id(), request -> true, SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
-		// Nothing was inserted, so every row keeps its seq: archiving happens in place
-		assertThat(this.jdbcTemplate.queryForList("SELECT seq FROM AI_SESSION_EVENT WHERE session_id = ? ORDER BY seq",
-				Long.class, session.id())).isEqualTo(seqsBefore);
+		// Every existing row keeps its seq, and exactly one row was appended: the boundary
+		List<Long> seqsAfter = this.jdbcTemplate.queryForList(
+				"SELECT seq FROM AI_SESSION_EVENT WHERE session_id = ? ORDER BY seq", Long.class, session.id());
+		assertThat(seqsAfter).hasSize(seqsBefore.size() + 1).startsWith(seqsBefore.toArray(Long[]::new));
+		assertThat(this.jdbcTemplate.queryForObject(
+				"SELECT event_type FROM AI_SESSION_EVENT WHERE session_id = ? ORDER BY seq DESC LIMIT 1", String.class,
+				session.id())).isEqualTo("COMPACTION");
 		assertThat(this.repository.findEvents(session.id(), EventFilter.active()))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("u3", "a3");

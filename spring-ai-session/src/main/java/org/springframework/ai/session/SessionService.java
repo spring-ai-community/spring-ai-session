@@ -103,9 +103,9 @@ public interface SessionService {
 
 	/**
 	 * Convenience: returns the messages of <em>all</em> events as a flat {@link Message}
-	 * list, including events archived by compaction and any synthetic summaries. This is
+	 * list, including the events a compaction covered and any synthetic summaries. This is
 	 * the full recorded history, not a prompt: after compaction it contains both the
-	 * verbatim archived turns and their summary. Events that are not messages (status,
+	 * verbatim covered turns and their summary. Events that are not messages (status,
 	 * usage and the like) are skipped. Use {@link #getActiveMessages(String)} for the
 	 * context window to send to an LLM.
 	 */
@@ -114,8 +114,8 @@ public interface SessionService {
 	}
 
 	/**
-	 * Convenience: returns the messages of the <em>active</em> context window — events
-	 * archived by compaction are excluded, synthetic summaries are included — as a flat
+	 * Convenience: returns the messages of the <em>active</em> context window — the events
+	 * a compaction covered are excluded, synthetic summaries are included — as a flat
 	 * {@link Message} list, suitable for passing directly to an LLM. Equivalent to
 	 * {@code getEvents(sessionId, EventFilter.active())} mapped to messages.
 	 */
@@ -126,17 +126,21 @@ public interface SessionService {
 	// Compaction
 
 	/**
-	 * Evaluates the trigger and, if it fires, compacts the session's event history using
-	 * the given strategy. Fetches the event list once, builds a
+	 * Evaluates the trigger and, if it fires, compacts the session's active view using the
+	 * given strategy. Reads the view once, builds a
 	 * {@link org.springframework.ai.session.compaction.CompactionRequest}, checks the
-	 * trigger, and — only if the trigger fires — runs the strategy and writes the
-	 * compacted list back to the repository. No-ops (trigger does not fire, or strategy
-	 * archives nothing) skip the repository write entirely.
+	 * trigger, and — only if the trigger fires — runs the strategy and records its
+	 * decision by appending a {@link EventType#COMPACTION} boundary event followed by the
+	 * summary events. The log is never changed: the events the compaction covers stay
+	 * where they are and leave the active view, which is projected from the newest
+	 * boundary. No-ops (trigger does not fire, or the strategy covers nothing) skip the
+	 * repository write entirely.
 	 * <p>
 	 * Pass {@code (req) -> true} as the trigger to compact unconditionally.
 	 * @return the compaction result;
-	 * {@link org.springframework.ai.session.compaction.CompactionResult#archivedEvents()}
-	 * is empty when the trigger did not fire or when the strategy archived nothing
+	 * {@link org.springframework.ai.session.compaction.CompactionResult#isUnchanged()}
+	 * when the trigger did not fire, the strategy covered nothing, or a concurrent writer
+	 * changed the log first
 	 */
 	CompactionResult compact(String sessionId, CompactionTrigger trigger, CompactionStrategy strategy);
 

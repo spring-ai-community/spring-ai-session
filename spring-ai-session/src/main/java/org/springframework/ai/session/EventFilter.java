@@ -25,6 +25,7 @@ import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.util.Assert;
 
 /**
@@ -77,7 +78,7 @@ import org.springframework.util.Assert;
 public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullable Set<MessageType> messageTypes,
 		boolean excludeSynthetic, @Nullable Integer lastN, @Nullable String keyword,
 		@Nullable List<String> keywords, @Nullable MatchMode matchMode, @Nullable Pattern pattern,
-		@Nullable Integer page, @Nullable Integer pageSize, boolean excludeArchived,
+		@Nullable Integer page, @Nullable Integer pageSize, boolean compactedView,
 		@Nullable Set<EventType> eventTypes) {
 
 	/**
@@ -126,7 +127,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	/**
 	 * Returns a filter combining this (base) filter with {@code other}, where every
 	 * criterion set on {@code other} takes precedence. The {@code excludeSynthetic} and
-	 * {@code excludeArchived} flags are OR-ed (either side can only narrow the result).
+	 * {@code compactedView} flags are OR-ed (either side can only narrow the result).
 	 *
 	 * <p>
 	 * The retrieval modifier — {@link #lastN} or {@link #page}/{@link #pageSize} — is
@@ -145,7 +146,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 				other.keywords != null ? other.keywords : this.keywords,
 				other.matchMode != null ? other.matchMode : this.matchMode,
 				other.pattern != null ? other.pattern : this.pattern, retrieval.page, retrieval.pageSize,
-				other.excludeArchived || this.excludeArchived,
+				other.compactedView || this.compactedView,
 				other.eventTypes != null ? other.eventTypes : this.eventTypes);
 	}
 
@@ -153,22 +154,24 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	public static final int DEFAULT_PAGE_SIZE = 10;
 
 	/**
-	 * Returns all events with no filtering, <em>including</em> archived events. Used by
-	 * Recall Storage so the full verbatim history remains searchable after compaction. For
-	 * building the active context window use {@link #active()} instead.
+	 * Returns the whole log with no filtering, <em>including</em> the events compaction has
+	 * covered and the compaction boundaries themselves. Used by Recall Storage so the full
+	 * verbatim history remains searchable after compaction. For building the active context
+	 * window use {@link #active()} instead.
 	 */
 	public static EventFilter all() {
 		return builder().build();
 	}
 
 	/**
-	 * Returns the active conversation: the {@link EventType#MESSAGE} events that compaction
-	 * has not archived. This is the view that should be injected into the prompt as the
-	 * active context window, and the input of compaction. Events of any other type record
-	 * runtime state, not conversation, and are left out.
+	 * Returns the active conversation: the {@link EventType#MESSAGE} events of the
+	 * {@linkplain Builder#compactedView(boolean) compacted view}, in prompt order. This is
+	 * the view that should be injected into the prompt as the active context window, and
+	 * the input of compaction. Events of any other type record runtime state, not
+	 * conversation, and are left out.
 	 */
 	public static EventFilter active() {
-		return builder().excludeArchived(true).eventTypes(Set.of(EventType.MESSAGE)).build();
+		return builder().compactedView(true).eventTypes(Set.of(EventType.MESSAGE)).build();
 	}
 
 	/** Returns the last {@code n} events. */
@@ -238,14 +241,11 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 
 	/**
 	 * Returns {@code true} if the given event passes all per-event criteria in this
-	 * filter. Note: {@link #lastN}, {@link #page}, and {@link #pageSize} are applied at
-	 * the collection level by the repository, not here.
+	 * filter. Note: {@link #lastN}, {@link #page}, {@link #pageSize} and the
+	 * {@link #compactedView()} are applied at the collection level, not here.
 	 */
 	public boolean matches(SessionEvent event) {
 		if (this.excludeSynthetic && event.isSynthetic()) {
-			return false;
-		}
-		if (this.excludeArchived && event.isArchived()) {
 			return false;
 		}
 		if (this.from != null && event.getTimestamp().isBefore(this.from)) {
@@ -288,18 +288,22 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	}
 
 	/**
-	 * Applies this filter to a list of events held in memory: keeps the events that
-	 * {@link #matches(SessionEvent)}, then applies the retrieval window keeping turns
-	 * whole ({@link #applyTurnAwareWindow(List)}). This is the reference implementation of the read
-	 * contract for a log held as a list; a store that can push the criteria down to a
+	 * Applies this filter to the events of one session held in memory: with
+	 * {@link #compactedView()} first reduces the log to its active view
+	 * ({@link CompactionBoundary#project(List)}), then keeps the events that
+	 * {@link #matches(SessionEvent)}, then applies the retrieval window keeping turns whole
+	 * ({@link #applyTurnAwareWindow(List)}). This is the reference implementation of the
+	 * read contract for a log held as a list; a store that can push the criteria down to a
 	 * query should do so and use this only for what it cannot express (see
 	 * {@link SessionRepository#findEvents}).
-	 * @param events the events, oldest first
-	 * @return the matching events, oldest first, never the input list itself
+	 * @param events the events of one session, oldest first: the whole log, or for a
+	 * compacted view any superset of the view that includes the newest boundary
+	 * @return the matching events, never the input list itself
 	 */
 	public List<SessionEvent> apply(List<SessionEvent> events) {
 		Assert.notNull(events, "events must not be null");
-		return applyTurnAwareWindow(events.stream().filter(this::matches).toList());
+		List<SessionEvent> base = this.compactedView ? CompactionBoundary.project(events) : events;
+		return applyTurnAwareWindow(base.stream().filter(this::matches).toList());
 	}
 
 	/**
@@ -380,7 +384,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	 */
 	public EventFilter withoutWindow() {
 		return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, null, this.keyword,
-				this.keywords, this.matchMode, this.pattern, null, null, this.excludeArchived, this.eventTypes);
+				this.keywords, this.matchMode, this.pattern, null, null, this.compactedView, this.eventTypes);
 	}
 
 	/**
@@ -412,7 +416,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 
 		private @Nullable Integer pageSize;
 
-		private boolean excludeArchived = false;
+		private boolean compactedView = false;
 
 		private @Nullable Set<EventType> eventTypes;
 
@@ -535,12 +539,20 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		}
 
 		/**
-		 * When {@code true}, events archived by compaction are excluded. Used to build the
-		 * active context window; leave {@code false} (the default) for Recall Storage
+		 * When {@code true}, the filter applies to the active view of the log as defined by
+		 * its newest compaction boundary (see {@link CompactionBoundary#project(List)}):
+		 * the pinned events, the summary, the preserved events and everything appended
+		 * since, in that order. The events compaction covered are left out. Used to build
+		 * the active context window; leave {@code false} (the default) for Recall Storage
 		 * searches that must see the full history.
+		 * <p>
+		 * Compaction reads the conversation only, so a boundary names message events. An
+		 * event of another type (status, usage and the like) logged before the boundary
+		 * is therefore not in the view, while one logged after it is. Read runtime state
+		 * without this flag.
 		 */
-		public Builder excludeArchived(boolean excludeArchived) {
-			this.excludeArchived = excludeArchived;
+		public Builder compactedView(boolean compactedView) {
+			this.compactedView = compactedView;
 			return this;
 		}
 
@@ -548,7 +560,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		public EventFilter build() {
 			return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, this.lastN,
 					this.keyword, this.keywords, this.matchMode, this.pattern, this.page, this.pageSize,
-					this.excludeArchived, this.eventTypes);
+					this.compactedView, this.eventTypes);
 		}
 
 	}

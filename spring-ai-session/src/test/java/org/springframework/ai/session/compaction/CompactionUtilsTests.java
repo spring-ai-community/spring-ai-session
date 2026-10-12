@@ -20,12 +20,14 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.SessionEvent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.SESSION_ID;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.assistant;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.system;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.user;
 
 /**
  * Unit tests for {@link CompactionUtils#snapToTurnStart}.
@@ -33,8 +35,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  * @author Christian Tzolov
  */
 class CompactionUtilsTests {
-
-	private static final String SESSION_ID = "test-session";
 
 	// --- cut already on a USER message ---
 
@@ -111,18 +111,17 @@ class CompactionUtilsTests {
 		assertThat(CompactionUtils.snapToTurnStart(List.of(), 0)).isEqualTo(0);
 	}
 
-	// --- pinnedSystemEvents / supersededSystemEvents / compactableEvents ---
+	// --- pinnedSystemEvents / compactableEvents ---
 
 	@Test
-	void latestStoredSystemEventIsPinnedAndEarlierOnesAreSuperseded() {
+	void onlyTheLatestStoredSystemEventIsPinned() {
 		SessionEvent setup = system("Answer in French.");
 		SessionEvent update = system("Answer in German.");
 		List<SessionEvent> events = List.of(setup, user("u1"), assistant("a1"), update, user("u2"));
 
 		List<SessionEvent> pinned = CompactionUtils.pinnedSystemEvents(events);
 
-		assertThat(pinned).containsExactly(update);
-		assertThat(CompactionUtils.supersededSystemEvents(events, pinned)).containsExactly(setup);
+		assertThat(pinned).containsExactly(update).doesNotContain(setup);
 		assertThat(CompactionUtils.compactableEvents(events)).extracting(e -> e.getMessage().getText())
 			.containsExactly("u1", "a1", "u2");
 	}
@@ -132,7 +131,6 @@ class CompactionUtilsTests {
 		List<SessionEvent> events = List.of(user("u1"), assistant("a1"));
 
 		assertThat(CompactionUtils.pinnedSystemEvents(events)).isEmpty();
-		assertThat(CompactionUtils.supersededSystemEvents(events, List.of())).isEmpty();
 	}
 
 	@Test
@@ -148,10 +146,6 @@ class CompactionUtilsTests {
 		assertThat(CompactionUtils.isStoredSystemEvent(rules)).isTrue();
 		assertThat(CompactionUtils.pinnedSystemEvents(List.of(rules, user("u1"), syntheticSystem)))
 			.containsExactly(rules);
-	}
-
-	private static SessionEvent system(String text) {
-		return SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage(text)).build();
 	}
 
 	// --- retainLastTurn ---
@@ -174,20 +168,12 @@ class CompactionUtilsTests {
 	}
 
 	@Test
-	void retainLastTurnWithoutUserArchivesNothing() {
+	void retainLastTurnWithoutUserCoversNothing() {
 		List<SessionEvent> events = List.of(assistant("a1"), assistant("a2"));
 
-		// No turn boundary to cut at: keep every event rather than archiving the window
+		// No turn boundary to cut at: keep every event rather than covering the window
 		assertThat(CompactionUtils.retainLastTurn(events, 2)).isEqualTo(0);
 		assertThat(CompactionUtils.retainLastTurn(List.of(), 0)).isEqualTo(0);
-	}
-
-	private static SessionEvent user(String text) {
-		return SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage(text)).build();
-	}
-
-	private static SessionEvent assistant(String text) {
-		return SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage(text)).build();
 	}
 
 }

@@ -25,34 +25,37 @@ import org.springframework.ai.tokenizer.TokenCountEstimator;
 import org.springframework.util.Assert;
 
 /**
- * Compaction strategy that retains only the last {@code maxEvents} real events, always
- * cutting on a turn boundary to preserve conversation semantics.
+ * Compaction strategy that keeps only the last {@code maxEvents} real events in the
+ * view, always cutting on a turn boundary to preserve conversation semantics.
  *
- * <h3>Algorithm</h3>
+ * <h2>Algorithm</h2>
  * <ol>
- * <li>Separate the latest stored system message (the system prompt — earlier stored
- * system messages are superseded and archived; see
- * {@code CompactionUtils#pinnedSystemEvents}) and synthetic summary events — they are
- * always preserved, in place, and do not consume slots from the
+ * <li>Pin the latest stored system message (the system prompt; see
+ * {@code CompactionUtils#pinnedSystemEvents}) and the synthetic summary events: they stay
+ * at the front of the view whatever the cut and do not consume slots from the
  * {@code maxEvents} budget.</li>
  * <li>Compute a raw cut index that keeps the last {@code maxEvents} real events.</li>
  * <li>Snap the raw cut index forward to the nearest
  * {@link org.springframework.ai.chat.messages.MessageType#USER} event so the kept window
  * always starts at a turn boundary.</li>
- * <li>Return every event that is not archived, in its original log order.</li>
+ * <li>Cover every real event before the cut and preserve the rest. The log is not
+ * changed: the service records the decision as an appended compaction boundary, and the
+ * view from then on is the pinned events followed by the preserved ones.</li>
  * </ol>
  *
- * <h3>No-op condition</h3>
+ * <h2>No-op condition</h2>
  * <p>
- * If the number of real events does not exceed the available slots no real events are
- * archived and the session is returned unchanged. If superseded stored system messages are present, only those are
- * archived.
+ * If the number of real events does not exceed {@code maxEvents} nothing is covered and
+ * {@link CompactionResult#unchanged()} is returned; no boundary is written. A superseded
+ * stored system message is covered only when a later pass cuts.
  *
  * @author Christian Tzolov
  * @since 2.0.0
  * @see TurnWindowCompactionStrategy
  */
 public final class SlidingWindowCompactionStrategy implements CompactionStrategy {
+
+	private static final String STRATEGY_NAME = "sliding-window";
 
 	public static final int DEFAULT_MAX_EVENTS = 20;
 
@@ -75,20 +78,18 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 
 		List<SessionEvent> events = context.events();
 
-		// Separate the latest stored system message (the system prompt — kept where it was
-		// stored), superseded earlier ones (archived), and synthetic summary events (always
-		// preserved) from the real conversation events the window applies to.
-		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
-		List<SessionEvent> supersededSystem = CompactionUtils.supersededSystemEvents(events, pinnedSystem);
-		List<SessionEvent> synthetic = events.stream().filter(SessionEvent::isSynthetic).toList();
+		// The latest stored system message (the system prompt) and the synthetic summary a
+		// previous compaction left are pinned: kept at the front of the view whatever the
+		// cut. The window applies to the real conversation events only.
+		List<SessionEvent> pinned = CompactionUtils.concat(CompactionUtils.pinnedSystemEvents(events),
+				CompactionUtils.syntheticEvents(events));
 		List<SessionEvent> real = CompactionUtils.compactableEvents(events);
 		ToIntFunction<SessionEvent> tokens = e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e));
 
-		// maxEvents controls the real-events window only; system and synthetic summary
-		// events are always preserved on top and do not consume slots from the budget.
-		// No-op if the real events fit within the available slots.
+		// maxEvents controls the real-events window only; pinned events do not consume
+		// slots from the budget. No-op if the real events fit within the available slots.
 		if (real.size() <= this.maxEvents) {
-			return CompactionUtils.unchangedExceptSuperseded(events, supersededSystem, tokens);
+			return CompactionResult.unchanged();
 		}
 
 		// Raw cut: keep the last maxEvents real events
@@ -97,16 +98,10 @@ public final class SlidingWindowCompactionStrategy implements CompactionStrategy
 		// Snap forward to the nearest turn start (USER message) so we never keep a
 		// partial turn — e.g. an assistant reply without its originating user message.
 		// If no later turn start exists (the newest turn alone exceeds the budget), keep
-		// that last turn rather than archiving the whole active window.
+		// that last turn rather than covering the whole active window.
 		int cutIndex = CompactionUtils.retainLastTurn(real, CompactionUtils.snapToTurnStart(real, rawCutIndex));
 
-		List<SessionEvent> removedReal = real.subList(0, cutIndex);
-		if (removedReal.isEmpty()) {
-			return CompactionUtils.unchangedExceptSuperseded(events, supersededSystem, tokens);
-		}
-
-		// Everything else stays in the active window, in its original log order
-		return CompactionUtils.archiving(events, removedReal, supersededSystem, tokens);
+		return CompactionUtils.cut(events, pinned, real, cutIndex, List.of(), 0, tokens, STRATEGY_NAME);
 	}
 
 	public int getMaxEvents() {

@@ -84,10 +84,10 @@ import org.springframework.util.Assert;
  * <p>
  * <strong>Concurrent compaction safety:</strong> If two requests for the same session
  * complete concurrently, both {@code after()} calls may reach the compaction step
- * simultaneously. Compaction uses an optimistic compare-and-swap write via
- * {@link org.springframework.ai.session.SessionRepository#applyCompaction(String, org.springframework.ai.session.compaction.CompactionPlan, long)},
- * so only the first writer succeeds; the second detects the version mismatch and skips
- * silently. No compaction result is lost or corrupted.
+ * simultaneously. Compaction is recorded with an optimistic compare-and-swap append via
+ * {@link org.springframework.ai.session.SessionRepository#appendEvents(String, java.util.List, long)},
+ * so only the first writer's boundary lands; the second detects the version mismatch and
+ * skips silently. The log is never changed, so nothing is lost or corrupted.
  *
  * <p>
  * <strong>Tool-call integrity:</strong> a prompt in which an assistant tool call is not
@@ -226,9 +226,9 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		// 2. Retrieve history applying the configured filter (default: all events)
 
-		// Always exclude archived events from the active context window — they were
-		// compacted out and live on only for Recall Storage search. Merging forces the
-		// flag on regardless of the configured or per-request filter.
+		// Always read the compacted view: the events a compaction covered live on only for
+		// Recall Storage search. Merging forces the flag on regardless of the configured or
+		// per-request filter.
 		EventFilter eventFilter = resolveEventFilter(request.context()).merge(EventFilter.active());
 
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, eventFilter);
@@ -249,8 +249,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// messages are always added; step 3 then drops the exact-text copy an earlier
 		// round already put in the prompt.
 		// Latest wins: of the system messages stored in the session, only the latest one
-		// is the system prompt. Earlier ones are superseded (compaction archives them), so
-		// they are not sent. Synthetic events (e.g. legacy SYSTEM summaries) are kept.
+		// is the system prompt. Earlier ones are superseded (a later compaction covers them),
+		// so they are not sent. Synthetic events (e.g. legacy SYSTEM summaries) are kept.
 		SessionEvent latestStoredSystem = null;
 		for (int i = events.size() - 1; i >= 0; i--) {
 			SessionEvent event = events.get(i);
@@ -373,7 +373,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		EventFilter latestSystem = EventFilter.builder()
 			.messageTypes(Set.of(MessageType.SYSTEM))
 			.excludeSynthetic(true)
-			.excludeArchived(true)
+			.compactedView(true)
 			.lastN(1)
 			.build();
 		List<SessionEvent> found = this.sessionService.getEvents(sessionId, latestSystem);

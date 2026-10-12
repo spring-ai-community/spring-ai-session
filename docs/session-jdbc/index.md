@@ -13,9 +13,9 @@ AI_SESSION          — session metadata (id, user_id, TTL, metadata JSON, event
 AI_SESSION_EVENT    — event log (FK → AI_SESSION, ON DELETE CASCADE)
 ```
 
-`AI_SESSION_EVENT` rows are ordered by a monotonic `seq` column (insertion order) and carry
-`synthetic` and `archived` flags. Compaction archives events in place rather than deleting
-them, so the full history stays searchable.
+`AI_SESSION_EVENT` rows are ordered by a monotonic `seq` column (insertion order). The log
+is append-only: compaction appends a `COMPACTION` boundary row that names the active view
+by event id, and never updates or deletes a row, so the full history stays searchable.
 
 ---
 
@@ -129,9 +129,16 @@ written before 0.11.0 keep their tool calls or tool responses in `message_data` 
 still read.
 
 **Optimistic concurrency** — the `event_version` column on `AI_SESSION` is incremented on
-every `appendEvent` that appends a new event and every successful `applyCompaction` call.
-`applyCompaction` claims the version slot with `UPDATE … WHERE event_version = ?` before
-modifying the event log, so concurrent compactions cannot both succeed.
+every `appendEvent` that appends a new event and every successful `appendEvents` call.
+`appendEvents` claims the version slot with `UPDATE … WHERE event_version = ?` before
+inserting, so two concurrent compactions cannot both land a boundary.
+
+**Compacted view** — a read with `EventFilter.compactedView()` (what `EventFilter.active()`
+sets) first selects the session's newest `COMPACTION` row, then fetches in one query the
+rows that boundary names plus every row from the boundary on, ordered by `seq`, and lets
+`EventFilter.apply` put them in view order, filter and window them. The view is bounded by
+compaction, so it is read whole. A session without a boundary is read whole too, minus
+rows a 0.10 compaction flagged `archived`; that column is no longer written.
 
 **Cross-session search** — `findEventsByUserId` is one query that joins `AI_SESSION` and
 `AI_SESSION_EVENT`, filters, sorts by timestamp and applies the page in the database.

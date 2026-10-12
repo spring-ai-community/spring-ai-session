@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.session.compaction.CompactionBoundary;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -62,11 +63,21 @@ class EventFilterEventTypesTests {
 	}
 
 	@Test
-	void activeKeepsOnlyUnarchivedMessageEvents() {
-		List<SessionEvent> events = List.of(this.user, this.status, this.usage, this.assistant.asArchived());
+	void activeKeepsOnlyTheMessageEventsOfTheCompactedView() {
+		// A boundary that keeps the assistant reply and nothing else
+		String boundaryId = "b1";
+		SessionEvent boundary = SessionEvent.builder()
+			.id(boundaryId)
+			.sessionId("s")
+			.type(EventType.COMPACTION)
+			.payload(new CompactionBoundary(boundaryId, List.of(), List.of(), List.of(this.assistant.getId()), 1, 0,
+					"test").toPayload())
+			.build();
+		List<SessionEvent> events = List.of(this.user, this.status, this.usage, this.assistant, boundary);
 
-		assertThat(EventFilter.active().apply(events)).containsExactly(this.user);
+		assertThat(EventFilter.active().apply(events)).containsExactly(this.assistant);
 		assertThat(EventFilter.active().eventTypes()).containsExactly(EventType.MESSAGE);
+		assertThat(EventFilter.active().compactedView()).isTrue();
 	}
 
 	@Test
@@ -105,7 +116,7 @@ class EventFilterEventTypesTests {
 
 		assertThat(base.merge(other).eventTypes()).containsExactly(EventType.USAGE);
 		assertThat(base.merge(EventFilter.all()).eventTypes()).containsExactly(EventType.MESSAGE);
-		assertThat(base.merge(other).excludeArchived()).isTrue();
+		assertThat(base.merge(other).compactedView()).isTrue();
 	}
 
 	@Test

@@ -89,7 +89,7 @@ When nothing matches: `"No results found."` is returned.
   the in-memory behaviour from the default method and should override it with a pushed
   down query.
 - **Synthetic summaries are skipped.** The filter sets `excludeSynthetic(true)`: a
-  summary only paraphrases real events that are still in the log, archived or not, so
+  summary only paraphrases real events that are still in the log, covered or not, so
   searching it too would return the same facts twice.
 - **No regex.** Only plain-substring `keywords`/`matchMode` search is exposed, never a
   raw regex string a model could supply; see the

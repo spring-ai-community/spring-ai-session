@@ -17,6 +17,7 @@
 package org.springframework.ai.session;
 
 import java.util.List;
+import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
@@ -67,7 +68,7 @@ class SessionServiceTypedEventsTests {
 	}
 
 	@Test
-	void compactionSeesAndArchivesOnlyMessageEvents() {
+	void compactionSeesAndCoversOnlyMessageEvents() {
 		Session session = sessionWithStatusEvents();
 
 		CompactionResult result = this.service.compact(session.id(), req -> {
@@ -76,12 +77,16 @@ class SessionServiceTypedEventsTests {
 			return true;
 		}, SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
-		assertThat(result.archivedEvents()).allMatch(SessionEvent::hasMessage);
+		assertThat(result.coveredEvents()).allMatch(SessionEvent::hasMessage);
 		assertThat(this.service.getActiveMessages(session.id())).extracting(Message::getText)
 			.containsExactly("q2", "a2");
-		List<SessionEvent> statuses = this.service.getEvents(session.id(),
-				EventFilter.builder().eventTypes(java.util.Set.of(EventType.STATUS)).build());
-		assertThat(statuses).hasSize(2).noneMatch(SessionEvent::isArchived);
+		// Runtime state is read from the log, not from the view: the boundary names
+		// conversation events only, so the statuses logged before it are not in the view
+		assertThat(this.service.getEvents(session.id(), EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build()))
+			.hasSize(2);
+		assertThat(this.service.getEvents(session.id(),
+				EventFilter.builder().compactedView(true).eventTypes(Set.of(EventType.STATUS)).build()))
+			.isEmpty();
 	}
 
 }

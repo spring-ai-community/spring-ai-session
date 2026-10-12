@@ -22,11 +22,78 @@ that is not a message. Code that iterates `getEvents(sessionId)` (which is
 other kinds of events. `SessionService.getMessages()` and `getActiveMessages()` already skip
 them.
 
-`EventFilter.active()` now selects `MESSAGE` events only, besides excluding archived ones;
-it is the prompt view and the compaction input, and runtime events do not belong in either.
+`EventFilter.active()` now selects the `MESSAGE` events of the compacted view (see the next
+section); it is the prompt view and the compaction input, and runtime events do not belong
+in either.
 `EventFilter` gets a 13th record component, `eventTypes`; code calling the canonical
 constructor must pass it (`null` for no restriction). The builder and the factories are
 unchanged.
+
+### Breaking: compaction is a projection, and the log is append-only
+
+Compaction no longer modifies the event log. Up to 0.10.0 a pass flagged events
+`archived` in place and inserted the summary turn in front of the kept window. In 0.11.0
+a pass **appends** one `COMPACTION` boundary event, whose payload is a `CompactionBoundary`
+naming by id the events the active view starts with (pinned, summary, preserved), followed
+by the summary events. Every existing event stays exactly where and what it was. The
+active view is projected from the newest boundary on every read: the events it names, in
+that order, then everything appended since. Events the boundary does not name are
+**covered**: still in the log, searchable through Recall Storage, never sent to the model.
+
+This is the model that managed-agent harnesses use (a compaction is a record in the
+transcript, not an edit of it), and it has three practical effects: a compaction is one
+cheap batch insert, a store never rewrites rows, and every compaction is observable after
+the fact (which strategy ran, what it covered, what it estimated to save).
+
+What changes in the API:
+
+- **`SessionEvent.isArchived()`, `asArchived()` and `Builder.archived(...)` are removed.**
+  An event has no compaction state. To know whether an event is in the view, read the view
+  (`EventFilter.active()`) or project it with `CompactionBoundary.project(log)`.
+- **`EventFilter.excludeArchived` is renamed `compactedView`.** Same record position, same
+  builder position; `EventFilter.active()` sets it. With `compactedView(true)` the filter
+  applies to the view instead of the whole log, so a `lastN`, a page or a `messageTypes`
+  selection never reaches into covered events. `EventFilter.apply(List)` now projects
+  first when the flag is set.
+- **`CompactionResult` is reshaped.** `compactedEvents()` / `archivedEvents()` /
+  `archivedEventCount()` are replaced by `coveredEvents()`, `pinnedEvents()`,
+  `preservedEvents()`, `summary()` (the new summary turn as `Message`s, empty for the window
+  strategies), `strategy()`, plus `coveredEventCount()`, `keptEvents()` (pinned then
+  preserved), `isUnchanged()` and the `unchanged()` factory. A custom strategy returns
+  what should leave the view and what should stay; it no longer builds the new window or
+  creates summary events itself, the service does.
+- **`CompactionPlan` is removed and `SessionRepository.applyCompaction` is replaced by
+  `appendEvents(sessionId, events, expectedVersion)`:** an atomic, version-checked append of
+  several events that increments the version once. A custom repository implements it
+  (validate that every event belongs to the session and has a new id, check the version,
+  append) and honours `EventFilter.compactedView()` in `findEvents`: read the newest
+  `COMPACTION` event, fetch the events it names plus everything from it on, and hand them
+  to `EventFilter.apply`, which projects, filters and windows. `findEventsByUserId` with a
+  compacted view can fall back to the default per-session loop. The contract test kit
+  checks all of it; its protected `plan(...)` and `apply(...)` helpers are replaced by
+  `compact(sessionId, pinned, summary, preserved)` and `event(sessionId, message)`.
+- **`SessionEvent.METADATA_COMPACTION_ID`** is set on every summary event to the id of its
+  boundary.
+
+What changes in behaviour:
+
+- **The view has an order of its own.** Before, every kept event stayed at its log position
+  and the summary was inserted in front of the kept window. Now the view is pinned events
+  (the latest stored system message, and for the window strategies the earlier summary
+  turns), then the summary, then the preserved events, then everything appended since. For
+  a session without a stored system message the two orders are the same. With one, the
+  system message is now first in the view, which is where `SessionMemoryAdvisor` put it
+  anyway.
+- **A pass that needs no cut writes nothing.** Superseded stored system messages used to be
+  archived on every pass; now they are covered with the turns around them when a pass cuts,
+  and stay in the view until then. `SessionMemoryAdvisor` uses only the latest one, so the
+  prompt is unchanged. `TurnWindowCompactionStrategy`'s preamble is pinned rather than
+  preserved.
+- **Logs written by 0.10.0 keep working.** The JDBC repository no longer writes the
+  `archived` column but still reads it: a session without a boundary excludes rows flagged
+  `archived` from its view, so a session compacted by 0.10.0 keeps the view it had until
+  its first 0.11.0 compaction, whose boundary then takes over. The column can be dropped
+  once no such session remains. The in-memory repository holds nothing across versions.
 
 ### Breaking: `SessionEventCodec` encodes events, not messages
 
@@ -42,7 +109,8 @@ calls, tool results and signed reasoning now round-trip (this closes #53 and #46
 
 `AI_SESSION_EVENT` gains an `event_type` column, a `payload` column, and allows a `NULL`
 `message_type` (an event that is not a message). `message_data` is no longer written but is
-still read, so existing rows load unchanged. Recreate the table or apply:
+still read, so existing rows load unchanged; the same goes for `archived` (see the
+compaction section above). Recreate the table or apply:
 
 ```sql
 -- PostgreSQL and H2

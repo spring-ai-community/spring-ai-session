@@ -141,8 +141,8 @@ public final class SessionEventCodec {
 
 	/**
 	 * Rebuilds an event from its persisted shape, as a builder: the codec restores the
-	 * type, the message or the payload, and the caller adds identity, timestamp, metadata
-	 * and the archived flag. A payload that cannot be parsed is logged and treated as
+	 * type, the message or the payload, and the caller adds identity, timestamp and
+	 * metadata. A payload that cannot be parsed is logged and treated as
 	 * absent, so a damaged row still yields an event.
 	 * @param encoded the stored fields
 	 * @return a builder holding the decoded type and content

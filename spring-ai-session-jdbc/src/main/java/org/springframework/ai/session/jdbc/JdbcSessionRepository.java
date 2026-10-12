@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -45,7 +46,7 @@ import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
-import org.springframework.ai.session.compaction.CompactionPlan;
+import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.support.SessionEventCodec;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -89,9 +90,19 @@ import org.springframework.util.Assert;
  * <p>
  * The {@code event_version} column in {@code AI_SESSION} is incremented atomically on
  * every {@link #appendEvent} call that appends a new event (a replay leaves it unchanged)
- * and on every successful {@link #applyCompaction} call. {@code applyCompaction} guards
- * compaction by issuing a conditional {@code UPDATE … WHERE event_version = ?} first; if
- * zero rows are updated the plan is abandoned and {@code false} is returned.
+ * and on every successful {@link #appendEvents} call. {@code appendEvents} issues a
+ * conditional {@code UPDATE … WHERE event_version = ?} first; if zero rows are updated
+ * nothing is inserted and {@code false} is returned.
+ *
+ * <h2>Compacted view</h2>
+ * <p>
+ * The log is append-only. A compaction appends a {@code COMPACTION} boundary row whose
+ * payload names the view by event id, so a read with
+ * {@link EventFilter#compactedView()} fetches the newest boundary, then one query for the
+ * rows it names plus every row from the boundary on, and lets
+ * {@link EventFilter#apply(List)} order and window them. Rows written before 0.11.0 by a
+ * compaction that flagged events {@code archived} are honoured until the session's first
+ * boundary: without a boundary, the view excludes rows with {@code archived = true}.
  *
  * <h2>Idempotent append</h2>
  * <p>
@@ -106,10 +117,8 @@ import org.springframework.util.Assert;
  * <p>
  * Events are ordered by a database-assigned monotonic {@code seq} column, which reflects
  * insertion order (the logical conversation order) rather than wall-clock
- * {@code timestamp}. This keeps a synthetic compaction summary — whose timestamp is the
- * compaction time — correctly positioned ahead of the older active-window events it
- * precedes. Compaction never reorders existing events: archived events are flagged in
- * place, and only the part of the log after an inserted summary is re-inserted.
+ * {@code timestamp}. The compacted view has its own order (pinned, summary, preserved,
+ * then the rest), which the boundary defines and the filter applies in memory.
  *
  * <h2>Thread safety</h2>
  * <p>
@@ -147,8 +156,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private static final String INSERT_EVENT =
 		"INSERT INTO AI_SESSION_EVENT"
 		+ " (id, session_id, timestamp, event_type, message_type, message_content, payload,"
-		+ "  synthetic, archived, metadata)"
-		+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		+ "  synthetic, metadata)"
+		+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 	private static final String INCREMENT_EVENT_VERSION =
 		"UPDATE AI_SESSION SET event_version = event_version + 1 WHERE id = ?";
@@ -163,23 +172,17 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private static final String COUNT_SESSION =
 		"SELECT COUNT(*) FROM AI_SESSION WHERE id = ?";
 
-	// Marks events as archived without rewriting existing rows.
-	private static final String ARCHIVE_EVENT_BY_ID =
-		"UPDATE AI_SESSION_EVENT SET archived = true WHERE id = ? AND session_id = ?";
-
 	private static final String SELECT_EVENT_SESSION_ID =
 		"SELECT session_id FROM AI_SESSION_EVENT WHERE id = ?";
 
-	private static final String SELECT_EVENT_SEQ =
-		"SELECT seq FROM AI_SESSION_EVENT WHERE id = ? AND session_id = ?";
-
-	// Removes the tail of the log that compaction re-inserts with new events in between.
-	private static final String DELETE_EVENTS_FROM_SEQ =
-		"DELETE FROM AI_SESSION_EVENT WHERE session_id = ? AND seq >= ?";
+	// The newest compaction boundary of a session, if any: it defines the compacted view.
+	private static final String SELECT_NEWEST_BOUNDARY =
+		"SELECT e.seq, e.payload FROM AI_SESSION_EVENT e"
+		+ " WHERE e.session_id = ? AND e.event_type = ? ORDER BY e.seq DESC LIMIT 1";
 
 	private static final String SELECT_EVENT_COLUMNS =
 		"SELECT e.id, e.session_id, e.timestamp, e.event_type, e.message_type, e.message_content,"
-		+ "       e.payload, e.message_data, e.synthetic, e.archived, e.metadata";
+		+ "       e.payload, e.message_data, e.synthetic, e.metadata";
 
 	private static final String SELECT_EVENTS_BASE =
 		SELECT_EVENT_COLUMNS
@@ -275,11 +278,12 @@ public final class JdbcSessionRepository implements SessionRepository {
 		try {
 			this.transactionTemplate.execute(status -> {
 				// Bump the version BEFORE inserting: the UPDATE locks the session row, so the
-				// event's seq is only assigned once any in-flight applyCompaction on this
+				// event's seq is only assigned once any in-flight appendEvents on this
 				// session has committed. Inserting first would let a concurrent compaction
-				// miss the uncommitted row and re-insert the tail of the log with higher
-				// seq values, ordering this (newer) event before them without the CAS
-				// noticing. Zero updated rows also means the session does not exist.
+				// miss the uncommitted row: its boundary would land after this event in
+				// seq order without naming it, so the event would wrongly enter the view
+				// as "appended since". Zero updated rows also means the session does not
+				// exist.
 				int updated = this.jdbcTemplate.update(INCREMENT_EVENT_VERSION, sessionId);
 				if (updated == 0) {
 					throw new IllegalArgumentException("Session not found: " + sessionId);
@@ -324,9 +328,16 @@ public final class JdbcSessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public boolean applyCompaction(String sessionId, CompactionPlan plan, long expectedVersion) {
+	public boolean appendEvents(String sessionId, List<SessionEvent> events, long expectedVersion) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
-		Assert.notNull(plan, "plan must not be null");
+		Assert.notEmpty(events, "events must not be empty");
+		Set<String> batchIds = new HashSet<>();
+		for (SessionEvent event : events) {
+			Assert.isTrue(sessionId.equals(event.getSessionId()),
+					() -> "Event '" + event.getId() + "' belongs to session '" + event.getSessionId() + "'");
+			Assert.isTrue(batchIds.add(event.getId()),
+					() -> "Event id '" + event.getId() + "' appears twice in the batch");
+		}
 		requireSessionExists(sessionId);
 		Boolean success = this.transactionTemplate.execute(status -> {
 			// Atomically claim the version slot. If another writer already changed it,
@@ -335,81 +346,16 @@ public final class JdbcSessionRepository implements SessionRepository {
 			if (updated == 0) {
 				return false;
 			}
-			archiveInPlace(sessionId, plan.archiveIds());
-			insertEvents(sessionId, plan.inserts());
+			for (SessionEvent event : events) {
+				if (!this.jdbcTemplate.queryForList(SELECT_EVENT_SESSION_ID, String.class, event.getId()).isEmpty()) {
+					throw new IllegalArgumentException(
+							"Event id '" + event.getId() + "' is already in the log of session " + sessionId);
+				}
+			}
+			batchInsertEvents(events);
 			return true;
 		});
 		return Boolean.TRUE.equals(success);
-	}
-
-	/**
-	 * Flags the events archived in place: compaction never moves an event, so the logical
-	 * order defined by the {@code seq} column is preserved. Every id must be in this
-	 * session's log, otherwise the whole transaction is rolled back.
-	 */
-	private void archiveInPlace(String sessionId, Set<String> archiveIds) {
-		if (archiveIds.isEmpty()) {
-			return;
-		}
-		List<String> ids = List.copyOf(archiveIds);
-		int[][] counts = this.jdbcTemplate.batchUpdate(ARCHIVE_EVENT_BY_ID, ids, ids.size(), (ps, id) -> {
-			ps.setString(1, id);
-			ps.setString(2, sessionId);
-		});
-		// Negative counts (Statement.SUCCESS_NO_INFO) are driver-specific and treated as
-		// success.
-		for (int[] batch : counts) {
-			for (int count : batch) {
-				if (count == 0) {
-					throw new IllegalArgumentException(
-							"archiveIds contains an event that is not in the log of session " + sessionId);
-				}
-			}
-		}
-	}
-
-	/**
-	 * Inserts each group immediately before its anchor event. Because {@code seq} is
-	 * assigned on insert, the log is re-inserted from the smallest anchor onward, so only
-	 * that tail (typically the kept window) is rewritten; groups without an anchor are
-	 * appended. When nothing is inserted, as with every strategy except summarization, no
-	 * row is re-inserted at all.
-	 */
-	private void insertEvents(String sessionId, List<CompactionPlan.Insert> inserts) {
-		if (inserts.isEmpty()) {
-			return;
-		}
-		Map<String, List<SessionEvent>> insertBefore = new HashMap<>();
-		List<SessionEvent> append = new ArrayList<>();
-		Map<String, Long> anchorSeqs = new HashMap<>();
-		for (CompactionPlan.Insert insert : inserts) {
-			String anchor = insert.beforeEventId();
-			if (anchor == null) {
-				append.addAll(insert.events());
-				continue;
-			}
-			List<Long> seq = this.jdbcTemplate.queryForList(SELECT_EVENT_SEQ, Long.class, anchor, sessionId);
-			if (seq.isEmpty()) {
-				throw new IllegalArgumentException(
-						"inserts refers to an anchor event that is not in the log of session " + sessionId);
-			}
-			anchorSeqs.put(anchor, seq.get(0));
-			insertBefore.computeIfAbsent(anchor, id -> new ArrayList<>()).addAll(insert.events());
-		}
-
-		List<SessionEvent> toInsert = new ArrayList<>();
-		if (!anchorSeqs.isEmpty()) {
-			long fromSeq = anchorSeqs.values().stream().mapToLong(Long::longValue).min().orElseThrow();
-			List<SessionEvent> tail = this.jdbcTemplate.query(SELECT_EVENTS_BASE + "AND e.seq >= ? ORDER BY e.seq ASC",
-					new SessionEventRowMapper(), sessionId, fromSeq);
-			this.jdbcTemplate.update(DELETE_EVENTS_FROM_SEQ, sessionId, fromSeq);
-			for (SessionEvent event : tail) {
-				toInsert.addAll(insertBefore.getOrDefault(event.getId(), List.of()));
-				toInsert.add(event);
-			}
-		}
-		toInsert.addAll(append);
-		batchInsertEvents(toInsert);
 	}
 
 	@Override
@@ -423,6 +369,9 @@ public final class JdbcSessionRepository implements SessionRepository {
 	public List<SessionEvent> findEvents(String sessionId, EventFilter filter) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(filter, "filter must not be null");
+		if (filter.compactedView()) {
+			return findCompactedView(sessionId, filter);
+		}
 		return query(SELECT_EVENTS_BASE, sessionId, filter, "e.seq", true);
 	}
 
@@ -430,9 +379,59 @@ public final class JdbcSessionRepository implements SessionRepository {
 	public List<SessionEvent> findEventsByUserId(String userId, EventFilter filter) {
 		Assert.hasText(userId, "userId must not be null or empty");
 		Assert.notNull(filter, "filter must not be null");
+		if (filter.compactedView()) {
+			// A compacted view is per session; read each session's view and window the union.
+			return SessionRepository.super.findEventsByUserId(userId, filter);
+		}
 		// Across sessions the log order is the timestamp; seq only breaks ties. Turns do
 		// not exist across sessions, so the window is plain.
 		return query(SELECT_EVENTS_BY_USER_BASE, userId, filter, "e.timestamp, e.seq", false);
+	}
+
+	/**
+	 * Reads the compacted view of a session: the rows the newest boundary names (pinned,
+	 * summary, preserved) plus every row from the boundary on, in log order, which
+	 * {@link EventFilter#apply(List)} then projects into view order, filters and windows.
+	 * The view is bounded by compaction, so it is read whole. A session without a
+	 * boundary is read whole too, minus rows flagged {@code archived} by a compaction
+	 * written before 0.11.0.
+	 */
+	private List<SessionEvent> findCompactedView(String sessionId, EventFilter filter) {
+		List<Map<String, Object>> boundaries = this.jdbcTemplate.queryForList(SELECT_NEWEST_BOUNDARY, sessionId,
+				EventType.COMPACTION.name());
+		StringBuilder sql = new StringBuilder(SELECT_EVENTS_BASE);
+		List<Object> params = new ArrayList<>();
+		params.add(sessionId);
+		if (boundaries.isEmpty()) {
+			sql.append("AND e.archived = ? ");
+			params.add(false);
+		}
+		else {
+			Map<String, Object> boundary = boundaries.get(0);
+			long boundarySeq = ((Number) Objects.requireNonNull(boundary.get("seq"))).longValue();
+			Map<String, Object> payload = this.codec.fromJsonMap((String) boundary.get("payload"));
+			List<String> named = new ArrayList<>();
+			for (String key : List.of(CompactionBoundary.PAYLOAD_PINNED, CompactionBoundary.PAYLOAD_SUMMARY,
+					CompactionBoundary.PAYLOAD_PRESERVED)) {
+				if (payload.get(key) instanceof List<?> ids) {
+					ids.forEach(id -> named.add(String.valueOf(id)));
+				}
+			}
+			sql.append("AND (e.seq >= ? ");
+			params.add(boundarySeq);
+			if (!named.isEmpty()) {
+				sql.append("OR e.id IN (");
+				named.forEach(id -> sql.append("?,"));
+				sql.setLength(sql.length() - 1);
+				sql.append(") ");
+				params.addAll(named);
+			}
+			sql.append(") ");
+		}
+		sql.append("ORDER BY e.seq");
+		List<SessionEvent> rows = this.jdbcTemplate.query(sql.toString(), new SessionEventRowMapper(),
+				params.toArray());
+		return filter.apply(rows);
 	}
 
 	/**
@@ -574,10 +573,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 			sql.append("AND ").append(col).append("synthetic = ? ");
 			params.add(false);
 		}
-		if (filter.excludeArchived()) {
-			sql.append("AND ").append(col).append("archived = ? ");
-			params.add(false);
-		}
 		if (filter.keyword() != null) {
 			sql.append(this.dialect.getKeywordFilterFragment()).append(" ");
 			params.add(containsPattern(filter.keyword()));
@@ -619,7 +614,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 		SessionEventCodec.EncodedEvent encoded = this.codec.encode(event);
 		this.jdbcTemplate.update(INSERT_EVENT, event.getId(), event.getSessionId(), toUtc(event.getTimestamp()),
 				encoded.type().name(), name(encoded.messageType()), encoded.text(), encoded.payload(),
-				event.isSynthetic(), event.isArchived(), this.codec.toJson(event.getMetadata()));
+				event.isSynthetic(), this.codec.toJson(event.getMetadata()));
 	}
 
 	@Nullable private static String name(@Nullable MessageType messageType) {
@@ -643,8 +638,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 			ps.setString(6, encoded.text());
 			ps.setString(7, encoded.payload());
 			ps.setBoolean(8, event.isSynthetic());
-			ps.setBoolean(9, event.isArchived());
-			ps.setString(10, this.codec.toJson(event.getMetadata()));
+			ps.setString(9, this.codec.toJson(event.getMetadata()));
 		});
 	}
 
@@ -732,7 +726,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 			return builder.id(rs.getString("id"))
 				.sessionId(rs.getString("session_id"))
 				.timestamp(Objects.requireNonNull(fromUtc(rs, "timestamp")))
-				.archived(rs.getBoolean("archived"))
 				.metadata(metadata)
 				.build();
 		}

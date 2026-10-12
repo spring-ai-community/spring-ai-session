@@ -37,8 +37,11 @@ import org.springframework.util.Assert;
  * wrapper</em> around a Spring AI {@link Message}: the existing {@code UserMessage},
  * {@code AssistantMessage}, {@code SystemMessage} and {@code ToolResponseMessage} classes
  * carry the content, and the event adds only what {@code Message} intentionally lacks:
- * identity, ordering, session-level provenance and compaction state. Message events are
- * the conversation; they alone take part in prompt assembly and compaction.
+ * identity, ordering and session-level provenance. Message events are the conversation;
+ * they alone take part in prompt assembly and compaction. An event is never changed once
+ * appended: compaction records what left the active view in a {@link EventType#COMPACTION}
+ * event of its own, and a covered event stays in the log, readable through
+ * {@link EventFilter#all()} and the recall tools.
  *
  * <p>
  * Every other event type records runtime state in the same log (a status change, an
@@ -76,6 +79,12 @@ public final class SessionEvent {
 	/** Metadata key identifying which compaction strategy produced a synthetic event. */
 	public static final String METADATA_COMPACTION_SOURCE = "compactionSource";
 
+	/**
+	 * Metadata key on a synthetic summary event: the id of the {@link EventType#COMPACTION}
+	 * boundary event the summary belongs to.
+	 */
+	public static final String METADATA_COMPACTION_ID = "compactionId";
+
 	private final String id;
 
 	private final String sessionId;
@@ -90,10 +99,8 @@ public final class SessionEvent {
 
 	private final Map<String, Object> metadata;
 
-	private final boolean archived;
-
 	private SessionEvent(String id, String sessionId, Instant timestamp, EventType type, @Nullable Message message,
-			Map<String, Object> payload, Map<String, Object> metadata, boolean archived) {
+			Map<String, Object> payload, Map<String, Object> metadata) {
 		this.id = id;
 		this.sessionId = sessionId;
 		this.timestamp = timestamp;
@@ -101,7 +108,6 @@ public final class SessionEvent {
 		this.message = message;
 		this.payload = Map.copyOf(payload);
 		this.metadata = Map.copyOf(metadata);
-		this.archived = archived;
 	}
 
 	/** Unique identity per event. {@code Message} has none. */
@@ -162,33 +168,6 @@ public final class SessionEvent {
 	 */
 	public Map<String, Object> getMetadata() {
 		return this.metadata;
-	}
-
-	/**
-	 * Returns {@code true} if this event has been archived by compaction. Archived events
-	 * are removed from the active context window injected into the prompt, but are
-	 * retained in the event log and remain searchable via the Recall Storage tools (see
-	 * {@code SessionEventTools}). They implement the MemGPT recall pattern: the full
-	 * verbatim history is preserved even after older events have been summarized out of the
-	 * active window.
-	 * @return {@code true} if this event is archived, {@code false} otherwise
-	 */
-	public boolean isArchived() {
-		return this.archived;
-	}
-
-	/**
-	 * Returns a copy of this event marked as archived. Identity ({@link #getId()} and
-	 * {@link #getSessionId()}) is preserved, so the copy is {@link #equals(Object) equal}
-	 * to the original. Returns {@code this} when the event is already archived.
-	 * @return an archived copy of this event
-	 */
-	public SessionEvent asArchived() {
-		if (this.archived) {
-			return this;
-		}
-		return new SessionEvent(this.id, this.sessionId, this.timestamp, this.type, this.message, this.payload,
-				this.metadata, true);
 	}
 
 	/**
@@ -257,10 +236,10 @@ public final class SessionEvent {
 	 *
 	 * <p>
 	 * Defaults: {@code id} is auto-generated (random UUID), {@code timestamp} is
-	 * {@link Instant#now()}, {@code metadata} and {@code payload} are empty,
-	 * {@code archived} is {@code false}. {@code sessionId} is required. The {@code type}
-	 * defaults to {@link EventType#MESSAGE}, which requires a {@code message}; any other
-	 * type must not carry one.
+	 * {@link Instant#now()}, {@code metadata} and {@code payload} are empty.
+	 * {@code sessionId} is required. The {@code type} defaults to
+	 * {@link EventType#MESSAGE}, which requires a {@code message}; any other type must not
+	 * carry one.
 	 */
 	public static final class Builder {
 
@@ -277,8 +256,6 @@ public final class SessionEvent {
 		private Map<String, Object> payload = new HashMap<>();
 
 		private Map<String, Object> metadata = new HashMap<>();
-
-		private boolean archived = false;
 
 		private Builder() {
 		}
@@ -342,15 +319,6 @@ public final class SessionEvent {
 			return this;
 		}
 
-		/**
-		 * Marks the event as archived. Archived events are excluded from the active context
-		 * window but retained for Recall Storage search. Defaults to {@code false}.
-		 */
-		public Builder archived(boolean archived) {
-			this.archived = archived;
-			return this;
-		}
-
 		/** Builds the {@link SessionEvent}, validating required fields. */
 		public SessionEvent build() {
 			Assert.hasText(this.id, "id must not be null or empty");
@@ -364,7 +332,7 @@ public final class SessionEvent {
 				Assert.isNull(this.message, "a " + resolvedType + " event must not carry a message");
 			}
 			return new SessionEvent(this.id, this.sessionId, this.timestamp, resolvedType, this.message, this.payload,
-					this.metadata, this.archived);
+					this.metadata);
 		}
 
 	}

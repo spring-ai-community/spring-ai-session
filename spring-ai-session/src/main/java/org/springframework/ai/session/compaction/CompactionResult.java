@@ -18,39 +18,76 @@ package org.springframework.ai.session.compaction;
 
 import java.util.List;
 
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.util.Assert;
 
 /**
- * The outcome of a compaction operation.
+ * What a {@link CompactionStrategy} decided for the active view it was given: which events
+ * leave the view, which are kept, and the summary that stands in for the ones that leave.
  *
- * @param compactedEvents the new active window in log order: every event that is not
- * archived keeps its original position, and new events (such as a summary turn) appear
- * where they belong, before the next existing event. {@link CompactionPlan#of} turns this
- * into the write operations the repository applies: each new event is inserted
- * immediately before the existing event that follows it here.
- * @param archivedEvents the events archived by this pass, in log order
- * @param tokensEstimatedSaved the estimated number of tokens removed from the active
- * window
+ * <p>
+ * The three event lists partition the view the strategy received: every event of the view
+ * is covered, pinned or preserved, and none is in two lists. Nothing here changes the log.
+ * {@link org.springframework.ai.session.SessionService#compact} turns a result into one
+ * appended {@link CompactionBoundary} event plus the summary events; the boundary then
+ * defines the view (see {@link CompactionBoundary#project(List)}).
+ *
+ * @param coveredEvents the events that leave the view, in view order: summarized by the
+ * summary, or simply dropped by a window. Empty for an unchanged result
+ * @param pinnedEvents the events kept at the front of the view, out of log order: the
+ * latest stored system message, and for a plain window the prior summary it carries
+ * forward
+ * @param preservedEvents the recent events kept verbatim, in log order
+ * @param summary the messages that stand in for the covered events, in order (typically a
+ * synthetic shadow prompt and a summary); empty for a plain window
+ * @param tokensEstimatedSaved the estimated tokens removed from the prompt, net of the
+ * summary
+ * @param strategy the name of the strategy, recorded on the boundary and the summary events
  * @author Christian Tzolov
  * @since 2.0.0
  */
-public record CompactionResult(List<SessionEvent> compactedEvents, List<SessionEvent> archivedEvents,
-		int tokensEstimatedSaved) {
+public record CompactionResult(List<SessionEvent> coveredEvents, List<SessionEvent> pinnedEvents,
+		List<SessionEvent> preservedEvents, List<Message> summary, int tokensEstimatedSaved, String strategy) {
+
+	private static final CompactionResult UNCHANGED = new CompactionResult(List.of(), List.of(), List.of(), List.of(),
+			0, "");
 
 	public CompactionResult {
-		Assert.notNull(compactedEvents, "compactedEvents must not be null");
-		Assert.notNull(archivedEvents, "archivedEvents must not be null");
-		compactedEvents = List.copyOf(compactedEvents);
-		archivedEvents = List.copyOf(archivedEvents);
+		Assert.notNull(coveredEvents, "coveredEvents must not be null");
+		Assert.notNull(pinnedEvents, "pinnedEvents must not be null");
+		Assert.notNull(preservedEvents, "preservedEvents must not be null");
+		Assert.notNull(summary, "summary must not be null");
+		Assert.notNull(strategy, "strategy must not be null");
+		Assert.isTrue(summary.isEmpty() || !coveredEvents.isEmpty(), "a summary needs covered events to stand in for");
+		coveredEvents = List.copyOf(coveredEvents);
+		pinnedEvents = List.copyOf(pinnedEvents);
+		preservedEvents = List.copyOf(preservedEvents);
+		summary = List.copyOf(summary);
+	}
+
+	/** The result of a pass that leaves the view as it is: nothing is written. */
+	public static CompactionResult unchanged() {
+		return UNCHANGED;
+	}
+
+	/** Returns {@code true} when no event leaves the view, so there is nothing to record. */
+	public boolean isUnchanged() {
+		return this.coveredEvents.isEmpty();
+	}
+
+	/** Returns the number of events that leave the view. */
+	public int coveredEventCount() {
+		return this.coveredEvents.size();
 	}
 
 	/**
-	 * Returns the number of events this pass archived, i.e. {@code archivedEvents().size()}.
-	 * Archived events stay in the log; compaction never removes an event.
+	 * The view as the strategy leaves it, in prompt order: pinned events, then preserved
+	 * events. The summary messages are not events yet, so they are not included; they go
+	 * between the two once the service has appended them.
 	 */
-	public int archivedEventCount() {
-		return this.archivedEvents.size();
+	public List<SessionEvent> keptEvents() {
+		return java.util.stream.Stream.concat(this.pinnedEvents.stream(), this.preservedEvents.stream()).toList();
 	}
 
 }

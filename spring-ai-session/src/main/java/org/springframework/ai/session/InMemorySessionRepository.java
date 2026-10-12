@@ -19,13 +19,14 @@ package org.springframework.ai.session;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.jspecify.annotations.Nullable;
 
-import org.springframework.ai.session.compaction.CompactionPlan;
 import org.springframework.util.Assert;
 
 /**
@@ -148,9 +149,9 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public boolean applyCompaction(String sessionId, CompactionPlan plan, long expectedVersion) {
+	public boolean appendEvents(String sessionId, List<SessionEvent> events, long expectedVersion) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
-		Assert.notNull(plan, "plan must not be null");
+		Assert.notEmpty(events, "events must not be empty");
 		boolean[] success = { false };
 		this.store.compute(sessionId, (id, existing) -> {
 			if (existing == null) {
@@ -159,10 +160,19 @@ public final class InMemorySessionRepository implements SessionRepository {
 			if (existing.version() != expectedVersion) {
 				return existing;
 			}
-			// applyTo validates the plan against the log and throws before anything changes
-			List<SessionEvent> compacted = plan.applyTo(existing.events());
+			// Validate everything before anything changes
+			Set<String> ids = new HashSet<>();
+			existing.events().forEach(e -> ids.add(e.getId()));
+			for (SessionEvent event : events) {
+				Assert.isTrue(sessionId.equals(event.getSessionId()),
+						() -> "Event '" + event.getId() + "' belongs to session '" + event.getSessionId() + "'");
+				Assert.isTrue(ids.add(event.getId()),
+						() -> "Event id '" + event.getId() + "' is already in the log of session " + sessionId);
+			}
+			List<SessionEvent> newEvents = new ArrayList<>(existing.events());
+			newEvents.addAll(events);
 			success[0] = true;
-			return existing.withEvents(compacted);
+			return existing.withEvents(newEvents);
 		});
 		return success[0];
 	}

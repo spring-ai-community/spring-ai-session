@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS AI_SESSION_EVENT (
     -- Unused since 0.11.0 (parts moved to payload); still read for rows written before
     message_data    LONGTEXT,
     synthetic       TINYINT(1)    NOT NULL DEFAULT 0,
+    -- Not written since 0.11.0 (compaction appends a boundary row instead); still read
+    -- for sessions a 0.10 compaction flagged and that have no boundary yet
     archived        TINYINT(1)    NOT NULL DEFAULT 0,
     -- Unused since 0.10.0 (branch support was removed); kept for existing databases
     branch          VARCHAR(500),
