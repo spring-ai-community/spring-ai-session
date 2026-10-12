@@ -175,6 +175,40 @@ class JdbcSessionRepositoryTests {
 	}
 
 	// -------------------------------------------------------------------------
+	// Rows written before 0.11.0
+	// -------------------------------------------------------------------------
+
+	@Test
+	void rowsWrittenBeforeZeroElevenAreReadThroughTheLegacyColumns() {
+		Session session = buildSession("user-legacy");
+		this.repository.save(session);
+		String insert = "INSERT INTO AI_SESSION_EVENT (id, session_id, timestamp, message_type, message_content,"
+				+ " message_data, synthetic, archived, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
+		this.jdbcTemplate.update(insert, "legacy-1", session.id(), now, "USER", "what is the weather?", null, false,
+				false, null);
+		this.jdbcTemplate.update(insert, "legacy-2", session.id(), now, "ASSISTANT", null,
+				"[{\"id\":\"c1\",\"type\":\"function\",\"name\":\"get_weather\",\"arguments\":\"{}\"}]", false,
+				false, null);
+		this.jdbcTemplate.update(insert, "legacy-3", session.id(), now, "TOOL", null,
+				"[{\"id\":\"c1\",\"name\":\"get_weather\",\"responseData\":\"sunny\"}]", false, false, null);
+		this.jdbcTemplate.update(insert, "legacy-4", session.id(), now, "ASSISTANT", "it is sunny", null, true, true,
+				"{\"compactionSource\":\"test\"}");
+
+		List<SessionEvent> events = this.repository.findEvents(session.id(), EventFilter.all());
+		assertThat(events).extracting(SessionEvent::getType).containsOnly(org.springframework.ai.session.EventType.MESSAGE);
+		assertThat(events.get(0).getMessage().getText()).isEqualTo("what is the weather?");
+		assertThat(((AssistantMessage) events.get(1).getMessage()).getToolCalls()).extracting(t -> t.name())
+			.containsExactly("get_weather");
+		assertThat(((ToolResponseMessage) events.get(2).getMessage()).getResponses()).extracting(r -> r.responseData())
+			.containsExactly("sunny");
+		assertThat(events.get(3).isSynthetic()).isTrue();
+		assertThat(events.get(3).isArchived()).isTrue();
+		assertThat(events.get(3).getMetadata()).containsEntry("compactionSource", "test");
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active())).hasSize(3);
+	}
+
+	// -------------------------------------------------------------------------
 	// Versioning and CAS
 	// -------------------------------------------------------------------------
 

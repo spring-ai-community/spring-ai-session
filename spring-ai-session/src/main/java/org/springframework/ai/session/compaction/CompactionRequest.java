@@ -18,7 +18,6 @@ package org.springframework.ai.session.compaction;
 
 import java.util.List;
 
-import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.util.Assert;
@@ -47,10 +46,7 @@ public record CompactionRequest(Session session, List<SessionEvent> events, int 
 		int eventCount = events.size();
 		// Count only non-synthetic USER messages: a synthetic summary turn's shadow prompt
 		// is not a real turn.
-		int turnCount = (int) events.stream()
-			.filter(e -> !e.isSynthetic())
-			.filter(e -> e.getMessageType() == MessageType.USER)
-			.count();
+		int turnCount = (int) events.stream().filter(e -> !e.isSynthetic()).filter(SessionEvent::isTurnStart).count();
 		return new CompactionRequest(session, events, eventCount, turnCount);
 	}
 

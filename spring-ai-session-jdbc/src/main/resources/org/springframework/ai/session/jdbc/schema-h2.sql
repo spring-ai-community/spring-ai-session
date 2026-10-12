@@ -18,8 +18,13 @@ CREATE TABLE IF NOT EXISTS AI_SESSION_EVENT (
     id              VARCHAR(255)  NOT NULL PRIMARY KEY,
     session_id      VARCHAR(255)  NOT NULL,
     timestamp       TIMESTAMP     NOT NULL,
-    message_type    VARCHAR(20)   NOT NULL,
+    event_type      VARCHAR(32)   NOT NULL DEFAULT 'MESSAGE',
+    -- NULL for an event that is not a message
+    message_type    VARCHAR(20),
     message_content LONGVARCHAR,
+    -- Message parts and metadata, or the payload of an event that is not a message
+    payload         LONGVARCHAR,
+    -- Unused since 0.11.0 (parts moved to payload); still read for rows written before
     message_data    LONGVARCHAR,
     synthetic       BOOLEAN       NOT NULL DEFAULT FALSE,
     archived        BOOLEAN       NOT NULL DEFAULT FALSE,

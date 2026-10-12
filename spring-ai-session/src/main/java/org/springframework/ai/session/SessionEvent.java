@@ -30,18 +30,26 @@ import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.util.Assert;
 
 /**
- * An atomic unit in the session's conversation history.
+ * An atomic unit in a session's event log.
  *
  * <p>
- * {@code SessionEvent} is a <em>thin wrapper</em> around the existing Spring AI
- * {@link Message} types. There is no duplication of content structures — the existing
- * {@code UserMessage}, {@code AssistantMessage}, {@code SystemMessage}, and
- * {@code ToolResponseMessage} classes carry the actual content. {@code SessionEvent} adds
- * only what {@code Message} intentionally lacks: identity, ordering, session-level
- * provenance and compaction state.
+ * Every event has an {@link EventType}. A {@link EventType#MESSAGE} event is a <em>thin
+ * wrapper</em> around a Spring AI {@link Message}: the existing {@code UserMessage},
+ * {@code AssistantMessage}, {@code SystemMessage} and {@code ToolResponseMessage} classes
+ * carry the content, and the event adds only what {@code Message} intentionally lacks:
+ * identity, ordering, session-level provenance and compaction state. Message events are
+ * the conversation; they alone take part in prompt assembly and compaction.
  *
  * <p>
- * The wrapped {@code Message} already encodes the event type via its {@link MessageType}:
+ * Every other event type records runtime state in the same log (a status change, an
+ * interrupt, a tool-call confirmation, token usage, a compaction, the lifecycle of a
+ * delegated thread) and carries its data in {@link #getPayload()} instead of a message.
+ * {@link #getMessage()} throws for such an event; test with {@link #hasMessage()} first
+ * when the type is not known.
+ *
+ * <p>
+ * For a message event, the wrapped {@code Message} refines the type via its
+ * {@link MessageType}:
  * <ul>
  * <li>{@code UserMessage} → user input</li>
  * <li>{@code AssistantMessage} (no tool calls) → agent response</li>
@@ -74,18 +82,24 @@ public final class SessionEvent {
 
 	private final Instant timestamp;
 
-	private final Message message;
+	private final EventType type;
+
+	@Nullable private final Message message;
+
+	private final Map<String, Object> payload;
 
 	private final Map<String, Object> metadata;
 
 	private final boolean archived;
 
-	private SessionEvent(String id, String sessionId, Instant timestamp, Message message, Map<String, Object> metadata,
-			boolean archived) {
+	private SessionEvent(String id, String sessionId, Instant timestamp, EventType type, @Nullable Message message,
+			Map<String, Object> payload, Map<String, Object> metadata, boolean archived) {
 		this.id = id;
 		this.sessionId = sessionId;
 		this.timestamp = timestamp;
+		this.type = type;
 		this.message = message;
+		this.payload = Map.copyOf(payload);
 		this.metadata = Map.copyOf(metadata);
 		this.archived = archived;
 	}
@@ -105,9 +119,41 @@ public final class SessionEvent {
 		return this.timestamp;
 	}
 
-	/** The actual Spring AI message — no duplication of content. */
+	/** What this event records; {@link EventType#MESSAGE} for a conversation message. */
+	public EventType getType() {
+		return this.type;
+	}
+
+	/**
+	 * Returns {@code true} when this is a {@link EventType#MESSAGE} event, so that
+	 * {@link #getMessage()} can be called.
+	 */
+	public boolean hasMessage() {
+		return this.message != null;
+	}
+
+	/**
+	 * The wrapped Spring AI message of a {@link EventType#MESSAGE} event — no duplication
+	 * of content.
+	 * @throws IllegalStateException if this is not a message event; see
+	 * {@link #hasMessage()}
+	 */
 	public Message getMessage() {
+		if (this.message == null) {
+			throw new IllegalStateException(
+					"Event '" + this.id + "' is a " + this.type + " event and carries no message");
+		}
 		return this.message;
+	}
+
+	/**
+	 * The data of an event that is not a message: for example the new status and stop
+	 * reason of a {@link EventType#STATUS} event, or the token counts of a
+	 * {@link EventType#USAGE} event. Values must be JSON-serializable, as the payload is
+	 * persisted as JSON. Empty for a message event.
+	 */
+	public Map<String, Object> getPayload() {
+		return this.payload;
 	}
 
 	/**
@@ -141,15 +187,18 @@ public final class SessionEvent {
 		if (this.archived) {
 			return this;
 		}
-		return new SessionEvent(this.id, this.sessionId, this.timestamp, this.message, this.metadata, true);
+		return new SessionEvent(this.id, this.sessionId, this.timestamp, this.type, this.message, this.payload,
+				this.metadata, true);
 	}
 
 	/**
 	 * Convenience accessor — delegates to the wrapped message. No need to unwrap for
 	 * common type-switch operations.
+	 * @throws IllegalStateException if this is not a message event; see
+	 * {@link #hasMessage()}
 	 */
 	public MessageType getMessageType() {
-		return this.message.getMessageType();
+		return getMessage().getMessageType();
 	}
 
 	/**
@@ -161,20 +210,21 @@ public final class SessionEvent {
 	}
 
 	/**
-	 * Returns {@code true} if this event starts a turn: a {@link MessageType#USER} event.
-	 * A turn is a user message plus everything up to the next user message (assistant
-	 * replies, tool calls and their results), so it is the unit no read or compaction
-	 * cut may split. A synthetic shadow prompt is a USER event too, so a summary turn
-	 * starts at its shadow prompt and is never separated from its summary.
+	 * Returns {@code true} if this event starts a turn: a {@link MessageType#USER} message
+	 * event. A turn is a user message plus everything up to the next user message
+	 * (assistant replies, tool calls and their results), so it is the unit no read or
+	 * compaction cut may split. A synthetic shadow prompt is a USER event too, so a summary
+	 * turn starts at its shadow prompt and is never separated from its summary. An event
+	 * that is not a message never starts a turn.
 	 */
 	public boolean isTurnStart() {
-		return getMessageType() == MessageType.USER;
+		return this.message != null && this.message.getMessageType() == MessageType.USER;
 	}
 
 	/**
 	 * Returns {@code true} for assistant messages that include tool invocations.
 	 * Delegates to {@link AssistantMessage#hasToolCalls()} — no separate event type
-	 * needed.
+	 * needed. {@code false} for an event that is not a message.
 	 */
 	public boolean hasToolCalls() {
 		return this.message instanceof AssistantMessage am && am.hasToolCalls();
@@ -207,8 +257,10 @@ public final class SessionEvent {
 	 *
 	 * <p>
 	 * Defaults: {@code id} is auto-generated (random UUID), {@code timestamp} is
-	 * {@link Instant#now()}, {@code metadata} is empty,
-	 * {@code archived} is {@code false}. {@code sessionId} and {@code message} are required.
+	 * {@link Instant#now()}, {@code metadata} and {@code payload} are empty,
+	 * {@code archived} is {@code false}. {@code sessionId} is required. The {@code type}
+	 * defaults to {@link EventType#MESSAGE}, which requires a {@code message}; any other
+	 * type must not carry one.
 	 */
 	public static final class Builder {
 
@@ -218,7 +270,11 @@ public final class SessionEvent {
 
 		private Instant timestamp = Instant.now();
 
+		@Nullable private EventType type;
+
 		@Nullable private Message message;
+
+		private Map<String, Object> payload = new HashMap<>();
 
 		private Map<String, Object> metadata = new HashMap<>();
 
@@ -245,9 +301,32 @@ public final class SessionEvent {
 			return this;
 		}
 
-		/** The Spring AI message wrapped by this event. Required. */
+		/**
+		 * The kind of event. Defaults to {@link EventType#MESSAGE} when a message is set.
+		 */
+		public Builder type(EventType type) {
+			this.type = type;
+			return this;
+		}
+
+		/**
+		 * The Spring AI message wrapped by this event. Required for a
+		 * {@link EventType#MESSAGE} event, not allowed for any other type.
+		 */
 		public Builder message(Message message) {
 			this.message = message;
+			return this;
+		}
+
+		/** Replaces the entire payload map of an event that is not a message. */
+		public Builder payload(Map<String, Object> payload) {
+			this.payload = new HashMap<>(payload);
+			return this;
+		}
+
+		/** Adds a single payload entry. */
+		public Builder payload(String key, Object value) {
+			this.payload.put(key, value);
 			return this;
 		}
 
@@ -277,10 +356,15 @@ public final class SessionEvent {
 			Assert.hasText(this.id, "id must not be null or empty");
 			Assert.hasText(this.sessionId, "sessionId must not be null or empty");
 			Assert.notNull(this.timestamp, "timestamp must not be null");
-			Assert.notNull(this.message, "message must not be null");
-			return new SessionEvent(this.id, this.sessionId, this.timestamp,
-					Objects.requireNonNull(this.message, "message must not be null"), this.metadata,
-					this.archived);
+			EventType resolvedType = (this.type != null) ? this.type : EventType.MESSAGE;
+			if (resolvedType == EventType.MESSAGE) {
+				Assert.notNull(this.message, "message must not be null for a MESSAGE event");
+			}
+			else {
+				Assert.isNull(this.message, "a " + resolvedType + " event must not carry a message");
+			}
+			return new SessionEvent(this.id, this.sessionId, this.timestamp, resolvedType, this.message, this.payload,
+					this.metadata, this.archived);
 		}
 
 	}

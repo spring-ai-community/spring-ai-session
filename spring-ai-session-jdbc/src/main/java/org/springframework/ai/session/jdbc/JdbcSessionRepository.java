@@ -41,6 +41,7 @@ import tools.jackson.databind.json.JsonMapper;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
@@ -68,16 +69,21 @@ import org.springframework.util.Assert;
  * SQL DDL scripts for supported databases are bundled under
  * {@code classpath:org/springframework/ai/session/jdbc/}.
  *
- * <h2>Message serialization</h2>
+ * <h2>Event serialization</h2>
  * <p>
- * Each {@link SessionEvent}'s wrapped {@link Message} is stored across three columns:
+ * Each {@link SessionEvent} is stored across four columns:
  * <ul>
- * <li>{@code message_type} — the {@link MessageType} name</li>
- * <li>{@code message_content} — plain text ({@code message.getText()})</li>
- * <li>{@code message_data} — JSON blob for type-specific structured data (the tool calls
- * of an assistant message or the responses of a tool response message)</li>
+ * <li>{@code event_type} — the {@link org.springframework.ai.session.EventType} name</li>
+ * <li>{@code message_type} — the {@link MessageType} name of a message event, else
+ * {@code NULL}</li>
+ * <li>{@code message_content} — the plain text of a message event
+ * ({@code message.getText()}), kept as its own column so keyword searches run in SQL</li>
+ * <li>{@code payload} — JSON: the ordered message parts and metadata of a message event,
+ * or the {@link SessionEvent#getPayload() payload} of any other event</li>
  * </ul>
- * The three columns are the persisted shape defined by {@link SessionEventCodec}.
+ * The columns are the persisted shape defined by {@link SessionEventCodec}. Rows written
+ * before 0.11.0 hold their tool calls or tool responses in {@code message_data} and no
+ * {@code payload}; they are still read, through the codec's legacy decoder.
  *
  * <h2>Optimistic concurrency (CAS)</h2>
  * <p>
@@ -140,9 +146,9 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 	private static final String INSERT_EVENT =
 		"INSERT INTO AI_SESSION_EVENT"
-		+ " (id, session_id, timestamp, message_type, message_content, message_data,"
+		+ " (id, session_id, timestamp, event_type, message_type, message_content, payload,"
 		+ "  synthetic, archived, metadata)"
-		+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 	private static final String INCREMENT_EVENT_VERSION =
 		"UPDATE AI_SESSION SET event_version = event_version + 1 WHERE id = ?";
@@ -172,8 +178,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 		"DELETE FROM AI_SESSION_EVENT WHERE session_id = ? AND seq >= ?";
 
 	private static final String SELECT_EVENT_COLUMNS =
-		"SELECT e.id, e.session_id, e.timestamp, e.message_type, e.message_content,"
-		+ "       e.message_data, e.synthetic, e.archived, e.metadata";
+		"SELECT e.id, e.session_id, e.timestamp, e.event_type, e.message_type, e.message_content,"
+		+ "       e.payload, e.message_data, e.synthetic, e.archived, e.metadata";
 
 	private static final String SELECT_EVENTS_BASE =
 		SELECT_EVENT_COLUMNS
@@ -549,7 +555,15 @@ public final class JdbcSessionRepository implements SessionRepository {
 			sql.append("AND ").append(col).append("timestamp <= ? ");
 			params.add(toUtc(filter.to()));
 		}
+		if (filter.eventTypes() != null && !filter.eventTypes().isEmpty()) {
+			sql.append("AND ").append(col).append("event_type IN (");
+			filter.eventTypes().forEach(et -> sql.append("?,"));
+			sql.setLength(sql.length() - 1);
+			sql.append(") ");
+			filter.eventTypes().forEach(et -> params.add(et.name()));
+		}
 		if (filter.messageTypes() != null && !filter.messageTypes().isEmpty()) {
+			// A NULL message_type (an event that is not a message) never matches.
 			sql.append("AND ").append(col).append("message_type IN (");
 			filter.messageTypes().forEach(mt -> sql.append("?,"));
 			sql.setLength(sql.length() - 1);
@@ -602,10 +616,14 @@ public final class JdbcSessionRepository implements SessionRepository {
 	}
 
 	private void insertEvent(SessionEvent event) {
-		SessionEventCodec.EncodedMessage msg = this.codec.encode(event.getMessage());
+		SessionEventCodec.EncodedEvent encoded = this.codec.encode(event);
 		this.jdbcTemplate.update(INSERT_EVENT, event.getId(), event.getSessionId(), toUtc(event.getTimestamp()),
-				msg.type().name(), msg.text(), msg.data(), event.isSynthetic(), event.isArchived(),
-				this.codec.toJson(event.getMetadata()));
+				encoded.type().name(), name(encoded.messageType()), encoded.text(), encoded.payload(),
+				event.isSynthetic(), event.isArchived(), this.codec.toJson(event.getMetadata()));
+	}
+
+	@Nullable private static String name(@Nullable MessageType messageType) {
+		return messageType != null ? messageType.name() : null;
 	}
 
 	/**
@@ -616,16 +634,17 @@ public final class JdbcSessionRepository implements SessionRepository {
 			return;
 		}
 		this.jdbcTemplate.batchUpdate(INSERT_EVENT, events, events.size(), (ps, event) -> {
-			SessionEventCodec.EncodedMessage msg = this.codec.encode(event.getMessage());
+			SessionEventCodec.EncodedEvent encoded = this.codec.encode(event);
 			ps.setString(1, event.getId());
 			ps.setString(2, event.getSessionId());
 			ps.setObject(3, toUtc(event.getTimestamp()));
-			ps.setString(4, msg.type().name());
-			ps.setString(5, msg.text());
-			ps.setString(6, msg.data());
-			ps.setBoolean(7, event.isSynthetic());
-			ps.setBoolean(8, event.isArchived());
-			ps.setString(9, this.codec.toJson(event.getMetadata()));
+			ps.setString(4, encoded.type().name());
+			ps.setString(5, name(encoded.messageType()));
+			ps.setString(6, encoded.text());
+			ps.setString(7, encoded.payload());
+			ps.setBoolean(8, event.isSynthetic());
+			ps.setBoolean(9, event.isArchived());
+			ps.setString(10, this.codec.toJson(event.getMetadata()));
 		});
 	}
 
@@ -682,23 +701,37 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 		@Override
 		public SessionEvent mapRow(ResultSet rs, int rowNum) throws SQLException {
-			MessageType messageType = MessageType.valueOf(rs.getString("message_type"));
-			Message message = JdbcSessionRepository.this.codec.decode(new SessionEventCodec.EncodedMessage(messageType,
-					rs.getString("message_content"), rs.getString("message_data")));
+			SessionEventCodec codec = JdbcSessionRepository.this.codec;
+			String eventTypeName = rs.getString("event_type");
+			EventType eventType = (eventTypeName != null) ? EventType.valueOf(eventTypeName) : EventType.MESSAGE;
+			String messageTypeName = rs.getString("message_type");
+			MessageType messageType = (messageTypeName != null) ? MessageType.valueOf(messageTypeName) : null;
+			String payload = rs.getString("payload");
+			String legacyData = rs.getString("message_data");
+
+			SessionEvent.Builder builder;
+			if (eventType == EventType.MESSAGE && messageType != null && payload == null) {
+				// Written before 0.11.0: the message's structured data is in message_data.
+				@SuppressWarnings("deprecation")
+				Message message = codec.decode(new SessionEventCodec.EncodedMessage(messageType,
+						rs.getString("message_content"), legacyData));
+				builder = SessionEvent.builder().message(message);
+			}
+			else {
+				builder = codec.decode(new SessionEventCodec.EncodedEvent(eventType, messageType,
+						rs.getString("message_content"), payload));
+			}
 
 			// Merge the dedicated synthetic column back into the metadata map so that
 			// SessionEvent.isSynthetic() returns the correct value.
-			Map<String, Object> metadata = new HashMap<>(
-					JdbcSessionRepository.this.codec.fromJsonMap(rs.getString("metadata")));
+			Map<String, Object> metadata = new HashMap<>(codec.fromJsonMap(rs.getString("metadata")));
 			if (rs.getBoolean("synthetic")) {
 				metadata.put(SessionEvent.METADATA_SYNTHETIC, true);
 			}
 
-			return SessionEvent.builder()
-				.id(rs.getString("id"))
+			return builder.id(rs.getString("id"))
 				.sessionId(rs.getString("session_id"))
 				.timestamp(Objects.requireNonNull(fromUtc(rs, "timestamp")))
-				.message(message)
 				.archived(rs.getBoolean("archived"))
 				.metadata(metadata)
 				.build();
@@ -760,8 +793,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 		}
 
 		/**
-		 * Overrides the {@link JsonMapper} used for metadata and message-data
-		 * serialization. Defaults to {@code JsonMapper.builder().build()}.
+		 * Overrides the {@link JsonMapper} used for metadata and payload serialization.
+		 * Defaults to {@code JsonMapper.builder().build()}.
 		 */
 		public Builder jsonMapper(JsonMapper jsonMapper) {
 			this.jsonMapper = jsonMapper;

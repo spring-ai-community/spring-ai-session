@@ -46,17 +46,48 @@ Session session = service.create(
 
 ## SessionEvent
 
-`SessionEvent` is an immutable value object that wraps a Spring AI `Message` type. It adds only
-what `Message` intentionally omits: identity, ownership, ordering, and framework flags.
+`SessionEvent` is an immutable value object with an `EventType`. A `MESSAGE` event wraps a Spring AI
+`Message` and adds only what `Message` intentionally omits: identity, ownership, ordering, and
+framework flags. Every other event type records runtime state in the same log and carries its data
+in a `payload` map instead of a message.
 
 | Field | Description |
 |-------|-------------|
 | `id` | Unique identity per event (UUID by default) |
 | `sessionId` | Ownership / isolation |
 | `timestamp` | Chronological ordering (`Instant.now()` by default) |
-| `message` | The Spring AI message — no duplication of content |
+| `type` | What the event records; `MESSAGE` (the default) for a conversation message |
+| `message` | The Spring AI message of a `MESSAGE` event — no duplication of content. `getMessage()` throws for any other type; test with `hasMessage()` first |
+| `payload` | The JSON-serializable data of an event that is not a message; empty for a message event |
 | `metadata` | Framework flags such as `METADATA_SYNTHETIC` and `METADATA_COMPACTION_SOURCE` |
 | `archived` | `true` once compaction has moved the event out of the active window; it stays in the log and remains searchable (see [Event lifecycle](#event-lifecycle)) |
+
+### Event types
+
+| `EventType` | Records | Message |
+|---|---|---|
+| `MESSAGE` | A conversation message. The only type that takes part in prompt assembly and compaction | yes |
+| `STATUS` | A status change of the session (running, idle with a stop reason, terminated) | no |
+| `INTERRUPT` | A caller interrupted the running turn | no |
+| `TOOL_CONFIRMATION` | A caller allowed or denied a tool call that was waiting for confirmation | no |
+| `USAGE` | Token usage of a model call, or a cumulative snapshot | no |
+| `COMPACTION` | The log was compacted; what was archived and inserted | no |
+| `THREAD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED` | The lifecycle of a delegated child session and the messages exchanged with it | no |
+
+`EventFilter.active()` returns the active conversation: `MESSAGE` events that compaction has not
+archived. `EventFilter.all()` returns every event of every type; use
+`EventFilter.builder().eventTypes(...)` to select types. `SessionService.getMessages()` and
+`getActiveMessages()` skip events that are not messages.
+
+```java
+// A runtime event: no message, a payload instead
+SessionEvent idle = SessionEvent.builder()
+    .sessionId(sessionId)
+    .type(EventType.STATUS)
+    .payload("status", "IDLE")
+    .payload("stopReason", "END_TURN")
+    .build();
+```
 
 ### Message types
 

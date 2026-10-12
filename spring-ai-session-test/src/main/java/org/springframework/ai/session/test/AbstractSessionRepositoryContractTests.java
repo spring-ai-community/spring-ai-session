@@ -39,13 +39,20 @@ import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.messages.part.OpaquePayload;
+import org.springframework.ai.chat.messages.part.ReasoningPart;
+import org.springframework.ai.chat.messages.part.TextPart;
+import org.springframework.ai.chat.messages.part.ToolResultPart;
+import org.springframework.ai.content.Media;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.EventFilter.MatchMode;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.compaction.CompactionPlan;
 import org.springframework.ai.session.compaction.CompactionPlan.Insert;
+import org.springframework.util.MimeTypeUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -698,6 +705,111 @@ public abstract class AbstractSessionRepositoryContractTests {
 
 		assertThatThrownBy(() -> this.repository.applyCompaction(UUID.randomUUID().toString(), plan, 0L))
 			.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	// --- Typed events ---
+
+	@Test
+	void anEventThatIsNotAMessageRoundTripsItsTypeAndPayload() {
+		Session session = newSession("user-typed");
+		append(session.id(), user("hello"));
+		this.repository.appendEvent(SessionEvent.builder()
+			.sessionId(session.id())
+			.type(EventType.STATUS)
+			.payload(Map.of("status", "IDLE", "stopReason", "END_TURN", "turn", 1))
+			.build());
+
+		List<SessionEvent> all = this.repository.findEvents(session.id(), EventFilter.all());
+		assertThat(all).extracting(SessionEvent::getType).containsExactly(EventType.MESSAGE, EventType.STATUS);
+		SessionEvent status = all.get(1);
+		assertThat(status.hasMessage()).isFalse();
+		assertThat(status.getPayload()).containsEntry("status", "IDLE")
+			.containsEntry("stopReason", "END_TURN")
+			.containsEntry("turn", 1);
+	}
+
+	@Test
+	void activeKeepsOnlyUnarchivedMessageEventsInLogOrder() {
+		Session session = newSession("user-active");
+		append(session.id(), user("q1"));
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).type(EventType.USAGE).build());
+		append(session.id(), assistant("a1"));
+
+		assertThat(texts(session.id(), EventFilter.active())).containsExactly("q1", "a1");
+		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE, EventType.USAGE, EventType.MESSAGE);
+	}
+
+	@Test
+	void eventTypesFilterSelectsTypesAndMessageAndTextFiltersSkipNonMessageEvents() {
+		Session session = newSession("user-types");
+		append(session.id(), user("hello"));
+		this.repository.appendEvent(SessionEvent.builder()
+			.sessionId(session.id())
+			.type(EventType.STATUS)
+			.payload("status", "hello")
+			.build());
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).type(EventType.USAGE).build());
+
+		assertThat(this.repository.findEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.STATUS, EventType.USAGE)).build()))
+			.extracting(SessionEvent::getType)
+			.containsExactly(EventType.STATUS, EventType.USAGE);
+		assertThat(texts(session.id(), EventFilter.builder().messageTypes(Set.of(MessageType.USER)).build()))
+			.containsExactly("hello");
+		// "hello" sits in the STATUS payload too, but a payload is not message text
+		assertThat(texts(session.id(), EventFilter.keywordSearch("hello"))).containsExactly("hello");
+	}
+
+	@Test
+	void messagePartsAndMetadataSurviveARoundTrip() {
+		Session session = newSession("user-parts");
+		Media image = Media.builder()
+			.mimeType(MimeTypeUtils.IMAGE_PNG)
+			.data(java.net.URI.create("https://example.com/cat.png"))
+			.build();
+		OpaquePayload signature = new OpaquePayload("anthropic", "signature", "sig-1");
+		append(session.id(), UserMessage.builder().text("look").media(image).metadata(Map.of("source", "web")).build(),
+				AssistantMessage.builder()
+					.parts(List.of(new ReasoningPart("thinking", null, signature, Map.of()), TextPart.of("a cat")))
+					.build(),
+				ToolResponseMessage.builder()
+					.results(List.of(new ToolResultPart("c1", "lookup", List.of(TextPart.of("boom")), true, null,
+							Map.of())))
+					.build());
+
+		List<SessionEvent> events = this.repository.findEvents(session.id(), EventFilter.all());
+		UserMessage user = (UserMessage) events.get(0).getMessage();
+		assertThat(user.getText()).isEqualTo("look");
+		assertThat(user.getMedia()).hasSize(1);
+		assertThat(user.getMedia().get(0).getMimeType()).isEqualTo(MimeTypeUtils.IMAGE_PNG);
+		assertThat(user.getMetadata()).containsEntry("source", "web");
+		AssistantMessage assistant = (AssistantMessage) events.get(1).getMessage();
+		assertThat(assistant.getText()).isEqualTo("a cat");
+		assertThat(assistant.getReasoning()).hasSize(1);
+		assertThat(assistant.getReasoning().get(0).payload()).isEqualTo(signature);
+		ToolResponseMessage tool = (ToolResponseMessage) events.get(2).getMessage();
+		assertThat(tool.getResults()).hasSize(1);
+		assertThat(tool.getResults().get(0).isError()).isTrue();
+		assertThat(tool.getResponses().get(0).responseData()).isEqualTo("boom");
+	}
+
+	@Test
+	void lastNExtendsPastNonMessageEventsToTheTurnStart() {
+		Session session = newSession("user-window-typed");
+		append(session.id(), user("u1"), assistant("a1"));
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).type(EventType.STATUS).build());
+		append(session.id(), user("u2"));
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).type(EventType.USAGE).build());
+		append(session.id(), assistant("a2"));
+
+		List<SessionEvent> window = this.repository.findEvents(session.id(), EventFilter.lastN(1));
+		assertThat(window).extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE, EventType.USAGE, EventType.MESSAGE);
+		assertThat(window.stream().filter(SessionEvent::hasMessage).map(e -> e.getMessage().getText()))
+			.containsExactly("u2", "a2");
+		assertThat(texts(session.id(), EventFilter.active().merge(EventFilter.lastN(1)))).containsExactly("u2",
+				"a2");
 	}
 
 	// --- Helpers ---

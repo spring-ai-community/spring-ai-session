@@ -77,7 +77,8 @@ import org.springframework.util.Assert;
 public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullable Set<MessageType> messageTypes,
 		boolean excludeSynthetic, @Nullable Integer lastN, @Nullable String keyword,
 		@Nullable List<String> keywords, @Nullable MatchMode matchMode, @Nullable Pattern pattern,
-		@Nullable Integer page, @Nullable Integer pageSize, boolean excludeArchived) {
+		@Nullable Integer page, @Nullable Integer pageSize, boolean excludeArchived,
+		@Nullable Set<EventType> eventTypes) {
 
 	/**
 	 * How multiple {@link #keywords()} combine when matching an event's text.
@@ -101,6 +102,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		keywords = (keywords != null && keywords.isEmpty()) ? null : keywords;
 		matchMode = (keywords != null) ? (matchMode != null ? matchMode : MatchMode.ANY) : null;
 		messageTypes = (messageTypes != null && !messageTypes.isEmpty()) ? messageTypes : null;
+		eventTypes = (eventTypes != null && !eventTypes.isEmpty()) ? Set.copyOf(eventTypes) : null;
 		if (lastN != null && lastN <= 0) {
 			throw new IllegalArgumentException("lastN must be greater than 0");
 		}
@@ -143,7 +145,8 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 				other.keywords != null ? other.keywords : this.keywords,
 				other.matchMode != null ? other.matchMode : this.matchMode,
 				other.pattern != null ? other.pattern : this.pattern, retrieval.page, retrieval.pageSize,
-				other.excludeArchived || this.excludeArchived);
+				other.excludeArchived || this.excludeArchived,
+				other.eventTypes != null ? other.eventTypes : this.eventTypes);
 	}
 
 	/** Default number of results per page used by {@link #keywordSearch(String)}. */
@@ -159,11 +162,13 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	}
 
 	/**
-	 * Returns only the active events — i.e. excludes events archived by compaction. This is
-	 * the view that should be injected into the prompt as the active context window.
+	 * Returns the active conversation: the {@link EventType#MESSAGE} events that compaction
+	 * has not archived. This is the view that should be injected into the prompt as the
+	 * active context window, and the input of compaction. Events of any other type record
+	 * runtime state, not conversation, and are left out.
 	 */
 	public static EventFilter active() {
-		return builder().excludeArchived(true).build();
+		return builder().excludeArchived(true).eventTypes(Set.of(EventType.MESSAGE)).build();
 	}
 
 	/** Returns the last {@code n} events. */
@@ -249,17 +254,21 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		if (this.to != null && event.getTimestamp().isAfter(this.to)) {
 			return false;
 		}
-		if (this.messageTypes != null && !this.messageTypes.contains(event.getMessageType())) {
+		if (this.eventTypes != null && !this.eventTypes.contains(event.getType())) {
 			return false;
 		}
+		if (this.messageTypes != null
+				&& (!event.hasMessage() || !this.messageTypes.contains(event.getMessageType()))) {
+			return false;
+		}
+		// Text criteria match message text; an event without a message has none.
+		String text = event.hasMessage() ? event.getMessage().getText() : null;
 		if (this.keyword != null) {
-			String text = event.getMessage().getText();
 			if (text == null || !text.toLowerCase(Locale.ROOT).contains(this.keyword)) {
 				return false;
 			}
 		}
 		if (this.keywords != null) {
-			String text = event.getMessage().getText();
 			if (text == null) {
 				return false;
 			}
@@ -271,7 +280,6 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 			}
 		}
 		if (this.pattern != null) {
-			String text = event.getMessage().getText();
 			if (text == null || !this.pattern.matcher(text).find()) {
 				return false;
 			}
@@ -372,7 +380,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	 */
 	public EventFilter withoutWindow() {
 		return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, null, this.keyword,
-				this.keywords, this.matchMode, this.pattern, null, null, this.excludeArchived);
+				this.keywords, this.matchMode, this.pattern, null, null, this.excludeArchived, this.eventTypes);
 	}
 
 	/**
@@ -406,7 +414,19 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 
 		private boolean excludeArchived = false;
 
+		private @Nullable Set<EventType> eventTypes;
+
 		private Builder() {
+		}
+
+		/**
+		 * Only include events whose {@link SessionEvent#getType()} is in this set. Unset
+		 * (the default) includes every type; {@link EventFilter#active()} selects
+		 * {@link EventType#MESSAGE} only.
+		 */
+		public Builder eventTypes(@Nullable Set<EventType> eventTypes) {
+			this.eventTypes = eventTypes;
+			return this;
 		}
 
 		/** Only include events at or after this instant. */
@@ -422,7 +442,9 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		}
 
 		/**
-		 * Only include events whose {@link SessionEvent#getMessageType()} is in this set.
+		 * Only include {@link EventType#MESSAGE} events whose
+		 * {@link SessionEvent#getMessageType()} is in this set. Events of any other type
+		 * never match.
 		 */
 		public Builder messageTypes(@Nullable Set<MessageType> messageTypes) {
 			this.messageTypes = messageTypes;
@@ -526,7 +548,7 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		public EventFilter build() {
 			return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, this.lastN,
 					this.keyword, this.keywords, this.matchMode, this.pattern, this.page, this.pageSize,
-					this.excludeArchived);
+					this.excludeArchived, this.eventTypes);
 		}
 
 	}

@@ -111,7 +111,7 @@ public class DefaultSessionService implements SessionService {
 	@Override
 	public void appendEvent(SessionEvent event) {
 		Assert.notNull(event, "event must not be null");
-		if (!this.allowSystemMessages && event.getMessageType() == MessageType.SYSTEM) {
+		if (!this.allowSystemMessages && event.hasMessage() && event.getMessageType() == MessageType.SYSTEM) {
 			throw new IllegalArgumentException("Storing a SystemMessage in session '" + event.getSessionId()
 					+ "' is disabled. System prompts are configuration: supply them on every request "
 					+ "(e.g. ChatClient defaultSystem/.system, or your own prompt builder) and keep per-session "

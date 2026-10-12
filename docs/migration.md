@@ -10,6 +10,54 @@ Spring AI 2.1 is where messages carry their content as ordered `MessagePart`s, w
 repository to your build (see [Maven Repositories](getting-started.md#maven-repositories))
 and align your application's Spring AI BOM version accordingly.
 
+### Breaking: `SessionEvent` has a type, and not every event is a message
+
+`SessionEvent` gains `getType()` (an `EventType`: `MESSAGE`, `STATUS`, `INTERRUPT`,
+`TOOL_CONFIRMATION`, `USAGE`, `COMPACTION`, `THREAD_CREATED`, `MESSAGE_SENT`,
+`MESSAGE_RECEIVED`), `hasMessage()` and `getPayload()`. A builder without `type(...)` still
+builds a `MESSAGE` event, so existing code that creates events is unchanged. What changes
+is reading: `getMessage()` and `getMessageType()` throw `IllegalStateException` for an event
+that is not a message. Code that iterates `getEvents(sessionId)` (which is
+`EventFilter.all()`) must check `hasMessage()` or filter by type, because a log can now hold
+other kinds of events. `SessionService.getMessages()` and `getActiveMessages()` already skip
+them.
+
+`EventFilter.active()` now selects `MESSAGE` events only, besides excluding archived ones;
+it is the prompt view and the compaction input, and runtime events do not belong in either.
+`EventFilter` gets a 13th record component, `eventTypes`; code calling the canonical
+constructor must pass it (`null` for no restriction). The builder and the factories are
+unchanged.
+
+### Breaking: `SessionEventCodec` encodes events, not messages
+
+Custom `SessionRepository` implementations that use the shared codec: `encode(Message)` and
+`EncodedMessage` are replaced by `encode(SessionEvent)` returning an `EncodedEvent`
+(`type`, `messageType`, `text`, `payload`), and `decode(EncodedEvent)` returns a
+`SessionEvent.Builder` holding the decoded type and content. For a message event the
+payload is JSON of the message's Spring AI 2.1 `MessagePart`s and metadata, so media, tool
+calls, tool results and signed reasoning now round-trip (this closes #53 and #46). The old
+`decode(EncodedMessage)` stays, deprecated, to read what earlier versions wrote.
+
+### Breaking: JDBC schema adds `event_type` and `payload`, and `message_type` becomes nullable
+
+`AI_SESSION_EVENT` gains an `event_type` column, a `payload` column, and allows a `NULL`
+`message_type` (an event that is not a message). `message_data` is no longer written but is
+still read, so existing rows load unchanged. Recreate the table or apply:
+
+```sql
+-- PostgreSQL and H2
+ALTER TABLE AI_SESSION_EVENT ADD COLUMN event_type VARCHAR(32) NOT NULL DEFAULT 'MESSAGE';
+ALTER TABLE AI_SESSION_EVENT ADD COLUMN payload TEXT;            -- H2: LONGVARCHAR
+ALTER TABLE AI_SESSION_EVENT ALTER COLUMN message_type DROP NOT NULL;
+
+-- MySQL
+ALTER TABLE AI_SESSION_EVENT ADD COLUMN event_type VARCHAR(32) NOT NULL DEFAULT 'MESSAGE';
+ALTER TABLE AI_SESSION_EVENT ADD COLUMN payload LONGTEXT;
+ALTER TABLE AI_SESSION_EVENT MODIFY message_type VARCHAR(20) NULL;
+```
+
+See the bundled `schema-{h2,postgresql,mysql}.sql` for the full DDL per dialect.
+
 ## Upgrading to 0.10.0
 
 ### Breaking: branch-based multi-agent isolation removed

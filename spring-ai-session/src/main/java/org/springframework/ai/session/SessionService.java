@@ -105,11 +105,12 @@ public interface SessionService {
 	 * Convenience: returns the messages of <em>all</em> events as a flat {@link Message}
 	 * list, including events archived by compaction and any synthetic summaries. This is
 	 * the full recorded history, not a prompt: after compaction it contains both the
-	 * verbatim archived turns and their summary. Use {@link #getActiveMessages(String)}
-	 * for the context window to send to an LLM.
+	 * verbatim archived turns and their summary. Events that are not messages (status,
+	 * usage and the like) are skipped. Use {@link #getActiveMessages(String)} for the
+	 * context window to send to an LLM.
 	 */
 	default List<Message> getMessages(String sessionId) {
-		return getEvents(sessionId).stream().map(SessionEvent::getMessage).toList();
+		return getEvents(sessionId).stream().filter(SessionEvent::hasMessage).map(SessionEvent::getMessage).toList();
 	}
 
 	/**

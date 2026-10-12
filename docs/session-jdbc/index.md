@@ -118,10 +118,15 @@ List<SessionEvent> events = sessions.findEvents(session.id(), EventFilter.builde
 
 ## Design notes
 
-**Message serialisation** — each `SessionEvent`'s wrapped `Message` is stored in three
-columns: `message_type` (enum name), `message_content` (plain text), and `message_data`
-(JSON for tool calls and tool responses). This avoids Jackson polymorphism on Spring AI
-message types.
+**Event serialisation** — each `SessionEvent` is stored in four columns: `event_type` (the
+`EventType` name), `message_type` (the `MessageType` name of a message event, else `NULL`),
+`message_content` (the plain text of a message event, kept as its own column so keyword
+searches run in SQL) and `payload` (JSON). For a message event the payload holds the
+message's ordered Spring AI `MessagePart`s and its metadata, serialised with the parts' own
+polymorphic JSON, so media, tool calls, tool results and provider-signed reasoning all
+survive a round trip. For any other event type it holds `SessionEvent.getPayload()`. Rows
+written before 0.11.0 keep their tool calls or tool responses in `message_data` and are
+still read.
 
 **Optimistic concurrency** — the `event_version` column on `AI_SESSION` is incremented on
 every `appendEvent` that appends a new event and every successful `applyCompaction` call.
