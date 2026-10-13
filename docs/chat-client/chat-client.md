@@ -12,7 +12,9 @@ On every request the advisor:
 
 1. Resolves the session ID from `SESSION_ID_CONTEXT_KEY`, which **must** be present on
    every request, creating the session if it does not exist and checking ownership if it
-   does (see [Passing a session ID per request](#passing-a-session-id-per-request)).
+   does (see [Passing a session ID per request](#passing-a-session-id-per-request)). A
+   session the advisor creates is stamped with the advisor's `agent(AgentSnapshot)` when
+   one is configured (see [Agent snapshot](../session-management/concepts.md#agent-snapshot)).
 2. Loads the session's history with the configured `eventFilter` (default
    `EventFilter.all()`), merged with any per-request `EVENT_FILTER_CONTEXT_KEY` filter, and
    **prepends** it to the prompt. `EventFilter.active()` is always merged in on top, so

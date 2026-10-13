@@ -24,12 +24,13 @@ engineering advice to give every sub-agent the minimum context it needs.
 A sub-agent's session is a **child** of the orchestrator's session: a session of its own,
 with its own log and compaction, that belongs to the parent's tree. A child session is
 what Claude Managed Agents calls a thread.
-`SessionService.createChild(parentId, agentName)` creates it and enforces the rules that
-keep the tree sound:
+`SessionService.createChild(parentId, agentName)`, or `createChild(parentId, AgentSnapshot)`
+for an agent with a version and a model, creates it and enforces the rules that keep the
+tree sound:
 
 - the child names its parent (`Session.parentSessionId()`) and the tree's root
-  (`Session.rootSessionId()`, the root's own id on a root session), and carries
-  `SessionAttributes.AGENT_NAME` when given;
+  (`Session.rootSessionId()`, the root's own id on a root session), and carries its
+  [agent snapshot](concepts.md#agent-snapshot) when given;
 - it **inherits** the parent's principal (and any other attribute the service is told to
   pass down, `DefaultSessionService.builder().inheritedAttributes(...)`) and the parent's
   expiry, and may not diverge from them;
@@ -83,7 +84,7 @@ public class ResearcherTool {
             try {
                 this.sessionService.createChild(parentId, CreateSessionRequest.builder()
                     .id(childId)
-                    .metadata(SessionAttributes.AGENT_NAME, "researcher")
+                    .agent(AgentSnapshot.of("researcher", "2", "claude-sonnet-5-5"))
                     .build());
             }
             catch (IllegalStateException alreadyCreated) {
@@ -120,7 +121,7 @@ To find a conversation's children:
 ```java
 List<Session> children = sessionService.findChildren(parentId);   // direct children, oldest first
 List<Session> tree = sessionService.findTree(rootId);           // the root and every child of its tree
-String agent = SessionAttributes.agentName(children.get(0));
+AgentSnapshot agent = SessionAttributes.agent(children.get(0));   // name, version, model
 ```
 
 The links are columns of the JDBC repository's `AI_SESSION` table, each with its own

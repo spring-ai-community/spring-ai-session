@@ -49,10 +49,12 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.content.MediaContent;
+import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.MessageFilter;
 import org.springframework.ai.session.Session;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;
@@ -216,12 +218,16 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	private final boolean recordUsage;
 
+	@Nullable private final AgentSnapshot agent;
+
 	private SessionMemoryAdvisor(SessionService sessionService, int order, Scheduler scheduler,
 			EventFilter eventFilter, MessageFilter messageFilter, SessionEventRequestIdGenerator requestEventIdGenerator,
 			SessionEventResponseIdGenerator responseEventIdGenerator, @Nullable CompactionTrigger compactionTrigger,
-			@Nullable CompactionStrategy compactionStrategy, boolean trackStatus, boolean recordUsage) {
+			@Nullable CompactionStrategy compactionStrategy, boolean trackStatus, boolean recordUsage,
+			@Nullable AgentSnapshot agent) {
 		this.trackStatus = trackStatus;
 		this.recordUsage = recordUsage;
+		this.agent = agent;
 		this.sessionService = sessionService;
 		this.order = order;
 		this.scheduler = scheduler;
@@ -702,8 +708,14 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	 */
 	private Session createSession(String sessionId, Map<String, @Nullable Object> context) {
 		try {
-			return this.sessionService
-				.create(CreateSessionRequest.builder().id(sessionId).metadata(sessionMetadata(context)).build());
+			Map<String, Object> metadata = sessionMetadata(context);
+			CreateSessionRequest.Builder request = CreateSessionRequest.builder().id(sessionId);
+			// The request's metadata may name another agent on purpose: then it is that
+			// agent's snapshot as a whole, not the advisor's with a name swapped in
+			if (this.agent != null && !metadata.containsKey(SessionAttributes.AGENT_NAME)) {
+				request.agent(this.agent);
+			}
+			return this.sessionService.create(request.metadata(metadata).build());
 		}
 		catch (IllegalStateException ex) {
 			Session existing = this.sessionService.findById(sessionId);
@@ -845,6 +857,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		private boolean recordUsage = true;
 
+		@Nullable private AgentSnapshot agent;
+
 		private Builder(SessionService sessionService) {
 			Assert.notNull(sessionService, "sessionService must not be null");
 			this.sessionService = sessionService;
@@ -948,6 +962,18 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			return this;
 		}
 
+		/**
+		 * The agent this advisor's {@code ChatClient} runs: a session the advisor creates on
+		 * first use is stamped with it ({@link SessionAttributes#agent(Session)}), the way
+		 * an agent runtime snapshots the agent a session was created with. Metadata given
+		 * with {@link #SESSION_METADATA_CONTEXT_KEY} that names an agent replaces the
+		 * snapshot as a whole; an existing session is never changed.
+		 */
+		public Builder agent(@Nullable AgentSnapshot agent) {
+			this.agent = agent;
+			return this;
+		}
+
 		public SessionMemoryAdvisor build() {
 			if ((this.compactionTrigger == null) != (this.compactionStrategy == null)) {
 				throw new IllegalArgumentException(
@@ -955,7 +981,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			}
 			return new SessionMemoryAdvisor(this.sessionService, this.order, this.scheduler,
 					this.eventFilter, this.messageFilter, this.requestEventIdGenerator, this.responseEventIdGenerator,
-					this.compactionTrigger, this.compactionStrategy, this.trackStatus, this.recordUsage);
+					this.compactionTrigger, this.compactionStrategy, this.trackStatus, this.recordUsage, this.agent);
 		}
 
 	}

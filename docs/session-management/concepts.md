@@ -610,6 +610,20 @@ sequenceDiagram
     SMA->>Log: assistant message, STATUS IDLE with stop reason END_TURN
 ```
 
+### Agent snapshot
+
+A session records the agent it was created with: an `AgentSnapshot` of the agent's name
+and, when known, the version of its definition and its model, stored as the
+`SessionAttributes.AGENT_NAME`, `AGENT_VERSION` and `AGENT_MODEL` attributes and read back
+with `SessionAttributes.agent(session)`. It is set at creation and never updated, the way
+an agent runtime snapshots the agent a session runs so that a later change to the agent
+never changes a running session. Set it with `CreateSessionRequest.builder().agent(...)`,
+`createChild(parentId, agentSnapshot)`, or `SessionMemoryAdvisor.builder().agent(...)`,
+which stamps it on the sessions the advisor creates on first use, unless the request's
+metadata names an agent itself. A child's agent is its
+own, never inherited. Index `agentName` (see the JDBC page) to find every session an agent
+runs.
+
 ### Live events
 
 `subscribe(sessionId)` returns a `Flux<SessionEvent>` of the events appended to a session

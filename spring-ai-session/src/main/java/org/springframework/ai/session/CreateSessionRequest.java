@@ -22,6 +22,8 @@ import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
+import org.springframework.util.Assert;
+
 /**
  * Parameters for creating a new {@link Session}.
  *
@@ -90,6 +92,13 @@ public final class CreateSessionRequest {
 
 		public Builder metadata(Map<String, Object> metadata) {
 			this.metadata.putAll(metadata);
+			return this;
+		}
+
+		/** The agent the session runs, stored as its agent attributes. */
+		public Builder agent(AgentSnapshot agent) {
+			Assert.notNull(agent, "agent must not be null");
+			this.metadata.putAll(agent.toAttributes());
 			return this;
 		}
 

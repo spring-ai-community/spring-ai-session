@@ -41,8 +41,14 @@ public final class SessionAttributes {
 	 */
 	public static final String PRINCIPAL_NAME = "principalName";
 
-	/** The name of the agent a child runs; absent unless set at creation. */
+	/** The name of the agent a session runs; absent unless set at creation. */
 	public static final String AGENT_NAME = "agentName";
+
+	/** The version of the agent definition a session was created with, when known. */
+	public static final String AGENT_VERSION = "agentVersion";
+
+	/** The model the agent a session runs is configured with, when known. */
+	public static final String AGENT_MODEL = "agentModel";
 
 	private SessionAttributes() {
 	}
@@ -55,9 +61,19 @@ public final class SessionAttributes {
 		return text(session, PRINCIPAL_NAME);
 	}
 
-	/** The agent name of a child, or {@code null} when none was set. */
+	/** The agent name of a session, or {@code null} when none was set. */
 	public static @Nullable String agentName(Session session) {
 		return text(session, AGENT_NAME);
+	}
+
+	/**
+	 * The agent snapshot a session was created with, or {@code null} when it has no agent
+	 * name.
+	 */
+	public static @Nullable AgentSnapshot agent(Session session) {
+		String name = text(session, AGENT_NAME);
+		return (name != null) ? new AgentSnapshot(name, text(session, AGENT_VERSION), text(session, AGENT_MODEL))
+				: null;
 	}
 
 	private static @Nullable String text(Session session, String key) {

@@ -247,6 +247,14 @@ ids of the events it stored for the request's message and the reply (#20).
 [Event Filtering](session-management/event-filtering.md#cursor-reads) and
 [Live events](session-management/concepts.md#live-events).
 
+### New: agent snapshot
+
+`AgentSnapshot` (name, version, model) records the agent a session was created with, as
+the `SessionAttributes.AGENT_NAME`, `AGENT_VERSION` and `AGENT_MODEL` attributes;
+`SessionAttributes.agent(session)` reads it back. `CreateSessionRequest.builder().agent(...)`,
+`SessionService.createChild(parentId, AgentSnapshot)` and
+`SessionMemoryAdvisor.builder().agent(...)` set it; nothing changes without them.
+
 ### New: usage and budget
 
 `SessionMemoryAdvisor` now records every model call's token usage as a `USAGE` event

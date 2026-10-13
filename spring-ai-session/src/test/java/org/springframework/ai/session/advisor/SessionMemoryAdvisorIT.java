@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +50,7 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.content.Media;
+import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
@@ -1618,6 +1620,30 @@ class SessionMemoryAdvisorIT {
 		assertThatThrownBy(() -> after(gate, untracked, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("trackStatus");
+	}
+
+	// --- Agent snapshot ---
+
+	@Test
+	void theAdvisorStampsItsAgentOnTheSessionsItCreates() {
+		SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.agent(AgentSnapshot.of("support", "2", "claude-sonnet-5-5"))
+			.build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+		String fresh = "fresh-" + UUID.randomUUID();
+		advisor.before(buildRequest(fresh, "Hi"), chain);
+		assertThat(SessionAttributes.agent(this.sessionService.findById(fresh)))
+			.isEqualTo(AgentSnapshot.of("support", "2", "claude-sonnet-5-5"));
+
+		// Request metadata that names an agent replaces the snapshot as a whole, never a
+		// mix of that name with the advisor's version and model; an existing session is left alone
+		String overridden = "override-" + UUID.randomUUID();
+		advisor.before(buildRequestWithMetadata(overridden, "Hi", Map.of(SessionAttributes.AGENT_NAME, "billing")),
+				chain);
+		assertThat(SessionAttributes.agent(this.sessionService.findById(overridden)))
+			.isEqualTo(AgentSnapshot.of("billing"));
+		advisor.before(buildRequest(this.sessionId, "Hi"), chain);
+		assertThat(SessionAttributes.agent(this.sessionService.findById(this.sessionId))).isNull();
 	}
 
 	// --- Event ids on the context (#20) ---

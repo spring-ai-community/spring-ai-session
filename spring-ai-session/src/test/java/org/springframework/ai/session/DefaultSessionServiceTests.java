@@ -907,4 +907,18 @@ class DefaultSessionServiceTests {
 		assertThat(this.service.getMessages(session.id())).hasSize(1);
 	}
 
+	@Test
+	void aChildCreatedWithASnapshotCarriesItUnchanged() {
+		Session root = this.service.create(CreateSessionRequest.builder().agent(AgentSnapshot.of("coordinator", "1", "m-big")).build());
+		Session child = this.service.createChild(root.id(), AgentSnapshot.of("worker", "7", "m-small"));
+
+		assertThat(SessionAttributes.agent(root)).isEqualTo(AgentSnapshot.of("coordinator", "1", "m-big"));
+		assertThat(SessionAttributes.agent(child)).isEqualTo(AgentSnapshot.of("worker", "7", "m-small"));
+		// The child's agent is its own, not inherited from the root
+		assertThat(SessionAttributes.agent(this.service.createChild(root.id(), CreateSessionRequest.builder().build())))
+			.isNull();
+		assertThat(this.service.findByIndex(SessionAttributes.AGENT_NAME, "worker")).extracting(Session::id)
+			.containsExactly(child.id());
+	}
+
 }
