@@ -219,6 +219,34 @@ advisor. See [Tool confirmation](chat-client/chat-client.md#tool-confirmation).
 One small behaviour change: a request without a user or tool message no longer stores the
 empty user message `Prompt.getLastUserOrToolResponseMessage()` fabricates.
 
+### Breaking: `EventFilter` has one window, and a pattern is the service's job
+
+`EventFilter` is slimmer (#65). The retrieval window is one value, `window()`, a sealed
+`EventFilter.Window`: `Window.ALL`, `Window.last(n)`, `Window.page(page, size)` or the new
+`Window.after(eventId[, limit])` cursor. The record accessors `lastN()`, `page()` and
+`pageSize()` are gone; the builder keeps `lastN(n)`, `page(p)`/`pageSize(s)` and adds
+`page(p, size)`, `after(eventId[, limit])`, `window(Window)` and `order(Order)`. `keyword` is
+folded into `keywords`: `Builder.keyword(String)` sets a one-term list and the `keyword()`
+accessor is gone. A `pattern` is no longer part of the `SessionRepository` contract:
+`EventFilter.matches` does not evaluate it, stores ignore it, and `SessionService.getEvents`
+/ `findEvents` apply it after the read (`matchesPattern`) and window the matches. Results
+can be ordered newest first with `order(Order.DESC)`; `EventFilter.ordered(List)` applies
+it. `JdbcSessionRepositoryDialect.getKeywordFilterFragment()` is removed and
+`getKeywordPredicateFragment()` is abstract: a custom dialect returns the predicate without
+the leading `AND`. The default reads are unchanged: `getEvents(id)` and `getMessages(id)`
+return the whole log, `getActiveMessages(id)` the active view.
+
+### New: cursor reads, a live stream, and the ids of what the advisor stored
+
+`EventFilter.after(eventId)` reads what was logged after an event the client has seen;
+`SessionService.subscribe(sessionId)` is a `Flux<SessionEvent>` of the events appended from
+then on, with no replay; the two reconcile by event id. `SessionMemoryAdvisor` sets
+`REQUEST_EVENT_ID_CONTEXT_KEY` and `RESPONSE_EVENT_IDS_CONTEXT_KEY` on the context, the
+ids of the events it stored for the request's message and the reply (#20).
+`AuthorizingSessionService` guards `subscribe`. See
+[Event Filtering](session-management/event-filtering.md#cursor-reads) and
+[Live events](session-management/concepts.md#live-events).
+
 ### New: usage and budget
 
 `SessionMemoryAdvisor` now records every model call's token usage as a `USAGE` event
@@ -234,7 +262,8 @@ the root. Nothing is enforced without the advisor. See
 
 - `EventFilter.compactedView` is `activeView` (record accessor, builder method and
   `EventFilter.active()` both), and `EventFilter.toBuilder()` copies a filter; `merge` and
-  `withoutWindow` are unchanged in behaviour.
+  `withoutWindow` are unchanged in behaviour (see the `EventFilter` section above for the
+  window itself).
 - `RecursiveSummarizationCompactionStrategy.Builder.maxEventsToKeep(...)` is `maxEvents(...)`, the
   name the sliding window already used, and `DEFAULT_MAX_EVENTS_TO_KEEP` is `DEFAULT_MAX_EVENTS`.
 - `CompactionResult.keptEvents()`, `CompactionRequest.currentEventCount()` and

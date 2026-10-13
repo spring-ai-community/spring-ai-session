@@ -16,6 +16,8 @@
 
 package org.springframework.ai.session.security;
 
+import reactor.core.publisher.Flux;
+
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -188,6 +190,12 @@ public class AuthorizingSessionService implements SessionService {
 	public Session endTurn(String sessionId, StopReason stopReason, List<String> eventIds) {
 		authorized(sessionId);
 		return this.delegate.endTurn(sessionId, stopReason, eventIds);
+	}
+
+	@Override
+	public Flux<SessionEvent> subscribe(String sessionId) {
+		authorized(sessionId);
+		return this.delegate.subscribe(sessionId);
 	}
 
 	@Override

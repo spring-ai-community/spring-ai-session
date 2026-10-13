@@ -574,42 +574,46 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 	/**
 	 * Runs the filter as one query: every criterion the database can evaluate is pushed
-	 * down as a {@code WHERE} clause, and the window ({@code lastN} or a page) as
-	 * {@code LIMIT} / {@code OFFSET}. A {@link EventFilter#pattern()} is the exception: a
-	 * {@link java.util.regex.Pattern} cannot be safely translated to portable SQL (H2,
-	 * MySQL and PostgreSQL each have their own regex dialect, none a strict superset of
-	 * Java's), so with a pattern the window is deferred and the SQL-filtered result is
-	 * finished in memory with {@link EventFilter#apply(List)} (per session) or
-	 * {@link EventFilter#applyWindow(List)} (across sessions).
+	 * down as a {@code WHERE} clause, and the window (last, a page or a cursor) as
+	 * {@code LIMIT} / {@code OFFSET} or a bound on {@code seq}. A
+	 * {@link EventFilter#pattern()} is not evaluated here: a {@link java.util.regex.Pattern}
+	 * cannot be safely translated to portable SQL, so the service applies it after the
+	 * read.
 	 * @param base the {@code SELECT … WHERE <scope> = ? } prefix
 	 * @param scope the values of the scope column: one session id, or the ids of a read
 	 * across sessions
-	 * @param order the {@code ORDER BY} columns, ascending; reversed for {@code lastN}
+	 * @param order the {@code ORDER BY} columns, ascending; reversed for a last window
 	 * @param turnAwareSessionId the session when the query reads one session's log, so
-	 * that a {@code lastN} window keeps turns whole ({@link #extendToTurnStart} prepends
-	 * the rest of the turn with one more query); {@code null} for a read across sessions,
-	 * whose window is plain
+	 * that a last window keeps turns whole ({@link #extendToTurnStart} prepends the rest
+	 * of the turn with one more query) and a cursor can be resolved; {@code null} for a
+	 * read across sessions, whose window is plain
 	 */
 	private List<SessionEvent> findFiltered(String base, List<String> scope, EventFilter filter, String order,
 			@Nullable String turnAwareSessionId) {
 		boolean perSession = turnAwareSessionId != null;
-		boolean inMemoryWindow = filter.pattern() != null;
 		StringBuilder sql = new StringBuilder(base);
 		List<Object> params = new ArrayList<>(scope);
 		appendCriteria(sql, params, filter, "e");
 
-		if (inMemoryWindow) {
-			sql.append("ORDER BY ").append(order).append(" ");
-		}
-		else if (filter.lastN() != null) {
+		if (filter.window() instanceof EventFilter.Window.Last last) {
 			sql.append("ORDER BY ").append(descending(order)).append(" LIMIT ? ");
-			params.add(filter.lastN());
+			params.add(last.n());
 		}
-		else if (filter.pageSize() != null) {
-			int page = filter.page() != null ? filter.page() : 0;
+		else if (filter.window() instanceof EventFilter.Window.Page page) {
 			sql.append("ORDER BY ").append(order).append(" LIMIT ? OFFSET ? ");
-			params.add(filter.pageSize());
-			params.add((long) page * filter.pageSize());
+			params.add(page.size());
+			params.add((long) page.page() * page.size());
+		}
+		else if (filter.window() instanceof EventFilter.Window.After after) {
+			Assert.isTrue(perSession, "a cursor window is per session; read one session at a time");
+			sql.append("AND e.seq > (SELECT c.seq FROM AI_SESSION_EVENT c WHERE c.id = ? AND c.session_id = ?) ");
+			params.add(after.eventId());
+			params.add(turnAwareSessionId);
+			sql.append("ORDER BY ").append(order).append(" ");
+			if (after.limit() != null) {
+				sql.append("LIMIT ? ");
+				params.add(after.limit());
+			}
 		}
 		else {
 			sql.append("ORDER BY ").append(order).append(" ");
@@ -617,18 +621,24 @@ public final class JdbcSessionRepository implements SessionRepository {
 
 		List<SessionEvent> result = this.jdbcTemplate.query(sql.toString(), new SessionEventRowMapper(),
 				params.toArray());
-		if (inMemoryWindow) {
-			return perSession ? filter.apply(result)
-					: filter.applyWindow(result.stream().filter(filter::matches).toList());
-		}
-		if (filter.lastN() != null) {
+		if (filter.window() instanceof EventFilter.Window.Last) {
 			result = new ArrayList<>(result);
 			Collections.reverse(result);
 			if (perSession) {
 				result = extendToTurnStart(turnAwareSessionId, filter, result);
 			}
 		}
-		return Collections.unmodifiableList(result);
+		else if (filter.window() instanceof EventFilter.Window.After after && result.isEmpty()
+				&& !eventExists(turnAwareSessionId, after.eventId())) {
+			throw new IllegalArgumentException("Cursor event '" + after.eventId() + "' is not in the session's log");
+		}
+		return filter.ordered(result);
+	}
+
+	private boolean eventExists(@Nullable String sessionId, String eventId) {
+		return !this.jdbcTemplate
+			.queryForList("SELECT 1 FROM AI_SESSION_EVENT WHERE id = ? AND session_id = ?", eventId, sessionId)
+			.isEmpty();
 	}
 
 	/**
@@ -646,8 +656,8 @@ public final class JdbcSessionRepository implements SessionRepository {
 	 * shorten the extension of that one read, which the next turn corrects.
 	 */
 	private List<SessionEvent> extendToTurnStart(String sessionId, EventFilter filter, List<SessionEvent> window) {
-		Integer lastN = filter.lastN();
-		if (lastN == null || window.size() < lastN || window.get(0).isTurnStart() || filter.hasTextCriteria()
+		if (!(filter.window() instanceof EventFilter.Window.Last last) || window.size() < last.n()
+				|| window.get(0).isTurnStart() || filter.hasTextCriteria()
 				|| (filter.messageTypes() != null && !filter.messageTypes().contains(MessageType.USER))) {
 			return window;
 		}
@@ -706,10 +716,6 @@ public final class JdbcSessionRepository implements SessionRepository {
 		if (filter.excludeSynthetic()) {
 			sql.append("AND ").append(col).append("synthetic = ? ");
 			params.add(false);
-		}
-		if (filter.keyword() != null) {
-			sql.append(this.dialect.getKeywordFilterFragment()).append(" ");
-			params.add(containsPattern(filter.keyword()));
 		}
 		if (filter.keywords() != null) {
 			sql.append("AND (");

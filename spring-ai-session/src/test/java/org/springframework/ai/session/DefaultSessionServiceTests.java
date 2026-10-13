@@ -28,9 +28,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import reactor.core.Disposable;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -832,6 +835,76 @@ class DefaultSessionServiceTests {
 		assertThat(this.service.usage(child.id())).isEqualTo(new TokenUsage(1, 1, 2, 0, 0));
 		assertThat(this.service.aggregateUsage(root.id())).isEqualTo(new TokenUsage(301, 31, 332, 50, 0));
 		assertThatIllegalArgumentException().isThrownBy(() -> this.service.usage("missing"));
+	}
+
+	@Test
+	void aPatternIsAppliedByTheServiceAfterTheRead() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		for (String text : List.of("msg-1", "msg-2", "msg-13", "msg-14", "msg-5")) {
+			this.service.appendMessage(session.id(), new UserMessage(text));
+		}
+		List<SessionEvent> log = this.service.getEvents(session.id());
+		Pattern ones = Pattern.compile("^msg-1\\d?$");
+
+		assertThat(this.service.getEvents(session.id(), EventFilter.patternSearch(ones)))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("msg-1", "msg-13", "msg-14");
+		// The window applies to the pattern's matches, not to the store's read
+		assertThat(this.service.getEvents(session.id(), EventFilter.builder().pattern(ones).lastN(2).build()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("msg-13", "msg-14");
+		assertThat(this.service.getEvents(session.id(), EventFilter.builder().pattern(ones).page(1, 2).build()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("msg-14");
+		assertThat(this.service.getEvents(session.id(),
+				EventFilter.builder().pattern(ones).after(log.get(0).getId(), 1).order(EventFilter.Order.DESC).build()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("msg-13");
+		assertThat(this.service.findEvents(List.of(session.id()), EventFilter.builder().pattern(ones).lastN(1).build()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("msg-14");
+	}
+
+	@Test
+	void aSubscriberSeesTheEventsAppendedFromThenOn() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		Session other = this.service.create(CreateSessionRequest.builder().build());
+		this.service.appendMessage(session.id(), new UserMessage("before"));
+		List<SessionEvent> seen = new ArrayList<>();
+		Disposable subscription = this.service.subscribe(session.id()).subscribe(seen::add);
+
+		this.service.appendMessage(session.id(), new UserMessage("live"));
+		this.service.appendMessage(other.id(), new UserMessage("elsewhere"));
+		this.service.startTurn(session.id());
+		this.service.endTurn(session.id(), StopReason.END_TURN);
+		subscription.dispose();
+		this.service.appendMessage(session.id(), new UserMessage("after"));
+
+		assertThat(seen).extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE, EventType.STATUS, EventType.STATUS);
+		assertThat(seen.get(0).getMessage().getText()).isEqualTo("live");
+		// The reconnect pattern: a cursor read after the last seen event fills the gap
+		assertThat(this.service.getEvents(session.id(), EventFilter.after(seen.get(2).getId())))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("after");
+	}
+
+	@Test
+	void aSubscriptionNeedsAnExistingSession() {
+		assertThatIllegalArgumentException().isThrownBy(() -> this.service.subscribe("not-yet"));
+	}
+
+	@Test
+	void aFailingSubscriberDoesNotFailTheWriter() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		Disposable subscription = this.service.subscribe(session.id()).subscribe(event -> {
+			throw new IllegalStateException("boom");
+		});
+
+		this.service.appendMessage(session.id(), new UserMessage("still stored"));
+		subscription.dispose();
+
+		assertThat(this.service.getMessages(session.id())).hasSize(1);
 	}
 
 }

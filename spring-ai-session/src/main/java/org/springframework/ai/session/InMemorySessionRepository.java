@@ -256,6 +256,8 @@ public final class InMemorySessionRepository implements SessionRepository {
 	public List<SessionEvent> findEvents(Collection<String> sessionIds, EventFilter filter) {
 		Assert.notNull(sessionIds, "sessionIds must not be null");
 		Assert.notNull(filter, "filter must not be null");
+		Assert.isTrue(!(filter.window() instanceof EventFilter.Window.After),
+				"a cursor window is per session; read one session at a time");
 		EventFilter perSession = filter.withoutWindow();
 		List<SessionEvent> matches = sessionIds.stream()
 			.distinct()

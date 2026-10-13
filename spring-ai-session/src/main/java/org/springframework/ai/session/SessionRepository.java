@@ -195,15 +195,18 @@ public interface SessionRepository {
 	 * Returns events for the given session that match the provided filter. Events are
 	 * always returned in chronological order (oldest first).
 	 * <p>
-	 * <strong>Windows keep turns whole.</strong> If {@link EventFilter#lastN()} is set,
-	 * the most recent N matching events are returned, extended back to the start of the
-	 * turn the window lands in (the nearest preceding {@link SessionEvent#isTurnStart()
-	 * USER event} among the matching events), so a tool call is never returned without
-	 * its results. The extension is skipped when the filter
-	 * {@link EventFilter#hasTextCriteria() searches text} and when no turn start precedes
-	 * the window. Pages are plain. {@link EventFilter#applyTurnAwareWindow(List)} is the
-	 * reference implementation; {@code JdbcSessionRepository} pushes it down as one
-	 * bounded extra query when the window lands mid-turn.
+	 * <strong>Windows keep turns whole.</strong> With an {@link EventFilter.Window.Last}
+	 * window the most recent N matching events are returned, extended back to the start
+	 * of the turn the window lands in (the nearest preceding
+	 * {@link SessionEvent#isTurnStart() USER event} among the matching events), so a tool
+	 * call is never returned without its results. The extension is skipped when the
+	 * filter {@link EventFilter#hasTextCriteria() searches text} and when no turn start
+	 * precedes the window. Pages and {@link EventFilter.Window.After cursors} are plain;
+	 * a cursor that names no event of the session throws
+	 * {@link IllegalArgumentException}. {@link EventFilter#applyTurnAwareWindow(List)} is
+	 * the reference implementation; {@code JdbcSessionRepository} pushes it down as one
+	 * bounded extra query when the window lands mid-turn. {@link EventFilter#order()}
+	 * applies to the windowed result.
 	 * <p>
 	 * <strong>The active view.</strong> With {@link EventFilter#activeView()} the
 	 * filter applies to the active view of the log rather than the whole log: the events
@@ -219,11 +222,12 @@ public interface SessionRepository {
 	 * <strong>Push the filter down.</strong> For a read of the whole log the cost must not
 	 * grow with its size: an implementation is expected to evaluate
 	 * {@link EventFilter#excludeSynthetic()}, {@link EventFilter#eventTypes()},
-	 * {@link EventFilter#messageTypes()}, the time range, {@link EventFilter#lastN()},
-	 * {@link EventFilter#page()} / {@link EventFilter#pageSize()} and, where the store
-	 * can, the keywords in its query, and to fall back to {@link EventFilter#apply(List)}
-	 * only for what the store cannot express (a {@link EventFilter#pattern()}, typically),
-	 * as {@code JdbcSessionRepository} does.
+	 * {@link EventFilter#messageTypes()}, the time range, the {@link EventFilter#window()}
+	 * and the {@link EventFilter#keywords()} in its query, and to fall back to
+	 * {@link EventFilter#apply(List)} only for what the store cannot express, as
+	 * {@code JdbcSessionRepository} does. A {@link EventFilter#pattern()} is not part of
+	 * this contract: a store may ignore it, and {@link SessionService} applies it after
+	 * the read.
 	 * <p>
 	 * <strong>Existence contract:</strong> returns an empty list when the session does
 	 * not exist, rather than throwing. This differs from {@link #appendEvent} and
@@ -237,8 +241,9 @@ public interface SessionRepository {
 	/**
 	 * Returns the events of the given sessions that match the filter, ordered by timestamp
 	 * across sessions (ties broken in a stable, store-defined order), with the filter's
-	 * {@link EventFilter#lastN()} or page applied to that combined order as a plain window
-	 * (turns do not exist across sessions). The caller chooses the sessions, typically
+	 * window applied to that combined order as a plain window (turns do not exist across
+	 * sessions); an {@link EventFilter.Window.After} cursor is per session and throws
+	 * {@link IllegalArgumentException} here. The caller chooses the sessions, typically
 	 * through {@link #findByIndex} or a {@link SessionSelector}.
 	 * <p>
 	 * The default runs the filter without its window over each session, sorts the union
@@ -250,6 +255,9 @@ public interface SessionRepository {
 	 * @return the matching events, oldest first; empty when {@code sessionIds} is empty
 	 */
 	default List<SessionEvent> findEvents(Collection<String> sessionIds, EventFilter filter) {
+		if (filter.window() instanceof EventFilter.Window.After) {
+			throw new IllegalArgumentException("a cursor window is per session; read one session at a time");
+		}
 		EventFilter perSession = filter.withoutWindow();
 		List<SessionEvent> matches = new ArrayList<>();
 		for (String sessionId : sessionIds) {

@@ -21,6 +21,7 @@ import java.util.Collection;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
+import reactor.core.publisher.Flux;
 
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.session.compaction.CompactionResult;
@@ -207,6 +208,24 @@ public interface SessionService {
 
 	/** Returns events matching the given filter, in chronological order. */
 	List<SessionEvent> getEvents(String sessionId, EventFilter filter);
+
+	/**
+	 * The events appended to a session from now on, as they are appended: a live stream
+	 * with no replay. Pair it with a cursor read to catch up without missing or
+	 * duplicating anything: subscribe first, then read
+	 * {@link EventFilter#after(String) after} the last event seen, and skip the live
+	 * events whose ids the read returned. The stream sees the appends made through this
+	 * service instance; a session written on another node is read with a cursor. It
+	 * never completes on its own: dispose the subscription when done. Events are buffered
+	 * without bound for a subscriber that lags, so give the stream a consumer that drains it.
+	 * An event is handed over once the store accepted the append, which under a caller's
+	 * transaction is before it commits; a replayed append the store ignores (an id it
+	 * already holds) is handed over too, so a consumer that must not repeat work dedupes
+	 * by id, as the catch-up read does.
+	 * @param sessionId the session to watch
+	 * @throws IllegalArgumentException if the session does not exist
+	 */
+	Flux<SessionEvent> subscribe(String sessionId);
 
 	/** Returns all events for the session, in chronological order. */
 	default List<SessionEvent> getEvents(String sessionId) {

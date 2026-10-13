@@ -121,6 +121,8 @@ class AuthorizingSessionServiceTests {
 				SlidingWindowCompactionStrategy.builder().maxEvents(1).build()))
 			.isInstanceOf(AccessDeniedException.class);
 		assertThatThrownBy(() -> this.service.delete(id)).isInstanceOf(AccessDeniedException.class);
+		assertThatThrownBy(() -> this.service.subscribe(id)).isInstanceOf(AccessDeniedException.class);
+		assertThatThrownBy(() -> this.service.usage(id)).isInstanceOf(AccessDeniedException.class);
 		// The interface defaults route through the checked methods
 		assertThatThrownBy(() -> this.service.appendMessage(id, new UserMessage("intrusion")))
 			.isInstanceOf(AccessDeniedException.class);

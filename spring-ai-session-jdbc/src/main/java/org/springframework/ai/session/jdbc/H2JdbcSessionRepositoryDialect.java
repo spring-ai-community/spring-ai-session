@@ -51,8 +51,8 @@ public class H2JdbcSessionRepositoryDialect implements JdbcSessionRepositoryDial
 	}
 
 	@Override
-	public String getKeywordFilterFragment() {
-		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
+	public String getKeywordPredicateFragment() {
+		return "LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
 	}
 
 }

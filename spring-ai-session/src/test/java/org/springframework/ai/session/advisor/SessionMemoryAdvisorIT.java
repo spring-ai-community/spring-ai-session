@@ -440,7 +440,8 @@ class SessionMemoryAdvisorIT {
 		compactingAdvisor.before(buildRequest(this.sessionId, "question"), chain);
 		ChatClientResponse response = buildResponse(this.sessionId, "answer");
 
-		assertThat(compactingAdvisor.after(response, chain)).isSameAs(response);
+		// The reply is returned as produced (with the stored event ids added to its context)
+		assertThat(compactingAdvisor.after(response, chain).chatResponse()).isSameAs(response.chatResponse());
 		assertThat(this.sessionService.getEvents(this.sessionId, EventFilter.active()))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("question", "answer");
@@ -1617,6 +1618,49 @@ class SessionMemoryAdvisorIT {
 		assertThatThrownBy(() -> after(gate, untracked, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("trackStatus");
+	}
+
+	// --- Event ids on the context (#20) ---
+
+	@Test
+	void theAdvisorNamesTheEventsItStoredOnTheContext() {
+		SessionMemoryAdvisor advisor = tracking();
+		AdvisorChain chain = mock(AdvisorChain.class);
+
+		ChatClientRequest forwarded = advisor.before(buildRequest(this.sessionId, "Hi"), chain);
+		ChatClientResponse reply = advisor.after(buildResponse(this.sessionId, "Hello"), chain);
+
+		List<SessionEvent> messages = this.sessionService.getEvents(this.sessionId, EventFilter.active());
+		assertThat(forwarded.context()).containsEntry(SessionMemoryAdvisor.REQUEST_EVENT_ID_CONTEXT_KEY,
+				messages.get(0).getId());
+		assertThat(reply.context()).containsEntry(SessionMemoryAdvisor.RESPONSE_EVENT_IDS_CONTEXT_KEY,
+				List.of(messages.get(1).getId()));
+		// Nothing stored: the request key is present and null, the response list empty
+		ChatClientRequest empty = advisor.before(ChatClientRequest.builder()
+			.prompt(new Prompt(List.of()))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build(), chain);
+		assertThat(empty.context()).containsKey(SessionMemoryAdvisor.REQUEST_EVENT_ID_CONTEXT_KEY);
+		assertThat(empty.context().get(SessionMemoryAdvisor.REQUEST_EVENT_ID_CONTEXT_KEY)).isNull();
+		ChatClientResponse blank = advisor.after(buildResponse(this.sessionId, "   "), chain);
+		assertThat(blank.context()).containsEntry(SessionMemoryAdvisor.RESPONSE_EVENT_IDS_CONTEXT_KEY, List.of());
+	}
+
+	@Test
+	void theEventIdsAreSetWithoutTouchingAnUnmodifiableContext() {
+		SessionMemoryAdvisor advisor = tracking();
+		AdvisorChain chain = mock(AdvisorChain.class);
+		ChatClientRequest frozen = new ChatClientRequest(new Prompt(List.of(new UserMessage("Hi"))),
+				Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId));
+
+		ChatClientRequest forwarded = advisor.before(frozen, chain);
+		ChatClientResponse reply = advisor.after(new ChatClientResponse(
+				ChatResponse.builder().generations(List.of(new Generation(new AssistantMessage("Hello")))).build(),
+				Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId)), chain);
+
+		assertThat(forwarded.context().get(SessionMemoryAdvisor.REQUEST_EVENT_ID_CONTEXT_KEY)).isNotNull();
+		assertThat(reply.context().get(SessionMemoryAdvisor.RESPONSE_EVENT_IDS_CONTEXT_KEY)).asList().hasSize(1);
+		assertThat(frozen.context()).doesNotContainKey(SessionMemoryAdvisor.REQUEST_EVENT_ID_CONTEXT_KEY);
 	}
 
 	// --- Usage and budget ---

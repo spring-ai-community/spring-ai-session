@@ -69,38 +69,18 @@ public interface JdbcSessionRepositoryDialect {
 	}
 
 	/**
-	 * Case-insensitive substring filter fragment appended to the dynamic
-	 * {@code findEvents} query when
-	 * {@link org.springframework.ai.session.EventFilter#keyword()} is set.
-	 *
-	 * <p>
-	 * The fragment must be a complete {@code AND ...} clause with a single {@code ?}
-	 * placeholder that will be bound to {@code '%' + escaped(keyword.toLowerCase()) + '%'},
-	 * where {@code !}, {@code %} and {@code _} in the keyword are escaped with {@code !}
-	 * so they match literally. The fragment must therefore declare {@code ESCAPE '!'}.
-	 * Example (PostgreSQL / H2):
-	 * {@code AND LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'}
-	 */
-	String getKeywordFilterFragment();
-
-	/**
 	 * Case-insensitive substring <em>predicate</em> — no leading {@code AND}, exactly one
-	 * {@code ?} placeholder — against the event's message content. Used by
-	 * {@code JdbcSessionRepository} to build the multi-term
-	 * {@link org.springframework.ai.session.EventFilter#keywords()} /
-	 * {@link org.springframework.ai.session.EventFilter#matchMode()} filter, repeating
-	 * this predicate once per term and joining with {@code AND}/{@code OR} depending on
-	 * match mode (e.g. {@code AND (pred OR pred OR pred)}).
-	 *
-	 * <p>
-	 * Defaults to the same expression as {@link #getKeywordFilterFragment()} minus the
-	 * {@code AND } prefix, which is correct for every dialect shipped today (they all use
-	 * identical {@code LOWER(COALESCE(...)) LIKE ?} SQL). Override only if a future
-	 * dialect needs different substring-match SQL.
+	 * {@code ?} placeholder — against the event's message content (alias {@code e}).
+	 * {@code JdbcSessionRepository} repeats it once per term of
+	 * {@link org.springframework.ai.session.EventFilter#keywords()}, joined with
+	 * {@code AND}/{@code OR} depending on the
+	 * {@link org.springframework.ai.session.EventFilter#matchMode()}, and binds each
+	 * placeholder to {@code '%' + escaped(term.toLowerCase()) + '%'}, where {@code !},
+	 * {@code %} and {@code _} in the term are escaped with {@code !} so they match
+	 * literally. The predicate must therefore declare {@code ESCAPE '!'}. Example
+	 * (PostgreSQL / H2): {@code LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'}
 	 */
-	default String getKeywordPredicateFragment() {
-		return "LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
-	}
+	String getKeywordPredicateFragment();
 
 	/**
 	 * Detects the dialect from the database product name reported by the

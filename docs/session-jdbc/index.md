@@ -163,25 +163,27 @@ the database.
 JSON blob) so `EventFilter.excludeSynthetic()` translates to a SQL predicate instead of
 an in-process scan.
 
-**`EventFilter.keyword()`/`keywords()`** translate to `LOWER(...) LIKE ? ESCAPE '!'`
-predicates — one for `keyword`, one per term for `keywords`, joined with `AND`/`OR` per
-`matchMode`. Terms are always bound as JDBC parameters, and `%`, `_` and `!` are escaped so
-they match literally, as in the in-memory repository.
+**`EventFilter.keywords()`** translate to `LOWER(...) LIKE ? ESCAPE '!'` predicates, one
+per term, joined with `AND`/`OR` per `matchMode`; the dialect supplies the predicate
+(`getKeywordPredicateFragment()`). Terms are always bound as JDBC parameters, and `%`, `_`
+and `!` are escaped so they match literally, as in the in-memory repository.
 
-**`EventFilter.lastN()` keeps turns whole with at most one extra query.** The newest N
-rows come from `ORDER BY seq DESC LIMIT ?`. When that window is full, its oldest row is
-not a `USER` event and the filter neither searches text nor hides `USER` events, a second
-query fetches the rows between the nearest preceding matching `USER` event and the window
+**The window is pushed down.** A `last` window is `ORDER BY seq DESC LIMIT ?`, a page is
+`LIMIT ? OFFSET ?`, and an `after` cursor is `seq > (SELECT seq … WHERE id = ?)` with an
+optional `LIMIT`; an unknown cursor is detected with one existence check and reported as
+`IllegalArgumentException`. `DESC` order reverses the windowed rows in Java.
+
+**A `last` window keeps turns whole with at most one extra query.** When the window is
+full, its oldest row is not a `USER` event and the filter neither searches text nor hides
+`USER` events, a second query fetches the rows between the nearest preceding matching
+`USER` event and the window
 (`seq >= (SELECT MAX(seq) … WHERE event_type = 'MESSAGE' AND message_type = 'USER' AND seq < ?)`), bounded by one
 turn and served by the `(session_id, seq)` index. Cross-session reads use a plain `LIMIT`.
 
-**`EventFilter.pattern()` falls back to in-memory filtering.** Java regex cannot be
-translated to portable SQL — each database has its own regex dialect, none a superset of
-Java's (backreferences, lookaround, named groups). When `pattern` is set, every other
-criterion is still pushed down to SQL, but pagination (`lastN`/`page`/`pageSize`) is
-deferred: the SQL-filtered rows are fetched, re-checked with `EventFilter.matches()` in
-Java, and paginated afterward, as `InMemorySessionRepository` does. Expect a `pattern`
-query to scan more history than an equivalent `keyword`/`keywords` query.
+**`EventFilter.pattern()` is not evaluated in SQL.** Java regex cannot be translated to
+portable SQL — each database has its own regex dialect, none a superset of Java's. The
+repository ignores a pattern; `SessionService` reads without it and applies it in Java
+before the window (see [Patterns](../session-management/event-filtering.md#patterns)).
 
 ---
 

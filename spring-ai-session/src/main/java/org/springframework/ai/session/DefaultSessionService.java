@@ -26,8 +26,14 @@ import java.util.ArrayList;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
 
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.session.compaction.CompactionRequest;
@@ -44,6 +50,8 @@ import org.springframework.util.Assert;
  */
 public class DefaultSessionService implements SessionService {
 
+	private static final Logger logger = LoggerFactory.getLogger(DefaultSessionService.class);
+
 	private final Duration defaultTimeToLive;
 
 	private final SessionRepository sessionRepository;
@@ -55,6 +63,8 @@ public class DefaultSessionService implements SessionService {
 	private final int maxTreeDepth;
 
 	private final Set<String> inheritedAttributes;
+
+	private final List<Consumer<SessionEvent>> listeners = new CopyOnWriteArrayList<>();
 
 	private DefaultSessionService(SessionRepository sessionRepository, Duration defaultTimeToLive,
 			boolean allowSystemMessages, SessionScopeResolver scopeResolver, int maxTreeDepth,
@@ -182,7 +192,7 @@ public class DefaultSessionService implements SessionService {
 		if (!this.sessionRepository.saveIfAbsent(child)) {
 			throw new IllegalStateException("Session already exists: " + childId);
 		}
-		this.sessionRepository.appendEvent(SessionTreeEvents.childCreated(child));
+		append(SessionTreeEvents.childCreated(child));
 		return child;
 	}
 
@@ -210,7 +220,7 @@ public class DefaultSessionService implements SessionService {
 			throw new IllegalStateException("Session '" + sessionId + "' could not start a turn: it is "
 					+ session.status() + "; a turn that was abandoned is ended with endTurn(id, StopReason.INTERRUPTED)");
 		}
-		this.sessionRepository.appendEvent(SessionStatusEvents.running(sessionId));
+		append(SessionStatusEvents.running(sessionId));
 		return requireSession(sessionId);
 	}
 
@@ -224,7 +234,7 @@ public class DefaultSessionService implements SessionService {
 			Session session = requireSession(sessionId);
 			throw new IllegalStateException("Session '" + sessionId + "' is not running a turn; it is " + session.status());
 		}
-		this.sessionRepository.appendEvent(SessionStatusEvents.idle(sessionId, stopReason, eventIds));
+		append(SessionStatusEvents.idle(sessionId, stopReason, eventIds));
 		return requireSession(sessionId);
 	}
 
@@ -290,7 +300,7 @@ public class DefaultSessionService implements SessionService {
 		}
 		if (this.sessionRepository.updateStatus(sessionId, SessionStatus.IDLE, SessionStatus.TERMINATED, null,
 				Instant.now())) {
-			this.sessionRepository.appendEvent(SessionStatusEvents.terminated(sessionId));
+			append(SessionStatusEvents.terminated(sessionId));
 			return requireSession(sessionId);
 		}
 		// The compare-and-set lost against a turn that started in between, or another archive
@@ -351,21 +361,78 @@ public class DefaultSessionService implements SessionService {
 					+ "DefaultSessionService.builder().allowSystemMessages(true) or set "
 					+ "spring.ai.session.allow-system-messages=true. See the \"System Messages\" reference page.");
 		}
-		this.sessionRepository.appendEvent(event);
+		append(event);
 	}
 
 	@Override
 	public List<SessionEvent> findEvents(Collection<String> sessionIds, EventFilter filter) {
 		Assert.notNull(sessionIds, "sessionIds must not be null");
 		Assert.notNull(filter, "filter must not be null");
-		return this.sessionRepository.findEvents(sessionIds, filter);
+		if (filter.pattern() == null) {
+			return this.sessionRepository.findEvents(sessionIds, filter);
+		}
+		// A pattern is not part of the store's contract: read without it, unwindowed and
+		// in log order, then match the pattern and window the result here.
+		EventFilter read = filter.withoutPattern().withoutWindow().toBuilder().order(null).build();
+		List<SessionEvent> matched = this.sessionRepository.findEvents(sessionIds, read)
+			.stream()
+			.filter(filter::matchesPattern)
+			.toList();
+		return filter.applyWindow(matched);
 	}
 
 	@Override
 	public List<SessionEvent> getEvents(String sessionId, EventFilter filter) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(filter, "filter must not be null");
-		return this.sessionRepository.findEvents(sessionId, filter);
+		if (filter.pattern() == null) {
+			return this.sessionRepository.findEvents(sessionId, filter);
+		}
+		// A pattern is not part of the store's contract: read without it, in log order and
+		// unwindowed (a cursor keeps its position but not its limit), then match the
+		// pattern and window the result here.
+		EventFilter.Builder read = filter.withoutPattern().toBuilder().order(null);
+		read.window(filter.window() instanceof EventFilter.Window.After after ? EventFilter.Window.after(after.eventId())
+				: EventFilter.Window.ALL);
+		List<SessionEvent> matched = this.sessionRepository.findEvents(sessionId, read.build())
+			.stream()
+			.filter(filter::matchesPattern)
+			.toList();
+		return filter.applyTurnAwareWindow(matched);
+	}
+
+	@Override
+	public Flux<SessionEvent> subscribe(String sessionId) {
+		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		requireSession(sessionId);
+		return Flux.create(sink -> {
+			Consumer<SessionEvent> listener = event -> {
+				if (sessionId.equals(event.getSessionId())) {
+					sink.next(event);
+				}
+			};
+			this.listeners.add(listener);
+			sink.onDispose(() -> this.listeners.remove(listener));
+		}, FluxSink.OverflowStrategy.BUFFER);
+	}
+
+	/** Hands an appended event to the live subscribers; a failing subscriber is logged, never the writer's problem. */
+	private void publish(SessionEvent event) {
+		for (Consumer<SessionEvent> listener : this.listeners) {
+			try {
+				listener.accept(event);
+			}
+			catch (RuntimeException ex) {
+				logger.warn("A subscriber of session [{}] failed on event [{}]: {}", event.getSessionId(),
+						event.getId(), ex.getMessage());
+			}
+		}
+	}
+
+	/** Appends through the repository, then publishes. */
+	private void append(SessionEvent event) {
+		this.sessionRepository.appendEvent(event);
+		publish(event);
 	}
 
 	@Override
@@ -401,10 +468,12 @@ public class DefaultSessionService implements SessionService {
 
 		// Record the decision as an appended boundary followed by its summary events. The
 		// log is never changed: the boundary names, by id, what the view is from now on.
-		if (!this.sessionRepository.appendEvents(session.id(), result.toEvents(session.id()), version)) {
+		List<SessionEvent> appended = result.toEvents(session.id());
+		if (!this.sessionRepository.appendEvents(session.id(), appended, version)) {
 			// CAS rejected — a concurrent writer already changed the log; skip silently.
 			return CompactionResult.unchanged();
 		}
+		appended.forEach(this::publish);
 		return result;
 	}
 

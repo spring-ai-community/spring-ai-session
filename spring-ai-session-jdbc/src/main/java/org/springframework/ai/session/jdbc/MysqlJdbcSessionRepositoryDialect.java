@@ -43,10 +43,10 @@ public class MysqlJdbcSessionRepositoryDialect implements JdbcSessionRepositoryD
 	}
 
 	@Override
-	public String getKeywordFilterFragment() {
+	public String getKeywordPredicateFragment() {
 		// MySQL LIKE is case-insensitive for most collations; LOWER() is still applied
 		// for safety with binary collations.
-		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
+		return "LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
 	}
 
 }

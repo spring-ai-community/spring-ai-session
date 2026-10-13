@@ -536,12 +536,67 @@ public abstract class AbstractSessionRepositoryContractTests {
 	}
 
 	@Test
-	void patternSearchMatchesWithTheJavaRegex() {
+	void aPatternIsLeftToTheService() {
 		Session session = newSession("user-pattern");
 		append(session.id(), user("msg-1"), user("msg-2"), user("msg-13"));
 
+		// The store reads the page as if the pattern were not there; the service matches it
 		assertThat(texts(session.id(), EventFilter.patternSearch(Pattern.compile("^msg-1\\d?$"))))
-			.containsExactly("msg-1", "msg-13");
+			.containsExactly("msg-1", "msg-2", "msg-13");
+	}
+
+	@Test
+	void aCursorReadsWhatWasLoggedAfterAnEvent() {
+		Session session = newSession("user-cursor");
+		append(session.id(), user("u1"), assistant("a1"), user("u2"), assistant("a2"), user("u3"));
+		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
+		String a1 = log.get(1).getId();
+
+		assertThat(texts(session.id(), EventFilter.after(a1))).containsExactly("u2", "a2", "u3");
+		assertThat(texts(session.id(), EventFilter.builder().after(a1, 2).build())).containsExactly("u2", "a2");
+		assertThat(texts(session.id(), EventFilter.after(log.get(4).getId()))).isEmpty();
+		// The cursor event need not match the criteria
+		assertThat(texts(session.id(),
+				EventFilter.builder().after(a1).messageTypes(Set.of(MessageType.USER)).build()))
+			.containsExactly("u2", "u3");
+		// A cursor and the active view
+		assertThat(texts(session.id(), EventFilter.active().toBuilder().after(a1).build()))
+			.containsExactly("u2", "a2", "u3");
+		// An unknown cursor, or one from another session, is an error
+		assertThatThrownBy(() -> this.repository.findEvents(session.id(), EventFilter.after("nope")))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("nope");
+		Session other = newSession("user-cursor-other");
+		append(other.id(), user("x"));
+		assertThatThrownBy(() -> this.repository.findEvents(other.id(), EventFilter.after(a1)))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> this.repository.findEvents(List.of(session.id(), other.id()), EventFilter.after(a1)))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> this.repository.findEvents(List.of(session.id(), other.id()),
+				EventFilter.active().toBuilder().after(a1).build()))
+			.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	void descendingOrderReversesTheWindowedResult() {
+		Session session = newSession("user-order");
+		append(session.id(), user("u1"), assistant("a1"), user("u2"), assistant("a2"), user("u3"));
+		String a1 = this.repository.findEvents(session.id(), EventFilter.all()).get(1).getId();
+
+		assertThat(texts(session.id(), EventFilter.builder().order(EventFilter.Order.DESC).build()))
+			.containsExactly("u3", "a2", "u2", "a1", "u1");
+		// The last-2 window lands mid-turn and is extended to its start, then reversed
+		assertThat(texts(session.id(), EventFilter.builder().lastN(2).order(EventFilter.Order.DESC).build()))
+			.containsExactly("u3", "a2", "u2");
+		assertThat(texts(session.id(), EventFilter.builder().page(0, 2).order(EventFilter.Order.DESC).build()))
+			.containsExactly("a1", "u1");
+		assertThat(texts(session.id(), EventFilter.builder().after(a1).order(EventFilter.Order.DESC).build()))
+			.containsExactly("u3", "a2", "u2");
+		// Across sessions the window is plain
+		assertThat(this.repository.findEvents(List.of(session.id()),
+				EventFilter.builder().lastN(2).order(EventFilter.Order.DESC).build()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("u3", "a2");
 	}
 
 	@Test

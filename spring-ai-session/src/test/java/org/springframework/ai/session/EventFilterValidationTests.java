@@ -34,18 +34,18 @@ class EventFilterValidationTests {
 
 	@Test
 	void blankKeywordIsNormalizedToNull() {
-		assertThat(EventFilter.builder().keyword("   ").build().keyword()).isNull();
-		assertThat(EventFilter.builder().keyword("").build().keyword()).isNull();
+		assertThat(EventFilter.builder().keyword("   ").build().keywords()).isNull();
+		assertThat(EventFilter.builder().keyword("").build().keywords()).isNull();
 	}
 
 	@Test
 	void nullKeywordRemainsNull() {
-		assertThat(EventFilter.builder().keyword(null).build().keyword()).isNull();
+		assertThat(EventFilter.builder().keyword(null).build().keywords()).isNull();
 	}
 
 	@Test
 	void keywordIsLowercased() {
-		assertThat(EventFilter.builder().keyword("Spring AI").build().keyword()).isEqualTo("spring ai");
+		assertThat(EventFilter.builder().keyword("Spring AI").build().keywords()).containsExactly("spring ai");
 	}
 
 	// --- lastN ---
@@ -65,7 +65,7 @@ class EventFilterValidationTests {
 	@Test
 	void lastNPositiveIsAccepted() {
 		EventFilter filter = EventFilter.builder().lastN(5).build();
-		assertThat(filter.lastN()).isEqualTo(5);
+		assertThat(filter.window()).isEqualTo(EventFilter.Window.last(5));
 	}
 
 	// --- pageSize ---
@@ -101,14 +101,13 @@ class EventFilterValidationTests {
 	@Test
 	void pageSizeWithoutPageDefaultsToZero() {
 		EventFilter filter = EventFilter.builder().pageSize(10).build();
-		assertThat(filter.page()).isEqualTo(0);
-		assertThat(filter.pageSize()).isEqualTo(10);
+		assertThat(filter.window()).isEqualTo(EventFilter.Window.page(0, 10));
 	}
 
 	@Test
 	void pageSizeWithExplicitPageIsPreserved() {
 		EventFilter filter = EventFilter.builder().page(2).pageSize(10).build();
-		assertThat(filter.page()).isEqualTo(2);
+		assertThat(filter.window()).isEqualTo(EventFilter.Window.page(2, 10));
 	}
 
 	// --- messageTypes normalization ---

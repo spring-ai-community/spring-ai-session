@@ -101,30 +101,30 @@ class EventFilterKeywordsAndPatternTests {
 	void patternMatchesRegex() {
 		EventFilter filter = EventFilter.patternSearch(Pattern.compile("\\bwe decided\\b"));
 
-		assertThat(filter.matches(eventWithText("we decided to go with option B"))).isTrue();
-		assertThat(filter.matches(eventWithText("we haven't decided yet"))).isFalse();
+		assertThat(matchesText(filter, eventWithText("we decided to go with option B"))).isTrue();
+		assertThat(matchesText(filter, eventWithText("we haven't decided yet"))).isFalse();
 	}
 
 	@Test
 	void patternRespectsCaseInsensitiveFlagWhenSet() {
 		EventFilter filter = EventFilter.patternSearch(Pattern.compile("remember that", Pattern.CASE_INSENSITIVE));
 
-		assertThat(filter.matches(eventWithText("Remember That the API key rotates monthly"))).isTrue();
+		assertThat(matchesText(filter, eventWithText("Remember That the API key rotates monthly"))).isTrue();
 	}
 
 	@Test
 	void patternIsCaseSensitiveByDefault() {
 		EventFilter filter = EventFilter.patternSearch(Pattern.compile("Remember"));
 
-		assertThat(filter.matches(eventWithText("remember this"))).isFalse();
-		assertThat(filter.matches(eventWithText("Remember this"))).isTrue();
+		assertThat(matchesText(filter, eventWithText("remember this"))).isFalse();
+		assertThat(matchesText(filter, eventWithText("Remember this"))).isTrue();
 	}
 
 	@Test
 	void patternReturnsFalseWhenTextIsEmpty() {
 		EventFilter filter = EventFilter.patternSearch(Pattern.compile(".+"));
 
-		assertThat(filter.matches(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("")).build()))
+		assertThat(matchesText(filter, SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("")).build()))
 			.isFalse();
 	}
 
@@ -134,9 +134,14 @@ class EventFilterKeywordsAndPatternTests {
 	void keywordAndPatternBothMustMatchWhenBothSet() {
 		EventFilter filter = EventFilter.builder().keyword("decided").pattern(Pattern.compile("option [A-Z]")).build();
 
-		assertThat(filter.matches(eventWithText("we decided on option B"))).isTrue();
-		assertThat(filter.matches(eventWithText("we decided nothing"))).isFalse();
-		assertThat(filter.matches(eventWithText("option B is available"))).isFalse();
+		assertThat(matchesText(filter, eventWithText("we decided on option B"))).isTrue();
+		assertThat(matchesText(filter, eventWithText("we decided nothing"))).isFalse();
+		assertThat(matchesText(filter, eventWithText("option B is available"))).isFalse();
+	}
+
+	/** The store's predicate and the service's pattern post-filter together. */
+	private static boolean matchesText(EventFilter filter, SessionEvent event) {
+		return filter.matches(event) && filter.matchesPattern(event);
 	}
 
 }

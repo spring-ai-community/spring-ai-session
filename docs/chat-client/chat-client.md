@@ -17,7 +17,7 @@ On every request the advisor:
    `EventFilter.all()`), merged with any per-request `EVENT_FILTER_CONTEXT_KEY` filter, and
    **prepends** it to the prompt. `EventFilter.active()` is always merged in on top, so
    the prompt only ever sees the active view, never the events a compaction covered. Of any stored system messages
-   (an opt-in), only the latest one is kept; under a `lastN` or page window it is looked up
+   (an opt-in), only the latest one is kept; under a window it is looked up
    separately, so a window never drops the system prompt. A `lastN` window is extended by
    the repository to the start of the turn it lands in, and any tool call or tool result
    left without its counterpart is dropped from the prompt with a warning (see
@@ -194,6 +194,8 @@ client.prompt()
 | `SESSION_ID_CONTEXT_KEY` | `"chat_memory_conversation_id"` (= `ChatMemory.CONVERSATION_ID`) | Routes the request to a session |
 | `SESSION_METADATA_CONTEXT_KEY` | `"chat_memory_session_metadata"` | A `Map<String, Object>` of metadata for a session the advisor creates on first use; ignored for an existing session |
 | `EVENT_FILTER_CONTEXT_KEY` | `"chat_memory_event_filter_id"` | Per-request `EventFilter` merged with the advisor-level filter |
+| `REQUEST_EVENT_ID_CONTEXT_KEY` | `"chat_memory_request_event_id"` | Set by the advisor: the id of the event that stores the request's trailing user or tool message, `null` when none was stored. Read it from the forwarded request or from `call().chatClientResponse().context()` |
+| `RESPONSE_EVENT_IDS_CONTEXT_KEY` | `"chat_memory_response_event_ids"` | Set by the advisor on the response: the ids of the events that store the reply's assistant messages, a `List<String>`, empty when none was stored. Streamed chunks do not carry it; `subscribe(sessionId)` delivers the stored events instead |
 | `ToolConfirmationAdvisor.TOOL_CONFIRMATION_CONTEXT_KEY` | `"tool_confirmations"` | A `ToolConfirmation` or a collection of them, one per tool call the parked turn waits on; see [Tool confirmation](#tool-confirmation) |
 
 ---
@@ -219,8 +221,8 @@ String response = client.prompt()
 
 `EventFilter.merge()` semantics: every non-null field from the request filter replaces
 the corresponding field from the advisor default; the two boolean flags, `excludeSynthetic`
-and `activeView`, are OR-ed so either side can opt in. A request-level `lastN` or
-`page`/`pageSize` replaces the advisor's retrieval modifier as a whole (see
+and `activeView`, are OR-ed so either side can opt in. A request-level window (`lastN`, a
+page or a cursor) replaces the advisor's window as a whole (see
 [Merging filters](../session-management/event-filtering.md#merging-filters)). A `null` value for
 `EVENT_FILTER_CONTEXT_KEY` is ignored.
 

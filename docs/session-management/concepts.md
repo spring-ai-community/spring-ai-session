@@ -403,12 +403,11 @@ backend has to reimplement it. Core ships three helpers for this, and a test kit
 checks the whole contract.
 
 **Reads push the filter down.** `findEvents(sessionId, filter)` must not read the whole
-log for a `lastN` or a page. Evaluate `excludeSynthetic`, `eventTypes`,
-`messageTypes`, the time range, `lastN`, `page`/`pageSize` and, where the store can, the
-keywords in the query itself. `EventFilter.apply(List)` is the reference implementation of
-the read contract for a log held as a list; use it only for what the store cannot express,
-as the JDBC repository does for `pattern` (a Java regex cannot be translated to portable
-SQL). An `activeView` read is the exception: the view is bounded by compaction, so fetch
+log for a window. Evaluate `excludeSynthetic`, `eventTypes`, `messageTypes`, the time
+range, the `window` (last, page or an `after` cursor) and the keywords in the query itself.
+`EventFilter.apply(List)` is the reference implementation of the read contract for a log
+held as a list; use it only for what the store cannot express. A `pattern` is not the
+store's concern: the service applies it after the read. An `activeView` read is the exception: the view is bounded by compaction, so fetch
 the rows the newest boundary names plus the rows from the boundary on and let
 `EventFilter.apply` project, filter and window them, as the JDBC repository does. A `lastN` window must keep turns whole: when its oldest event is not a `USER` event,
 extend it back to the nearest preceding one among the matching events, unless the filter
@@ -610,6 +609,24 @@ sequenceDiagram
     SMA-->>Gate: assistant: "hello"
     SMA->>Log: assistant message, STATUS IDLE with stop reason END_TURN
 ```
+
+### Live events
+
+`subscribe(sessionId)` returns a `Flux<SessionEvent>` of the events appended to a session
+from then on, in append order, as the service appends them: messages, status changes,
+usage, markers and compaction boundaries alike. It is a live stream with no replay, and it
+never completes on its own; dispose the subscription when done. The session must exist, so a
+subscription is authorized like any other read. The stream sees the appends
+made through this service instance, so on more than one node a session written elsewhere is
+read with a cursor instead.
+
+Reads and the stream are reconciled by event id, the way an agent runtime's clients
+reconcile its history and its event stream: subscribe first, read
+`EventFilter.after(lastSeenEventId)` to fill the gap, and skip the live events whose ids
+the read returned. See [Cursor reads](event-filtering.md#cursor-reads). `SessionMemoryAdvisor`
+also names the events it stored on the advisor context, so a caller holding a
+`ChatClientResponse` can correlate what it sent and received with the log without the
+stream (see [Context keys](../chat-client/chat-client.md#context-keys)).
 
 ### Usage and budget
 

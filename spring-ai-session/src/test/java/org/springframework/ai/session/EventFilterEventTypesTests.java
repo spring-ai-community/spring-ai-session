@@ -105,8 +105,9 @@ class EventFilterEventTypesTests {
 		assertThat(EventFilter.builder().keyword("hello").build().apply(this.log)).containsExactly(this.user);
 		assertThat(EventFilter.builder().keywords(List.of("hello")).build().apply(this.log))
 			.containsExactly(this.user);
-		assertThat(EventFilter.builder().pattern(Pattern.compile("hel+o")).build().apply(this.log))
-			.containsExactly(this.user);
+		// A pattern is the service's half of the read: it never matches a payload either
+		EventFilter pattern = EventFilter.builder().pattern(Pattern.compile("hel+o")).build();
+		assertThat(this.log.stream().filter(pattern::matchesPattern).toList()).containsExactly(this.user);
 	}
 
 	@Test
@@ -124,7 +125,7 @@ class EventFilterEventTypesTests {
 		EventFilter filter = EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).lastN(3).build();
 
 		assertThat(filter.withoutWindow().eventTypes()).containsExactly(EventType.STATUS);
-		assertThat(filter.withoutWindow().lastN()).isNull();
+		assertThat(filter.withoutWindow().window()).isEqualTo(EventFilter.Window.ALL);
 	}
 
 	@Test

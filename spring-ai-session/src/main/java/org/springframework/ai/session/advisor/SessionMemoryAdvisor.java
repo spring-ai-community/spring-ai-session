@@ -90,6 +90,9 @@ import org.springframework.util.Assert;
  * <li>Records every model call's token usage as a
  * {@link org.springframework.ai.session.EventType#USAGE} event; see
  * {@link Builder#recordUsage(boolean)}.</li>
+ * <li>Names the events it stored on the request and response context
+ * ({@link #REQUEST_EVENT_ID_CONTEXT_KEY}, {@link #RESPONSE_EVENT_IDS_CONTEXT_KEY}), so a
+ * caller can correlate what it sent and received with the log.</li>
  * </ol>
  *
  * <p>
@@ -174,6 +177,22 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	 * {@code .advisors(a -> a.param(SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, EventFilter.lastN(10)))}
 	 */
 	public static final String EVENT_FILTER_CONTEXT_KEY = "chat_memory_event_filter_id";
+
+	/**
+	 * Context key the advisor sets on the request it forwards, and so on the response: the
+	 * id of the event that stores the request's trailing user or tool message, or
+	 * {@code null} when none was stored. Lets a caller name the message it sent by the id
+	 * the log knows it by; inside a tool loop it is the current round's.
+	 */
+	public static final String REQUEST_EVENT_ID_CONTEXT_KEY = "chat_memory_request_event_id";
+
+	/**
+	 * Context key the advisor sets on the response: the ids of the events that store the
+	 * reply's assistant messages, in reply order, as a {@code List<String>}; empty when
+	 * none was stored. Inside a tool loop it is the current round's. A streamed reply's
+	 * chunks do not carry it; subscribe to the session for the stored events instead.
+	 */
+	public static final String RESPONSE_EVENT_IDS_CONTEXT_KEY = "chat_memory_response_event_ids";
 
 	private final SessionService sessionService;
 
@@ -295,7 +314,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		}
 		// A window (lastN or a page) may leave the stored system prompt outside the events
 		// read; it is configuration, so look it up on its own.
-		if (latestStoredSystem == null && (eventFilter.lastN() != null || eventFilter.pageSize() != null)) {
+		if (latestStoredSystem == null && !(eventFilter.window() instanceof EventFilter.Window.All)) {
 			latestStoredSystem = latestStoredSystemPrompt(sessionId);
 		}
 		SessionEvent sessionSystemPrompt = latestStoredSystem;
@@ -348,15 +367,20 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// stored, whatever the filter says: either half alone makes an unusable log. A
 		// request without one stores nothing.
 		Message userMessage = lastUserOrToolResponse(request.prompt().getInstructions());
+		String requestEventId = null;
 		if (userMessage != null && shouldPersistTrailing(userMessage, events, eventFilter, sessionId)) {
+			requestEventId = this.requestEventIdGenerator.generate(request, userMessage);
 			this.sessionService.appendEvent(SessionEvent.builder()
-				.id(this.requestEventIdGenerator.generate(request, userMessage))
+				.id(requestEventId)
 				.sessionId(sessionId)
 				.message(userMessage)
 				.build());
 		}
-
-		return request.mutate().prompt(request.prompt().mutate().messages(combined).build()).build();
+		// The forwarded request copies the context, so the id reaches the response too
+		return request.mutate()
+			.prompt(request.prompt().mutate().messages(combined).build())
+			.context(REQUEST_EVENT_ID_CONTEXT_KEY, requestEventId)
+			.build();
 	}
 
 	@Override
@@ -366,18 +390,21 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// 1. Append the assistant message(s) produced by the model, subject to the
 		// configured message filter. By default excludes messages that carry no
 		// content — blank text, no tool calls, and no media.
+		List<String> responseEventIds = new ArrayList<>();
 		if (response.chatResponse() != null) {
-			response.chatResponse()
-				.getResults()
-				.stream()
-				.map(g -> (Message) g.getOutput())
-				.filter(msg -> shouldPersist(msg, sessionId))
-				.forEach(msg -> this.sessionService.appendEvent(SessionEvent.builder()
-					.id(this.responseEventIdGenerator.generate(response, msg))
-					.sessionId(sessionId)
-					.message(msg)
-					.build()));
+			response.chatResponse().getResults().stream().map(g -> (Message) g.getOutput()).forEach(msg -> {
+				if (!shouldPersist(msg, sessionId)) {
+					return;
+				}
+				String eventId = this.responseEventIdGenerator.generate(response, msg);
+				this.sessionService
+					.appendEvent(SessionEvent.builder().id(eventId).sessionId(sessionId).message(msg).build());
+				responseEventIds.add(eventId);
+			});
 		}
+		ChatClientResponse named = response.mutate()
+			.context(RESPONSE_EVENT_IDS_CONTEXT_KEY, List.copyOf(responseEventIds))
+			.build();
 
 		// 1.1. Record the call's token usage. The id derives from the reply's first
 		// message, so a retried after() with a deterministic generator counts it once.
@@ -416,7 +443,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			}
 		}
 
-		return response;
+		return named;
 	}
 
 	@Override
@@ -598,7 +625,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	 */
 	private static @Nullable Boolean isAnsweringStoredToolCall(ToolResponseMessage response,
 			List<SessionEvent> events, EventFilter eventFilter) {
-		if (eventFilter.pageSize() != null || eventFilter.from() != null || eventFilter.to() != null
+		if (eventFilter.window() instanceof EventFilter.Window.Page || eventFilter.from() != null
+				|| eventFilter.to() != null
 				|| (eventFilter.messageTypes() != null && !eventFilter.messageTypes().contains(MessageType.ASSISTANT))) {
 			return null;
 		}
