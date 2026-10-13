@@ -20,14 +20,9 @@ import org.springframework.ai.agent.ExecutionContext;
 import org.springframework.ai.agent.model.ModelCallInterceptor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.session.Budget;
+import org.springframework.ai.session.BudgetGuard;
 import org.springframework.ai.session.BudgetPolicy;
-import org.springframework.ai.session.BudgetReachedException;
-import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionService;
-import org.springframework.ai.session.StopReason;
-import org.springframework.ai.session.TokenUsage;
-import org.springframework.util.Assert;
 
 /**
  * A token budget per session tree, checked before every model call of a run: once the
@@ -42,40 +37,16 @@ import org.springframework.util.Assert;
  */
 public final class BudgetFeature implements ModelCallInterceptor {
 
-	private final SessionService sessions;
-
-	private final BudgetPolicy policy;
+	private final BudgetGuard guard;
 
 	public BudgetFeature(SessionService sessions, BudgetPolicy policy) {
-		Assert.notNull(sessions, "sessions must not be null");
-		Assert.notNull(policy, "policy must not be null");
-		this.sessions = sessions;
-		this.policy = policy;
+		this.guard = new BudgetGuard(sessions, policy);
 	}
 
 	@Override
 	public ChatResponse aroundModelCall(Joinpoint jp, Prompt prompt, ExecutionContext context) {
-		String sessionId = context.getRunId().sessionId();
-		Session session = this.sessions.findById(sessionId);
-		if (session == null) {
-			return jp.proceed(prompt, context);
-		}
-		Session root = session.isRoot() ? session : this.sessions.findById(session.rootSessionId());
-		Budget budget = root != null ? this.policy.budgetFor(root) : null;
-		if (budget == null) {
-			return jp.proceed(prompt, context);
-		}
-		TokenUsage usage = this.sessions.aggregateUsage(root.id());
-		if (!budget.isReachedBy(usage)) {
-			return jp.proceed(prompt, context);
-		}
-		try {
-			this.sessions.endTurn(sessionId, StopReason.BUDGET_REACHED);
-		}
-		catch (IllegalStateException ignored) {
-			// no running turn to end: the feature that tracks it is not enabled
-		}
-		throw new BudgetReachedException(sessionId, usage, budget);
+		this.guard.check(context.getRunId().sessionId());
+		return jp.proceed(prompt, context);
 	}
 
 }

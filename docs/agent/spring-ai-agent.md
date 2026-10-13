@@ -43,7 +43,8 @@ agent.output("Which city did I mention?", new RunIdentification("trip-1", "run-2
 | A nested context (`Nodes.agent`, `AgentTools`) | A child session, `rootId/path`, created on the first event from that path, with the nested agent's node name as its agent and `inheritedMessages` in its metadata; `SHARED` contexts write to their parent's session |
 | What a nested agent receives and answers | `MESSAGE_SENT` and `MESSAGE_RECEIVED` markers on the parent |
 | `NodeStartedEvent`, `NodeCompletedEvent`, `NodeFailedEvent` | `NODE` events with the node, the phase, and the input or output as JSON |
-| `ModelCallStartedEvent`, `ModelCallCompletedEvent`, `ModelCallFailedEvent` | `MODEL_CALL` events, plus a `USAGE` event per completed call |
+| `ModelCallStartedEvent`, `ModelCallFailedEvent` | `MODEL_CALL` events with the phase |
+| `ModelCallCompletedEvent` | A `USAGE` event: the call's token usage, model, path and message count |
 | `ToolCallStartedEvent`, `ToolCallCompletedEvent`, `ToolCallFailedEvent` | `TOOL_CALL` events with the name, arguments, phase and result |
 | An application's own `AgentEvent` record | An event of type `AGENT.<CLASS_NAME>`, its fields as the payload |
 | `RunInterruptedEvent` (`Nodes.interrupt`) | An `INTERACTION` question and a turn parked with `REQUIRES_ACTION`; `resumeOutput(..)` on any agent instance records the answer and resumes |
@@ -81,7 +82,7 @@ and no message is stored twice. A run that completed and is run again with the s
 
 A run interrupted by `Nodes.interrupt(..)` or by the tool-confirmation gate parks its
 session: an `INTERACTION` event records where the question was asked and what it is, and
-the turn ends with `REQUIRES_ACTION` naming it. `SessionFeature.pendingInteraction(sessionId)`
+the turn ends with `REQUIRES_ACTION` naming it. `SessionService.pendingInteraction(sessionId)`
 returns the question a session waits on. `resumeOutput(input, runId, answer)` on any agent
 instance, with the checkpointer enabled, records the answer as an `INTERACTION` event and
 resumes the run where it stopped.
@@ -96,7 +97,7 @@ agent = ModelAwareGraphAgent.builder(Graphs.toolCallLoop(), chatModel)
     .enable(feature)
     .enable(new CheckpointerFeature(feature.checkpointer()))
     .enable(new BudgetFeature(sessionService, BudgetPolicy.fixed(Budget.ofTotalTokens(200_000))))
-    .enable(new ToolConfirmationFeature(sessionService, ToolConfirmationPolicy.forTools("bash")))
+    .enable(new ToolConfirmationFeature(ToolConfirmationPolicy.forTools("bash")))
     .build();
 ```
 
@@ -107,7 +108,8 @@ agent = ModelAwareGraphAgent.builder(Graphs.toolCallLoop(), chatModel)
 - `ToolConfirmationFeature` is a `ToolCallInterceptor`: a call the `ToolConfirmationPolicy`
   gates interrupts the run with a `PendingToolCall` as the question. Resume with a
   `ToolConfirmation`: an allowed call runs through the agent's own tools, a denied one
-  answers the model with its message; the decision is a `TOOL_CONFIRMATION` event.
+  answers the model with its message; the `SessionFeature` records the decision as the
+  answer to the question the run parked on.
 
 ---
 

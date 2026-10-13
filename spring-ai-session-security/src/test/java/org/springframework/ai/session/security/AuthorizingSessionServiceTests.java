@@ -28,6 +28,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.Interaction;
 import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
@@ -123,6 +124,10 @@ class AuthorizingSessionServiceTests {
 		assertThatThrownBy(() -> this.service.delete(id)).isInstanceOf(AccessDeniedException.class);
 		assertThatThrownBy(() -> this.service.subscribe(id)).isInstanceOf(AccessDeniedException.class);
 		assertThatThrownBy(() -> this.service.usage(id)).isInstanceOf(AccessDeniedException.class);
+		assertThatThrownBy(() -> this.service.pendingInteraction(id)).isInstanceOf(AccessDeniedException.class);
+		assertThatThrownBy(() -> this.service.park(id, new Interaction(Interaction.KIND_INTERRUPT, "", "?", null),
+				List.of())).isInstanceOf(AccessDeniedException.class);
+		assertThatThrownBy(() -> this.service.resume(id, "yes")).isInstanceOf(AccessDeniedException.class);
 		// The interface defaults route through the checked methods
 		assertThatThrownBy(() -> this.service.appendMessage(id, new UserMessage("intrusion")))
 			.isInstanceOf(AccessDeniedException.class);

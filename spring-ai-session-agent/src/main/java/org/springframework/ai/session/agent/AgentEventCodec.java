@@ -104,13 +104,8 @@ public final class AgentEventCodec {
 				payload.put(PAYLOAD_PHASE, "started");
 				payload.put("messages", started.prompt().getInstructions().size());
 			}
-			else if (event instanceof ModelCallCompletedEvent completed) {
-				payload.put(PAYLOAD_PHASE, "completed");
-				payload.put("messages", completed.prompt().getInstructions().size());
-				String model = completed.response().getMetadata().getModel();
-				if (model != null && !model.isBlank()) {
-					payload.put("model", model);
-				}
+			else if (event instanceof ModelCallCompletedEvent) {
+				return null; // a completed call is a USAGE event
 			}
 			else if (event instanceof ModelCallFailedEvent failed) {
 				payload.put(PAYLOAD_PHASE, "failed");

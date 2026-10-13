@@ -16,6 +16,12 @@
 
 package org.springframework.ai.session;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
 import org.jspecify.annotations.Nullable;
 
 import org.springframework.util.Assert;
@@ -49,6 +55,39 @@ public record ToolConfirmation(String toolCallId, boolean allowed, @Nullable Str
 	/** Denies the tool call; the model is told why, or the default message. */
 	public static ToolConfirmation deny(String toolCallId, @Nullable String denyMessage) {
 		return new ToolConfirmation(toolCallId, false, denyMessage);
+	}
+
+	/** The decisions as the answer of a {@link Interaction#KIND_TOOL_CONFIRMATION} question: one map per decision. */
+	public static List<Map<String, Object>> asAnswer(Collection<ToolConfirmation> decisions) {
+		List<Map<String, Object>> answer = new ArrayList<>();
+		for (ToolConfirmation decision : decisions) {
+			Map<String, Object> entry = new LinkedHashMap<>();
+			entry.put("toolCallId", decision.toolCallId());
+			entry.put("allowed", decision.allowed());
+			if (decision.denyMessage() != null) {
+				entry.put("denyMessage", decision.denyMessage());
+			}
+			answer.add(entry);
+		}
+		return answer;
+	}
+
+	/**
+	 * The decisions an answer holds, as {@link #asAnswer} wrote them and a store reads them
+	 * back; empty for an answer of another shape.
+	 */
+	public static List<ToolConfirmation> fromAnswer(@Nullable Object answer) {
+		List<ToolConfirmation> decisions = new ArrayList<>();
+		if (answer instanceof Collection<?> entries) {
+			for (Object entry : entries) {
+				if (entry instanceof Map<?, ?> map && map.get("toolCallId") != null) {
+					Object denyMessage = map.get("denyMessage");
+					decisions.add(new ToolConfirmation(String.valueOf(map.get("toolCallId")),
+							Boolean.TRUE.equals(map.get("allowed")), denyMessage != null ? String.valueOf(denyMessage) : null));
+				}
+			}
+		}
+		return decisions;
 	}
 
 	/** The message the model gets as the result of a denied call. */

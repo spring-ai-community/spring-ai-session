@@ -85,10 +85,9 @@ An event is appended once and never changed. Compaction does not flag it: it app
 | `MESSAGE` | A conversation message. The only type that takes part in prompt assembly and compaction | yes |
 | `STATUS` | A status change of the session: `RUNNING` when a turn starts, `IDLE` with a stop reason when it ends, `TERMINATED` on archive. `SessionStatusEvents` builds and reads them | no |
 | `INTERRUPT` | A caller interrupted the running turn: `SessionService.interrupt(id, reason)` records it and ends the turn with `INTERRUPTED`; `InterruptEvents` reads it | no |
-| `TOOL_CONFIRMATION` | A caller allowed or denied a tool call that was waiting for confirmation. `ToolConfirmationEvents` builds and reads them; see [Tool confirmation](#tool-confirmation) | no |
-| `USAGE` | Token usage of one model call. `UsageEvents` builds and reads them; `SessionService.usage` sums them; see [Usage and budget](#usage-and-budget) | no |
+| `USAGE` | One completed model call: its token usage, the model and, in an agent run, where it was made and how many messages it sent. `UsageEvents` builds and reads them; `SessionService.usage` sums them; see [Usage and budget](#usage-and-budget) | no |
 | `COMPACTION` | A compaction boundary: which earlier events are pinned, which summary events stand in for the covered ones, and which recent events are preserved. The newest one defines the active view. Its payload is a `CompactionBoundary` | no |
-| `INTERACTION` | A question a turn parked on (a human-in-the-loop interrupt, the general form of a tool confirmation), or its answer. `InteractionEvents` builds and reads them; the turn ends with `REQUIRES_ACTION` naming the question | no |
+| `INTERACTION` | A question a turn parked on, of a kind (`toolConfirmation`, `interrupt`, or an application's own), or its answer. `InteractionEvents` builds and reads them; `SessionService.park` records one and ends the turn with `REQUIRES_ACTION` naming it, `resume` records the answer and starts the turn | no |
 | `MODEL_CALL`, `TOOL_CALL`, `NODE`, `CHECKPOINT` | The steps of an agent runtime's run: a model call, a tool call, a graph node, a point to resume from. Reserved names for the spring-ai-agent integration; the session core defines no producer | no |
 | `CHILD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED` | The lifecycle of a delegated child session and the messages exchanged with it. The payload names the child; the two message markers also carry the message that crossed the boundary, as a user message (the task) or an assistant message (the answer). Only `MESSAGE` events start turns and enter the prompt, but text searches find a marker's message | no |
 
@@ -580,14 +579,15 @@ any member runs a turn, otherwise the root's own status.
 ### Interactions: a parked turn, in general
 
 The tool-confirmation gate below is one kind of **interaction**: a question the turn parks
-on, answered later, possibly on another node. `InteractionEvents.required(sessionId,
-interaction)` records the question (where in the run it was asked, the question as JSON, the
-type of the answer), `endTurn(id, REQUIRES_ACTION, [thatEventId])` parks the turn naming it,
-and `InteractionEvents.answered(sessionId, requiredEventId, value)` records the answer before
-the turn starts again; `InteractionEvents.pending(events)` finds the question a session waits
-on. The tool-confirmation gate records one too, with the gated calls as the question and the
-decisions as the answer, next to its `TOOL_CONFIRMATION` events, so every parked turn reads the
-same way in the log whichever integration parked it.
+on, answered later, possibly on another node. `park(id, interaction, relatedEventIds)` records
+the question (its kind, where in the run it was asked, the question as JSON, the type of the
+answer) and ends the turn with `REQUIRES_ACTION` naming the related events and the question;
+`pendingInteraction(id)` finds the question a session waits on; `resume(id, runId, answer)`
+starts the turn, its compare-and-set making the resumption exclusive, and records the answer.
+The tool-confirmation gate and the agent runtime's interrupts both go through these two calls,
+so every parked turn reads the same way in the log whichever integration parked it: for a tool
+confirmation the question's kind is `toolConfirmation`, its payload the gated calls, and the
+answer the decisions (`ToolConfirmation.asAnswer` and `fromAnswer`).
 
 ### Tool confirmation
 
@@ -602,8 +602,8 @@ another node, because everything needed is in the log.
 
 The decision is a `ToolConfirmation`: `ToolConfirmation.allow(toolCallId)` or
 `ToolConfirmation.deny(toolCallId, "why")`. The next request on the session carries one per
-pending call and no new user text. `ToolConfirmationAdvisor` resumes the turn, records each
-decision as a `TOOL_CONFIRMATION` event, runs the allowed calls with the tools the request
+pending call and no new user text. `ToolConfirmationAdvisor` resumes the turn, records the
+decisions as the answer, runs the allowed calls with the tools the request
 carries, answers the denied ones with their deny message (or
 `ToolConfirmation.DEFAULT_DENY_MESSAGE`) and puts the tool results in front of the prompt;
 `SessionMemoryAdvisor` stores them like any tool result, and the model continues where the
@@ -626,7 +626,7 @@ sequenceDiagram
     Gate-->>App: reply with the pending tool call
     Note over App: shows the call, waits for a person
     App->>Gate: ToolConfirmation.allow(callId)
-    Gate->>Log: STATUS RUNNING, TOOL_CONFIRMATION allow
+    Gate->>Log: STATUS RUNNING, INTERACTION answered
     Gate->>Gate: runs bash with the request's tools
     Gate->>SMA: prompt: [tool result]
     SMA->>Log: tool result

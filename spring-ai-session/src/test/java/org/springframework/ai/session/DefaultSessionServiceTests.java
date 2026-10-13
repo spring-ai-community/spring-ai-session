@@ -953,4 +953,39 @@ class DefaultSessionServiceTests {
 		assertThatIllegalArgumentException().isThrownBy(() -> this.service.interrupt("missing"));
 	}
 
+	@Test
+	void aTurnParksOnAQuestionAndResumesWithItsAnswer() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		this.service.startTurn(session.id(), "run-1");
+		this.service.appendMessage(session.id(), new UserMessage("hi"));
+		String replyId = this.service.getEvents(session.id(), EventFilter.active()).get(0).getId();
+
+		SessionEvent question = this.service.park(session.id(),
+				new Interaction(Interaction.KIND_INTERRUPT, "approve/", "Publish?", null), List.of(replyId));
+
+		Session parked = this.service.findById(session.id());
+		assertThat(parked.stopReason()).isEqualTo(StopReason.REQUIRES_ACTION);
+		List<SessionEvent> log = this.service.getEvents(session.id());
+		assertThat(SessionStatusEvents.eventIds(log.get(log.size() - 1))).containsExactly(replyId, question.getId());
+		assertThat(this.service.pendingInteraction(session.id())).isNotNull();
+		assertThat(this.service.pendingInteraction(session.id()).getId()).isEqualTo(question.getId());
+		// Parking needs a running turn and writes nothing otherwise
+		assertThatIllegalStateException().isThrownBy(() -> this.service.park(session.id(),
+				new Interaction(Interaction.KIND_INTERRUPT, "", "again?", null), List.of()));
+		assertThat(this.service.getEvents(session.id())).hasSameSizeAs(log);
+
+		Session resumed = this.service.resume(session.id(), "run-1", Map.of("approved", true));
+
+		assertThat(resumed.status()).isEqualTo(SessionStatus.RUNNING);
+		assertThat(this.service.pendingInteraction(session.id())).isNull();
+		List<SessionEvent> interactions = this.service.getEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).build());
+		assertThat(InteractionEvents.answer(interactions.get(1))).isEqualTo(Map.of("approved", true));
+		// A session that is not parked resumes as a plain turn, recording nothing
+		this.service.endTurn(session.id(), StopReason.END_TURN);
+		this.service.resume(session.id(), "run-2", "ignored");
+		assertThat(this.service.getEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).build())).hasSize(2);
+	}
+
 }

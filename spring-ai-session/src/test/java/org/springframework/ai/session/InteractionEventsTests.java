@@ -33,15 +33,16 @@ class InteractionEventsTests {
 	@Test
 	void aQuestionAndItsAnswerRoundTrip() {
 		SessionEvent required = InteractionEvents.required("s",
-				new Interaction("approve/", Map.of("question", "Publish?"), "com.acme.Approval"));
+				new Interaction(Interaction.KIND_INTERRUPT, "approve/", Map.of("question", "Publish?"), "com.acme.Approval"));
 		SessionEvent answered = InteractionEvents.answered("s", required.getId(), Map.of("approved", true));
 		SessionEvent plain = SessionEvent.builder().sessionId("s").type(EventType.STATUS).build();
 
 		assertThat(required.getType()).isEqualTo(EventType.INTERACTION);
+		assertThat(InteractionEvents.interaction(required).kind()).isEqualTo(Interaction.KIND_INTERRUPT);
 		assertThat(InteractionEvents.isRequired(required)).isTrue();
 		assertThat(InteractionEvents.isAnswered(required)).isFalse();
 		assertThat(InteractionEvents.interaction(required))
-			.isEqualTo(new Interaction("approve/", Map.of("question", "Publish?"), "com.acme.Approval"));
+			.isEqualTo(new Interaction(Interaction.KIND_INTERRUPT, "approve/", Map.of("question", "Publish?"), "com.acme.Approval"));
 		assertThat(InteractionEvents.isAnswered(answered)).isTrue();
 		assertThat(InteractionEvents.requiredEventId(answered)).isEqualTo(required.getId());
 		assertThat(InteractionEvents.answer(answered)).isEqualTo(Map.of("approved", true));
@@ -57,7 +58,7 @@ class InteractionEventsTests {
 			.build();
 		Session session = service.create(CreateSessionRequest.builder().build());
 		service.startTurn(session.id(), "run-1");
-		SessionEvent question = InteractionEvents.required(session.id(), new Interaction("approve/", "Publish?", null));
+		SessionEvent question = InteractionEvents.required(session.id(), new Interaction(Interaction.KIND_INTERRUPT, "approve/", "Publish?", null));
 		service.appendEvent(question);
 		service.endTurn(session.id(), StopReason.REQUIRES_ACTION, List.of(question.getId()));
 
@@ -76,8 +77,8 @@ class InteractionEventsTests {
 
 	@Test
 	void thePendingQuestionIsTheNewestWithoutAnAnswer() {
-		SessionEvent first = InteractionEvents.required("s", new Interaction("a", "one?", null));
-		SessionEvent second = InteractionEvents.required("s", new Interaction("b", "two?", null));
+		SessionEvent first = InteractionEvents.required("s", new Interaction(Interaction.KIND_INTERRUPT, "a", "one?", null));
+		SessionEvent second = InteractionEvents.required("s", new Interaction(Interaction.KIND_INTERRUPT, "b", "two?", null));
 
 		assertThat(InteractionEvents.pending(List.of())).isNull();
 		assertThat(InteractionEvents.pending(List.of(first))).isSameAs(first);

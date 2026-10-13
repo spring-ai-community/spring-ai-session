@@ -19,8 +19,6 @@ package org.springframework.ai.session.advisor;
 import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -29,13 +27,9 @@ import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
-import org.springframework.ai.session.Session;
-import org.springframework.ai.session.BudgetReachedException;
+import org.springframework.ai.session.BudgetGuard;
 import org.springframework.ai.session.BudgetPolicy;
-import org.springframework.ai.session.Budget;
 import org.springframework.ai.session.SessionService;
-import org.springframework.ai.session.StopReason;
-import org.springframework.ai.session.TokenUsage;
 import org.springframework.core.Ordered;
 import org.springframework.util.Assert;
 
@@ -61,17 +55,12 @@ public final class BudgetAdvisor implements BaseAdvisor {
 	/** Inside the memory advisor's default ({@code HIGHEST_PRECEDENCE + 1000}). */
 	public static final int DEFAULT_ORDER = Ordered.HIGHEST_PRECEDENCE + 1100;
 
-	private static final Logger logger = LoggerFactory.getLogger(BudgetAdvisor.class);
-
-	private final SessionService sessionService;
-
-	private final BudgetPolicy policy;
+	private final BudgetGuard guard;
 
 	private final int order;
 
 	private BudgetAdvisor(SessionService sessionService, BudgetPolicy policy, int order) {
-		this.sessionService = sessionService;
-		this.policy = policy;
+		this.guard = new BudgetGuard(sessionService, policy);
 		this.order = order;
 	}
 
@@ -86,25 +75,8 @@ public final class BudgetAdvisor implements BaseAdvisor {
 
 	@Override
 	public ChatClientRequest before(ChatClientRequest request, AdvisorChain advisorChain) {
-		String sessionId = getSessionId(request.context());
-		Session session = this.sessionService.findById(sessionId);
-		Session root = session.isRoot() ? session : this.sessionService.findById(session.rootSessionId());
-		Budget budget = this.policy.budgetFor(root);
-		if (budget == null) {
-			return request;
-		}
-		TokenUsage usage = this.sessionService.aggregateUsage(root.id());
-		if (!budget.isReachedBy(usage)) {
-			return request;
-		}
-		try {
-			this.sessionService.endTurn(sessionId, StopReason.BUDGET_REACHED);
-		}
-		catch (IllegalStateException ex) {
-			logger.warn("Session [{}] reached its budget but no running turn could be ended: {}", sessionId,
-					ex.getMessage());
-		}
-		throw new BudgetReachedException(sessionId, usage, budget);
+		this.guard.check(getSessionId(request.context()));
+		return request;
 	}
 
 	@Override

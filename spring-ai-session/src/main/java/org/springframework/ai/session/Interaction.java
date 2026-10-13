@@ -21,11 +21,14 @@ import org.jspecify.annotations.Nullable;
 import org.springframework.util.Assert;
 
 /**
- * A question a turn parked on: where in the run it was asked, what was asked, and the
- * type of the answer that resumes the run. The counterpart of an agent runtime's
- * interrupt, and the general form of a tool confirmation. Recorded with
- * {@link InteractionEvents}.
+ * A question a turn parked on: what kind of question, where in the run it was asked, what
+ * was asked, and the type of the answer that resumes the run. The counterpart of an agent
+ * runtime's interrupt; a tool confirmation is one kind. Recorded with
+ * {@link InteractionEvents}, parked with {@link SessionService#park} and answered with
+ * {@link SessionService#resume}.
  *
+ * @param kind what kind of question: {@link #KIND_TOOL_CONFIRMATION}, {@link #KIND_INTERRUPT},
+ * or an application's own
  * @param path the place in the run the question came from, like a node's path; empty for
  * the run itself
  * @param payload the question, as the runtime raised it; stored as JSON, so a value read
@@ -35,9 +38,16 @@ import org.springframework.util.Assert;
  * @author Christian Tzolov
  * @since 0.11.0
  */
-public record Interaction(String path, @Nullable Object payload, @Nullable String resumeType) {
+public record Interaction(String kind, String path, @Nullable Object payload, @Nullable String resumeType) {
+
+	/** A tool call that waits for a caller's {@link ToolConfirmation}; the payload names the calls. */
+	public static final String KIND_TOOL_CONFIRMATION = "toolConfirmation";
+
+	/** A runtime's interrupt node asking a human; the payload is its question. */
+	public static final String KIND_INTERRUPT = "interrupt";
 
 	public Interaction {
+		Assert.hasText(kind, "kind must not be null or empty");
 		Assert.notNull(path, "path must not be null");
 	}
 

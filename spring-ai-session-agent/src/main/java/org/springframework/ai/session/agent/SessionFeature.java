@@ -53,7 +53,6 @@ import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Interaction;
-import org.springframework.ai.session.InteractionEvents;
 import org.springframework.ai.session.InterruptEvents;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
@@ -63,6 +62,7 @@ import org.springframework.ai.session.SessionStatusEvents;
 import org.springframework.ai.session.SessionTreeEvents;
 import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.TokenUsage;
+import org.springframework.ai.session.ToolConfirmation;
 import org.springframework.ai.session.UsageEvents;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -161,11 +161,17 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 			}
 			else {
 				endAbandonedAttempt(session, runId);
-				recordAnswer(session, context);
 				context.getConversation().reset(this.sessions.getActiveMessages(sessionId));
 				state.stored.putIfAbsent("", 0);
 			}
-			this.sessions.startTurn(sessionId, runId.runId());
+			Object answer = resumeValue(context);
+			if (answer != null && session != null && session.stopReason() == StopReason.REQUIRES_ACTION) {
+				// Resumed with an answer to the question the session parked on: record it
+				this.sessions.resume(sessionId, runId.runId(), encodeAnswer(answer));
+			}
+			else {
+				this.sessions.startTurn(sessionId, runId.runId());
+			}
 		}
 		catch (RuntimeException ex) {
 			// The run cannot start (another run holds the session, or the session is archived):
@@ -191,27 +197,23 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 		return !newest.isEmpty() && runId.runId().equals(SessionStatusEvents.runId(newest.get(0)));
 	}
 
-	/** A run resumed with a value answers the question the session parked on. */
-	private void recordAnswer(Session session, ExecutionContext context) {
-		if (session.stopReason() != StopReason.REQUIRES_ACTION) {
-			return;
+	/** An answer as the log stores it: decisions in the shape every integration writes, anything else as JSON. */
+	private Object encodeAnswer(Object answer) {
+		if (answer instanceof ToolConfirmation decision) {
+			return ToolConfirmation.asAnswer(List.of(decision));
 		}
-		Object value = context.consumeResumeValue(ANY);
-		context.setResumeValue(value);
-		if (value == null) {
-			return;
+		if (answer instanceof java.util.Collection<?> decisions
+				&& decisions.stream().allMatch(ToolConfirmation.class::isInstance)) {
+			return ToolConfirmation.asAnswer(decisions.stream().map(ToolConfirmation.class::cast).toList());
 		}
-		SessionEvent pending = pendingInteraction(session.id());
-		if (pending != null) {
-			this.sessions.appendEvent(InteractionEvents.answered(session.id(), pending.getId(),
-					this.jsonMapper.convertValue(value, Object.class)));
-		}
+		return this.jsonMapper.convertValue(answer, Object.class);
 	}
 
-	/** The newest question of the session that has no answer yet, or {@code null}. */
-	public @Nullable SessionEvent pendingInteraction(String sessionId) {
-		return InteractionEvents.pending(this.sessions.getEvents(sessionId,
-				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).build()));
+	/** The value the run was resumed with, left in place: the runtime offers no non-consuming read. */
+	private static @Nullable Object resumeValue(ExecutionContext context) {
+		Object value = context.consumeResumeValue(ANY);
+		context.setResumeValue(value);
+		return value;
 	}
 
 	@Override
@@ -241,14 +243,26 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 
 	@Override
 	public void onRunInterrupted(RunInterruptedEvent event, ExecutionContext context) {
-		RunState state = this.runs.get(key(context.getRunId()));
+		RunIdentification runId = context.getRunId();
+		RunState state = this.runs.remove(key(runId));
 		if (state == null) {
 			return;
 		}
-		SessionEvent required = InteractionEvents.required(state.root(),
-				new Interaction(event.path(), this.jsonMapper.convertValue(event.payload(), Object.class), null));
-		this.sessions.appendEvent(required);
-		endRun(context, StopReason.REQUIRES_ACTION, List.of(required.getId()), null);
+		String root = state.root();
+		if (!ownsTurn(root, runId)) {
+			logger.warn("Run [{}] does not hold the turn of session [{}]; leaving it as it is", runId.runId(), root);
+			return;
+		}
+		String kind = (event.payload() instanceof ToolConfirmationFeature.PendingToolCall)
+				? Interaction.KIND_TOOL_CONFIRMATION : Interaction.KIND_INTERRUPT;
+		Interaction question = new Interaction(kind, event.path(),
+				this.jsonMapper.convertValue(event.payload(), Object.class), null);
+		try {
+			this.sessions.park(root, question, List.of());
+		}
+		catch (IllegalStateException ex) {
+			logger.warn("The turn of session [{}] was already ended: {}", root, ex.getMessage());
+		}
 	}
 
 	/**
@@ -341,10 +355,10 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 			syncNested(context, state, sessionId);
 		}
 		if (event instanceof ModelCallCompletedEvent completed) {
-			TokenUsage usage = TokenUsage.of(completed.response().getMetadata().getUsage());
-			if (!usage.isEmpty()) {
-				this.sessions.appendEvent(UsageEvents.of(sessionId, usage, completed.response().getMetadata().getModel()));
-			}
+			// A completed model call is a USAGE event: its counts, model, place and size
+			this.sessions.appendEvent(UsageEvents.of(sessionId, TokenUsage.of(completed.response().getMetadata().getUsage()),
+					completed.response().getMetadata().getModel(), event.path(),
+					completed.prompt().getInstructions().size()));
 		}
 		SessionEvent encoded = this.codec.encode(sessionId, event);
 		if (encoded != null) {

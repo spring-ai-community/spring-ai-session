@@ -1104,7 +1104,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 		Session session = newSession("user-interaction");
 		append(session.id(), user("u1"));
 		SessionEvent question = InteractionEvents.required(session.id(),
-				new Interaction("approve/", Map.of("question", "Publish?", "draft", 3), "com.acme.Approval"));
+				new Interaction(Interaction.KIND_INTERRUPT, "approve/", Map.of("question", "Publish?", "draft", 3), "com.acme.Approval"));
 		this.repository.appendEvent(question);
 		this.repository.appendEvent(InteractionEvents.answered(session.id(), question.getId(), Map.of("approved", true)));
 
@@ -1113,6 +1113,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 		assertThat(stored).hasSize(2);
 		Interaction asked = InteractionEvents.interaction(stored.get(0));
 		assertThat(asked).isNotNull();
+		assertThat(asked.kind()).isEqualTo(Interaction.KIND_INTERRUPT);
 		assertThat(asked.path()).isEqualTo("approve/");
 		assertThat(asked.resumeType()).isEqualTo("com.acme.Approval");
 		// The question comes back as JSON data: a map with its scalars

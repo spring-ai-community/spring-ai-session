@@ -50,7 +50,6 @@ import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.SessionStatusEvents;
 import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.ToolConfirmation;
-import org.springframework.ai.session.ToolConfirmationEvents;
 import org.springframework.ai.session.ToolConfirmationPolicy;
 import org.springframework.ai.tool.annotation.Tool;
 
@@ -132,9 +131,13 @@ class InteractionAndPolicyTests {
 
 		assertThat(answer).isEqualTo("It is sunny in Paris");
 		assertThat(calls).hasValue(1);
-		assertThat(this.sessions.getEvents("w-1", EventFilter.builder().eventTypes(Set.of(EventType.TOOL_CONFIRMATION)).build()))
-			.singleElement()
-			.satisfies(e -> assertThat(ToolConfirmationEvents.confirmation(e)).isEqualTo(ToolConfirmation.allow("getWeather")));
+		// The decision answers the question the run parked on, a tool confirmation
+		List<SessionEvent> interactions = this.sessions.getEvents("w-1",
+				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).build());
+		assertThat(interactions).hasSize(2);
+		assertThat(InteractionEvents.interaction(interactions.get(0)).kind()).isEqualTo(Interaction.KIND_TOOL_CONFIRMATION);
+		assertThat(ToolConfirmation.fromAnswer(InteractionEvents.answer(interactions.get(1))))
+			.containsExactly(ToolConfirmation.allow("getWeather"));
 		// The gated attempt reads as a started then failed call (the interruption unwinds the
 		// tool call), the confirmed one as started then completed
 		assertThat(this.sessions.getEvents("w-1", EventFilter.builder().eventTypes(Set.of(EventType.TOOL_CALL)).build()))
@@ -168,7 +171,7 @@ class InteractionAndPolicyTests {
 			.tools(new WeatherTools(calls))
 			.enable(feature)
 			.enable(new CheckpointerFeature(feature.checkpointer()))
-			.enable(new ToolConfirmationFeature(this.sessions, ToolConfirmationPolicy.forTools("getWeather")))
+			.enable(new ToolConfirmationFeature(ToolConfirmationPolicy.forTools("getWeather")))
 			.build();
 	}
 

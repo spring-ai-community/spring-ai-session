@@ -50,11 +50,26 @@ public final class UsageEvents {
 	/** Payload key: the model that served the call, when known. */
 	public static final String PAYLOAD_MODEL = "model";
 
+	/** Payload key: the place in an agent run the call was made from, when known. */
+	public static final String PAYLOAD_PATH = "path";
+
+	/** Payload key: how many messages the call sent, when known. */
+	public static final String PAYLOAD_MESSAGES = "messages";
+
 	private UsageEvents() {
 	}
 
 	/** The event that records one model call's usage. */
 	public static SessionEvent of(String sessionId, TokenUsage usage, @Nullable String model) {
+		return of(sessionId, usage, model, null, null);
+	}
+
+	/**
+	 * The event that records one completed model call of an agent run: its usage, the model,
+	 * where in the run it was made and how many messages it sent.
+	 */
+	public static SessionEvent of(String sessionId, TokenUsage usage, @Nullable String model, @Nullable String path,
+			@Nullable Integer messages) {
 		Assert.notNull(usage, "usage must not be null");
 		SessionEvent.Builder event = SessionEvent.builder()
 			.sessionId(sessionId)
@@ -70,6 +85,12 @@ public final class UsageEvents {
 		}
 		if (model != null && !model.isBlank()) {
 			event.payload(PAYLOAD_MODEL, model);
+		}
+		if (path != null) {
+			event.payload(PAYLOAD_PATH, path);
+		}
+		if (messages != null) {
+			event.payload(PAYLOAD_MESSAGES, messages);
 		}
 		return event.build();
 	}

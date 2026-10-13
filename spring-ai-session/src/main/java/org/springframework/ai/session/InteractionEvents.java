@@ -36,6 +36,9 @@ public final class InteractionEvents {
 	/** Payload key: {@value #PHASE_REQUIRED} or {@value #PHASE_ANSWERED}. */
 	public static final String PAYLOAD_PHASE = "phase";
 
+	/** Payload key: what kind of question, see {@link Interaction#kind()}. */
+	public static final String PAYLOAD_KIND = "kind";
+
 	/** Payload key: the place in the run the question came from. */
 	public static final String PAYLOAD_PATH = "path";
 
@@ -64,6 +67,7 @@ public final class InteractionEvents {
 			.sessionId(sessionId)
 			.type(EventType.INTERACTION)
 			.payload(PAYLOAD_PHASE, PHASE_REQUIRED)
+			.payload(PAYLOAD_KIND, interaction.kind())
 			.payload(PAYLOAD_PATH, interaction.path());
 		if (interaction.payload() != null) {
 			event.payload(PAYLOAD_VALUE, interaction.payload());
@@ -126,9 +130,11 @@ public final class InteractionEvents {
 		if (!isRequired(event)) {
 			return null;
 		}
+		Object kind = event.getPayload().get(PAYLOAD_KIND);
 		Object path = event.getPayload().get(PAYLOAD_PATH);
 		Object resumeType = event.getPayload().get(PAYLOAD_RESUME_TYPE);
-		return new Interaction(path != null ? String.valueOf(path) : "", event.getPayload().get(PAYLOAD_VALUE),
+		return new Interaction(kind != null ? String.valueOf(kind) : Interaction.KIND_INTERRUPT,
+				path != null ? String.valueOf(path) : "", event.getPayload().get(PAYLOAD_VALUE),
 				resumeType != null ? String.valueOf(resumeType) : null);
 	}
 

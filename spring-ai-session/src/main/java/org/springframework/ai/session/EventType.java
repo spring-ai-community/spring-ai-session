@@ -51,9 +51,6 @@ public final class EventType {
 	/** A caller interrupted the running turn. */
 	public static final EventType INTERRUPT = of("INTERRUPT");
 
-	/** A caller allowed or denied a tool call that was waiting for confirmation. */
-	public static final EventType TOOL_CONFIRMATION = of("TOOL_CONFIRMATION");
-
 	/** Token usage of a model call. */
 	public static final EventType USAGE = of("USAGE");
 

@@ -53,6 +53,7 @@ import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.SessionStatusEvents;
 import org.springframework.ai.session.SessionTreeEvents;
 import org.springframework.ai.session.StopReason;
+import org.springframework.ai.session.UsageEvents;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.compaction.TurnCountTrigger;
 
@@ -102,6 +103,12 @@ class SessionFeatureTests {
 		assertThat(this.sessions.usage("trip-1").totalTokens()).isEqualTo(220);
 		assertThat(this.sessions.getEvents("trip-1")).extracting(SessionEvent::getType)
 			.contains(EventType.NODE, EventType.MODEL_CALL, EventType.USAGE);
+		// A completed model call is one USAGE event, with where and how big it was
+		SessionEvent usage = this.sessions.getEvents("trip-1", EventFilter.builder().eventTypes(Set.of(EventType.USAGE)).build()).get(0);
+		assertThat(usage.getPayload()).containsEntry(UsageEvents.PAYLOAD_PATH, "").containsEntry(UsageEvents.PAYLOAD_MESSAGES, 1);
+		assertThat(this.sessions.getEvents("trip-1", EventFilter.builder().eventTypes(Set.of(EventType.MODEL_CALL)).build()))
+			.extracting(e -> e.getPayload().get(AgentEventCodec.PAYLOAD_PHASE))
+			.containsOnly("started");
 		// Another session starts empty
 		agent.output("Which city did I mention?", "trip-2");
 		assertThat(texts(chatModel.lastPrompt().getInstructions())).containsExactly("Which city did I mention?");

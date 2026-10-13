@@ -13,8 +13,8 @@ and align your application's Spring AI BOM version accordingly.
 ### Breaking: `SessionEvent` has a type, and not every event is a message
 
 `SessionEvent` gains `getType()` (an `EventType`: `MESSAGE`, `STATUS`, `INTERRUPT`,
-`TOOL_CONFIRMATION`, `USAGE`, `COMPACTION`, `CHILD_CREATED`, `MESSAGE_SENT`,
-`MESSAGE_RECEIVED`), `hasMessage()` and `getPayload()`. A builder without `type(...)` still
+`INTERACTION`, `USAGE`, `COMPACTION`, `CHILD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED`,
+and the agent types), `hasMessage()` and `getPayload()`. A builder without `type(...)` still
 builds a `MESSAGE` event, so existing code that creates events is unchanged. What changes
 is reading: `getMessage()` and `getMessageType()` throw `IllegalStateException` for an event
 that is not a message. Code that iterates `getEvents(sessionId)` (which is
@@ -210,8 +210,9 @@ before reads as an idle root (see the schema section below).
 between the tool-calling advisor and `SessionMemoryAdvisor` parks a turn whose reply asks
 for such a call (`endTurn(id, REQUIRES_ACTION, eventIds)` naming the assistant event) and
 resumes it on the next request, whose `TOOL_CONFIRMATION_CONTEXT_KEY` carries a
-`ToolConfirmation` per pending call: a `TOOL_CONFIRMATION` event each, the allowed calls run
-with the request's tools, the denied ones get their message, and the model continues.
+`ToolConfirmation` per pending call: the decisions are recorded as the answer to the parked
+question, the allowed calls run with the request's tools, the denied ones get their message,
+and the model continues.
 `SessionService.endTurn(id, stopReason, eventIds)` and `SessionStatusEvents.eventIds(event)`
 are new; `endTurn(id, stopReason)` is now a default method. Nothing changes without the
 advisor. See [Tool confirmation](chat-client/chat-client.md#tool-confirmation).
@@ -265,10 +266,22 @@ them, which is not supported.
 
 `SessionService.interrupt(id, reason)` records an `INTERRUPT` event (`InterruptEvents`) and
 ends the running turn with `INTERRUPTED`; it is the first-class form of the manual
-`endTurn(id, INTERRUPTED)`. `InteractionEvents.pending(events)` finds the question a session
-waits on. The tool-confirmation gate records its parked turn as an `INTERACTION` question and
-answer next to its `TOOL_CONFIRMATION` events, and the status event that parks the turn names
-the reply with the calls and the question.
+`endTurn(id, INTERRUPTED)`. The parked turn is a service protocol: `park(id, interaction,
+relatedEventIds)` records the question and ends the turn with `REQUIRES_ACTION` naming the
+related events and the question, `pendingInteraction(id)` finds it, and `resume(id, runId,
+answer)` starts the turn and records the answer. The tool-confirmation gate, the agent
+runtime's interrupts and the agent's tool gate all go through them. `Interaction` has a
+`kind` (`toolConfirmation`, `interrupt`, or your own). `BudgetGuard` is the budget check both
+`BudgetAdvisor` and `BudgetFeature` run.
+
+### Breaking: `TOOL_CONFIRMATION` is an `INTERACTION`, `USAGE` is the completed model call
+
+`EventType.TOOL_CONFIRMATION` and `ToolConfirmationEvents` are gone: a tool confirmation is an
+`INTERACTION` question of kind `toolConfirmation` whose answer is the decisions, written and
+read with `ToolConfirmation.asAnswer` and `fromAnswer`. In an agent run, a completed model
+call is one `USAGE` event carrying the model, the path and the message count; `MODEL_CALL`
+events record the `started` and `failed` phases only. `ToolConfirmationFeature` takes the
+policy alone.
 
 ### New: `spring-ai-session-agent`
 

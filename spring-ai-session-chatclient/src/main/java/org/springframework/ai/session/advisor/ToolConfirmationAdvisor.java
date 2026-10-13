@@ -49,7 +49,6 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Interaction;
-import org.springframework.ai.session.InteractionEvents;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.ToolConfirmationPolicy;
 import org.springframework.ai.session.EventType;
@@ -58,7 +57,6 @@ import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.ToolConfirmation;
-import org.springframework.ai.session.ToolConfirmationEvents;
 import org.springframework.core.Ordered;
 import org.springframework.util.Assert;
 
@@ -174,14 +172,12 @@ public final class ToolConfirmationAdvisor implements BaseAdvisor {
 					+ "the confirmed tool calls of session '" + sessionId + "'");
 		}
 
-		// The compare-and-set makes the resumption exclusive: a second request with the
-		// same decisions fails here instead of running the tool twice.
-		this.sessionService.startTurn(sessionId);
+		// The resumption starts the turn, its compare-and-set making it exclusive (a second
+		// request with the same decisions fails instead of running the tool twice), and
+		// records the decisions as the answer to the question the turn parked on
+		this.sessionService.resume(sessionId, null, ToolConfirmation.asAnswer(decisions.values()));
 		ToolResponseMessage results;
 		try {
-			decisions.values()
-				.forEach(decision -> this.sessionService.appendEvent(ToolConfirmationEvents.of(sessionId, decision)));
-			answerInteraction(sessionId, decisions);
 			results = answer(pending, decisions, allowed, request.prompt().getOptions());
 		}
 		catch (RuntimeException ex) {
@@ -211,10 +207,7 @@ public final class ToolConfirmationAdvisor implements BaseAdvisor {
 					+ "call is not the newest message in the log; is this advisor ordered inside the memory advisor?",
 					sessionId);
 		}
-		// The question the turn parks on, as any interaction: the calls that need a decision.
-		// It is written before the park, since the status event names it; on the one path
-		// where the park is tolerated to fail (interrupted by hand, below) it stays in the
-		// log without a parked turn, and the next successful resume answers it
+		// The question the turn parks on: the calls that need a decision
 		List<Map<String, Object>> pendingCalls = new ArrayList<>();
 		chatResponse.getResults().stream().filter(g -> g.getOutput().hasToolCalls()).forEach(g -> g.getOutput()
 			.getToolCalls()
@@ -222,12 +215,10 @@ public final class ToolConfirmationAdvisor implements BaseAdvisor {
 			.filter(this.policy::requiresConfirmation)
 			.forEach(call -> pendingCalls.add(Map.of("id", call.id(), "name", call.name(), "arguments",
 					call.arguments() != null ? call.arguments() : ""))));
-		SessionEvent question = InteractionEvents.required(sessionId,
-				new Interaction("", Map.of("toolCalls", pendingCalls), ToolConfirmation.class.getName()));
-		this.sessionService.appendEvent(question);
-		eventIds.add(question.getId());
+		Interaction question = new Interaction(Interaction.KIND_TOOL_CONFIRMATION, "", Map.of("toolCalls", pendingCalls),
+				ToolConfirmation.class.getName());
 		try {
-			this.sessionService.endTurn(sessionId, StopReason.REQUIRES_ACTION, eventIds);
+			this.sessionService.park(sessionId, question, eventIds);
 		}
 		catch (IllegalStateException ex) {
 			Session session = this.sessionService.findById(sessionId);
@@ -257,26 +248,6 @@ public final class ToolConfirmationAdvisor implements BaseAdvisor {
 			.publishOn(getScheduler())
 			.transform(flux -> new ChatClientMessageAggregator().aggregateChatClientResponse(flux,
 					r -> after(r, chain)));
-	}
-
-	/** The decisions answer the interaction the turn parked on, when the log has one. */
-	private void answerInteraction(String sessionId, Map<String, ToolConfirmation> decisions) {
-		SessionEvent pending = InteractionEvents.pending(this.sessionService.getEvents(sessionId,
-				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).build()));
-		if (pending == null) {
-			return;
-		}
-		List<Map<String, Object>> answers = new ArrayList<>();
-		decisions.values().forEach(d -> {
-			Map<String, Object> answer = new LinkedHashMap<>();
-			answer.put("toolCallId", d.toolCallId());
-			answer.put("allowed", d.allowed());
-			if (d.denyMessage() != null) {
-				answer.put("denyMessage", d.denyMessage());
-			}
-			answers.add(answer);
-		});
-		this.sessionService.appendEvent(InteractionEvents.answered(sessionId, pending.getId(), answers));
 	}
 
 	/** Runs the allowed calls and answers every pending call, in the order the model asked for them. */

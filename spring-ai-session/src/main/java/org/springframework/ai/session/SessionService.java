@@ -19,9 +19,13 @@ package org.springframework.ai.session;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
+import java.util.ArrayList;
 
 import org.jspecify.annotations.Nullable;
 import reactor.core.publisher.Flux;
+
+import org.springframework.util.Assert;
 
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.session.compaction.CompactionResult;
@@ -172,6 +176,72 @@ public interface SessionService {
 	/** Interrupts the running turn; see {@link #interrupt(String, String)}. */
 	default Session interrupt(String sessionId) {
 		return interrupt(sessionId, null);
+	}
+
+	/**
+	 * The question the session waits on: the newest {@link EventType#INTERACTION} question
+	 * no answer follows, or {@code null}.
+	 */
+	default @Nullable SessionEvent pendingInteraction(String sessionId) {
+		return InteractionEvents.pending(getEvents(sessionId,
+				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).build()));
+	}
+
+	/**
+	 * Parks the running turn on a question: records it as an {@link EventType#INTERACTION}
+	 * event and ends the turn with {@link StopReason#REQUIRES_ACTION} naming the given
+	 * events and the question. The session is idle, can be archived, and the question can
+	 * be answered with {@link #resume} on any node.
+	 * @param question what the turn waits on
+	 * @param relatedEventIds the events the question is about, named before it on the
+	 * status event: the assistant message with the tool calls, typically
+	 * @return the question's event
+	 * @throws IllegalArgumentException if the session does not exist
+	 * @throws IllegalStateException if the session is not running a turn; nothing is
+	 * written then
+	 */
+	default SessionEvent park(String sessionId, Interaction question, List<String> relatedEventIds) {
+		Assert.notNull(question, "question must not be null");
+		Assert.notNull(relatedEventIds, "relatedEventIds must not be null");
+		Session session = findById(sessionId);
+		if (session == null) {
+			throw new IllegalArgumentException("Session not found: " + sessionId);
+		}
+		if (session.status() != SessionStatus.RUNNING) {
+			throw new IllegalStateException("Session '" + sessionId + "' is not running a turn; it is " + session.status());
+		}
+		SessionEvent required = InteractionEvents.required(sessionId, question);
+		appendEvent(required);
+		List<String> eventIds = new ArrayList<>(relatedEventIds);
+		eventIds.add(required.getId());
+		endTurn(sessionId, StopReason.REQUIRES_ACTION, eventIds);
+		return required;
+	}
+
+	/**
+	 * Resumes an idle session with an answer: starts a turn, the compare-and-set making
+	 * the resumption exclusive, then records the answer to the
+	 * {@linkplain #pendingInteraction pending question} when there is one. A session that
+	 * is not parked (an earlier resume failed, or it never parked) starts its turn and
+	 * records nothing.
+	 * @param runId the run the turn belongs to, or {@code null}
+	 * @param answer the answer, stored as JSON; may be {@code null} for an acknowledgement
+	 * @return the session, running
+	 * @throws IllegalArgumentException if the session does not exist
+	 * @throws IllegalStateException if the session is already running a turn, or archived
+	 */
+	default Session resume(String sessionId, @Nullable String runId, @Nullable Object answer) {
+		Session session = startTurn(sessionId, runId);
+		SessionEvent pending = pendingInteraction(sessionId);
+		if (pending != null) {
+			appendEvent(InteractionEvents.answered(sessionId, pending.getId(), answer));
+		}
+		return session;
+	}
+
+	/** Resumes an idle session with an answer; see {@link #resume(String, String, Object)}. */
+	default Session resume(String sessionId, @Nullable Object answer) {
+		return resume(sessionId, null, answer);
 	}
 
 	/**

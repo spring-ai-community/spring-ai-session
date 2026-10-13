@@ -62,6 +62,7 @@ import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.MessageFilter;
+import org.springframework.ai.session.Interaction;
 import org.springframework.ai.session.InteractionEvents;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
@@ -73,7 +74,6 @@ import org.springframework.ai.session.SessionStatusEvents;
 import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.TokenUsage;
 import org.springframework.ai.session.ToolConfirmation;
-import org.springframework.ai.session.ToolConfirmationEvents;
 import org.springframework.ai.session.UsageEvents;
 import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
@@ -1377,6 +1377,7 @@ class SessionMemoryAdvisorIT {
 		assertThat(InteractionEvents.interaction(question).payload()).isEqualTo(Map.of("toolCalls",
 				List.of(Map.of("id", "c1", "name", "get_weather", "arguments", "{\"city\":\"Paris\"}"))));
 		assertThat(InteractionEvents.interaction(question).resumeType()).isEqualTo(ToolConfirmation.class.getName());
+		assertThat(InteractionEvents.interaction(question).kind()).isEqualTo(Interaction.KIND_TOOL_CONFIRMATION);
 
 		// A call the policy does not name is left to the loop: the turn stays running
 		String free = this.sessionService.create(CreateSessionRequest.builder().build()).id();
@@ -1407,18 +1408,14 @@ class SessionMemoryAdvisorIT {
 		// The log: the turn runs again, the decision and the tool result are recorded once
 		List<SessionEvent> log = this.sessionService.getEvents(this.sessionId);
 		assertThat(log).extracting(SessionEvent::getType)
-			.containsSubsequence(EventType.MESSAGE, EventType.STATUS, EventType.STATUS, EventType.TOOL_CONFIRMATION,
+			.containsSubsequence(EventType.MESSAGE, EventType.STATUS, EventType.STATUS, EventType.INTERACTION,
 					EventType.MESSAGE);
-		SessionEvent decision = log.stream()
-			.filter(e -> e.getType() == EventType.TOOL_CONFIRMATION)
-			.findFirst()
-			.orElseThrow();
-		assertThat(ToolConfirmationEvents.confirmation(decision)).isEqualTo(ToolConfirmation.allow("c1"));
 		// The decisions answer the question the turn parked on
 		List<SessionEvent> interactions = log.stream().filter(e -> e.getType().equals(EventType.INTERACTION)).toList();
 		assertThat(interactions).hasSize(2);
 		assertThat(InteractionEvents.requiredEventId(interactions.get(1))).isEqualTo(interactions.get(0).getId());
-		assertThat(InteractionEvents.answer(interactions.get(1))).isEqualTo(List.of(Map.of("toolCallId", "c1", "allowed", true)));
+		assertThat(ToolConfirmation.fromAnswer(InteractionEvents.answer(interactions.get(1))))
+			.containsExactly(ToolConfirmation.allow("c1"));
 		assertThat(InteractionEvents.pending(interactions)).isNull();
 		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
 		assertThat(describe(this.sessionService.getActiveMessages(this.sessionId))).containsExactly("Weather in Paris?",
@@ -1479,8 +1476,7 @@ class SessionMemoryAdvisorIT {
 			.hasMessageContaining("ToolCallingChatOptions");
 		// None of that touched the session: still parked, nothing recorded
 		assertThat(this.sessionService.findById(this.sessionId).stopReason()).isEqualTo(StopReason.REQUIRES_ACTION);
-		assertThat(this.sessionService.getEvents(this.sessionId))
-			.noneMatch(e -> e.getType() == EventType.TOOL_CONFIRMATION);
+		assertThat(this.sessionService.getEvents(this.sessionId)).noneMatch(InteractionEvents::isAnswered);
 
 		// The request's tools lack the confirmed one: the decision is recorded, the run
 		// fails and the turn ends with an error, so the call can be confirmed again
@@ -1488,9 +1484,7 @@ class SessionMemoryAdvisorIT {
 				ToolConfirmation.allow("c1")), chain)).isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("get_weather");
 		assertThat(this.sessionService.findById(this.sessionId).stopReason()).isEqualTo(StopReason.ERROR);
-		assertThat(this.sessionService.getEvents(this.sessionId))
-			.filteredOn(e -> e.getType() == EventType.TOOL_CONFIRMATION)
-			.hasSize(1);
+		assertThat(this.sessionService.getEvents(this.sessionId)).filteredOn(InteractionEvents::isAnswered).hasSize(1);
 		ChatClientRequest resumed = before(gate, memory, confirming(withWeatherTool(), ToolConfirmation.allow("c1")),
 				chain);
 		assertThat(describe(resumed.prompt().getInstructions())).containsExactly("Weather in Paris?", "call:c1",
@@ -1531,9 +1525,12 @@ class SessionMemoryAdvisorIT {
 		assertThat(result.getResponses().get(0).responseData()).isEqualTo("No.");
 		assertThat(result.getResponses().get(1).responseData()).isEqualTo("\"Noon in Paris\"");
 		// Both decisions are in the log, the implicit one as an allow
-		assertThat(this.sessionService.getEvents(this.sessionId))
-			.filteredOn(e -> e.getType() == EventType.TOOL_CONFIRMATION)
-			.extracting(ToolConfirmationEvents::confirmation)
+		SessionEvent answered = this.sessionService.getEvents(this.sessionId)
+			.stream()
+			.filter(InteractionEvents::isAnswered)
+			.findFirst()
+			.orElseThrow();
+		assertThat(ToolConfirmation.fromAnswer(InteractionEvents.answer(answered)))
 			.containsExactly(ToolConfirmation.deny("c1", "No."), ToolConfirmation.allow("c2"));
 	}
 
@@ -1549,9 +1546,7 @@ class SessionMemoryAdvisorIT {
 		assertThatThrownBy(() -> gate.before(confirming(withWeatherTool(), ToolConfirmation.allow("c1")), chain))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("RUNNING");
-		assertThat(this.sessionService.getEvents(this.sessionId))
-			.filteredOn(e -> e.getType() == EventType.TOOL_CONFIRMATION)
-			.hasSize(1);
+		assertThat(this.sessionService.getEvents(this.sessionId)).filteredOn(InteractionEvents::isAnswered).hasSize(1);
 	}
 
 	@Test
@@ -1579,9 +1574,7 @@ class SessionMemoryAdvisorIT {
 		assertThat(describe(forwarded.prompt().getInstructions())).containsExactly("Weather in Paris?", "call:c1",
 				"result:c1", "call:c2", "result:c2");
 		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
-		assertThat(this.sessionService.getEvents(this.sessionId))
-			.filteredOn(e -> e.getType() == EventType.TOOL_CONFIRMATION)
-			.hasSize(1);
+		assertThat(this.sessionService.getEvents(this.sessionId)).filteredOn(InteractionEvents::isAnswered).hasSize(1);
 	}
 
 	@Test

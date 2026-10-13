@@ -23,9 +23,7 @@ import org.springframework.ai.agent.InteractionRequiredException;
 import org.springframework.ai.agent.tools.ToolCallInterceptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.session.ToolConfirmation;
-import org.springframework.ai.session.ToolConfirmationEvents;
 import org.springframework.ai.session.ToolConfirmationPolicy;
-import org.springframework.ai.session.SessionService;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.util.Assert;
 
@@ -34,8 +32,8 @@ import org.springframework.util.Assert;
  * must be confirmed interrupts the run with a {@link PendingToolCall} as the question, so
  * the {@link SessionFeature} parks the turn. The run is resumed with a
  * {@link ToolConfirmation}: an allowed call runs through the agent's own tools, a denied
- * one answers the model with its message. The decision is recorded as a
- * {@link org.springframework.ai.session.EventType#TOOL_CONFIRMATION} event.
+ * one answers the model with its message. The {@link SessionFeature} records the decision
+ * as the answer to the question the run parked on.
  *
  * @author Christian Tzolov
  * @since 0.11.0
@@ -44,14 +42,10 @@ public final class ToolConfirmationFeature implements ToolCallInterceptor {
 
 	private static final ParameterizedTypeReference<Object> ANY = ParameterizedTypeReference.forType(Object.class);
 
-	private final SessionService sessions;
-
 	private final ToolConfirmationPolicy policy;
 
-	public ToolConfirmationFeature(SessionService sessions, ToolConfirmationPolicy policy) {
-		Assert.notNull(sessions, "sessions must not be null");
+	public ToolConfirmationFeature(ToolConfirmationPolicy policy) {
 		Assert.notNull(policy, "policy must not be null");
-		this.sessions = sessions;
 		this.policy = policy;
 	}
 
@@ -69,7 +63,6 @@ public final class ToolConfirmationFeature implements ToolCallInterceptor {
 			throw new InteractionRequiredException(new PendingToolCall(name, arguments), context.getRunId(),
 					context.getPath() + name);
 		}
-		this.sessions.appendEvent(ToolConfirmationEvents.of(context.getRunId().sessionId(), decision));
 		if (!decision.allowed()) {
 			return decision.denyMessageOrDefault();
 		}
