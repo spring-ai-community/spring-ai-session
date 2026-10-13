@@ -16,6 +16,9 @@
 
 package org.springframework.ai.session;
 
+import java.util.List;
+import java.util.Objects;
+
 import org.jspecify.annotations.Nullable;
 
 import org.springframework.util.Assert;
@@ -37,6 +40,12 @@ public final class SessionStatusEvents {
 	/** Payload key: the {@link StopReason} of a turn that ended, by name. */
 	public static final String PAYLOAD_STOP_REASON = "stopReason";
 
+	/**
+	 * Payload key: the ids of the events a {@link StopReason#REQUIRES_ACTION} turn waits
+	 * on, typically the assistant message whose tool calls need confirmation.
+	 */
+	public static final String PAYLOAD_EVENT_IDS = "eventIds";
+
 	private SessionStatusEvents() {
 	}
 
@@ -47,8 +56,25 @@ public final class SessionStatusEvents {
 
 	/** The event recorded when a turn ends, with why it ended. */
 	public static SessionEvent idle(String sessionId, StopReason stopReason) {
+		return idle(sessionId, stopReason, List.of());
+	}
+
+	/**
+	 * The event recorded when a turn ends, with why it ended and the events it waits on
+	 * ({@link StopReason#REQUIRES_ACTION}).
+	 */
+	public static SessionEvent idle(String sessionId, StopReason stopReason, List<String> eventIds) {
 		Assert.notNull(stopReason, "stopReason must not be null");
-		return changed(sessionId, SessionStatus.IDLE, stopReason);
+		Assert.notNull(eventIds, "eventIds must not be null");
+		SessionEvent.Builder event = SessionEvent.builder()
+			.sessionId(sessionId)
+			.type(EventType.STATUS)
+			.payload(PAYLOAD_STATUS, SessionStatus.IDLE.name())
+			.payload(PAYLOAD_STOP_REASON, stopReason.name());
+		if (!eventIds.isEmpty()) {
+			event.payload(PAYLOAD_EVENT_IDS, List.copyOf(eventIds));
+		}
+		return event.build();
 	}
 
 	/** The event recorded when a session is archived. */
@@ -74,6 +100,15 @@ public final class SessionStatusEvents {
 		Object value = event.getPayload().get(PAYLOAD_STATUS);
 		return (event.getType() == EventType.STATUS && value != null) ? SessionStatus.valueOf(String.valueOf(value))
 				: null;
+	}
+
+	/** The ids of the events a {@link EventType#STATUS} event says the turn waits on; empty when none. */
+	public static List<String> eventIds(SessionEvent event) {
+		Object value = event.getPayload().get(PAYLOAD_EVENT_IDS);
+		if (event.getType() != EventType.STATUS || !(value instanceof List<?> list)) {
+			return List.of();
+		}
+		return list.stream().filter(Objects::nonNull).map(String::valueOf).toList();
 	}
 
 	/** The stop reason a {@link EventType#STATUS} event records, or {@code null} when it has none. */

@@ -203,6 +203,22 @@ Behaviour changes:
 The JDBC `AI_SESSION` table gains `status`, `stop_reason` and `archived_at`; a row written
 before reads as an idle root (see the schema section below).
 
+### New: tool confirmation
+
+`ToolConfirmationPolicy` names the tools a person must confirm before they run. Its
+`eligibilityChecker()` goes on the `ToolCallingAdvisor`, and a new `ToolConfirmationAdvisor`
+between the tool-calling advisor and `SessionMemoryAdvisor` parks a turn whose reply asks
+for such a call (`endTurn(id, REQUIRES_ACTION, eventIds)` naming the assistant event) and
+resumes it on the next request, whose `TOOL_CONFIRMATION_CONTEXT_KEY` carries a
+`ToolConfirmation` per pending call: a `TOOL_CONFIRMATION` event each, the allowed calls run
+with the request's tools, the denied ones get their message, and the model continues.
+`SessionService.endTurn(id, stopReason, eventIds)` and `SessionStatusEvents.eventIds(event)`
+are new; `endTurn(id, stopReason)` is now a default method. Nothing changes without the
+advisor. See [Tool confirmation](chat-client/chat-client.md#tool-confirmation).
+
+One small behaviour change: a request without a user or tool message no longer stores the
+empty user message `Prompt.getLastUserOrToolResponseMessage()` fabricates.
+
 ### Renames and small API changes
 
 - `EventFilter.compactedView` is `activeView` (record accessor, builder method and

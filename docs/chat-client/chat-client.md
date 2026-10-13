@@ -191,6 +191,7 @@ client.prompt()
 | `SESSION_ID_CONTEXT_KEY` | `"chat_memory_conversation_id"` (= `ChatMemory.CONVERSATION_ID`) | Routes the request to a session |
 | `SESSION_METADATA_CONTEXT_KEY` | `"chat_memory_session_metadata"` | A `Map<String, Object>` of metadata for a session the advisor creates on first use; ignored for an existing session |
 | `EVENT_FILTER_CONTEXT_KEY` | `"chat_memory_event_filter_id"` | Per-request `EventFilter` merged with the advisor-level filter |
+| `ToolConfirmationAdvisor.TOOL_CONFIRMATION_CONTEXT_KEY` | `"tool_confirmations"` | A `ToolConfirmation` or a collection of them, one per tool call the parked turn waits on; see [Tool confirmation](#tool-confirmation) |
 
 ---
 
@@ -274,6 +275,66 @@ via `and()`, `or()`, and `negate()`:
     `skipEmptyMessages()` protection. If you still want empty assistant frames
     filtered out (recommended — some models reject them when replayed as history),
     compose your filter with it via `.and(MessageFilter.skipEmptyMessages())`.
+
+---
+
+## Tool confirmation
+
+A `ToolConfirmationPolicy` names the tools a person must confirm before they run. It has
+two ends: its `eligibilityChecker()` on the tool-calling advisor keeps the loop from running
+those calls, and a `ToolConfirmationAdvisor` parks the turn when such a call comes back and
+resumes it when the decision arrives. The gate sits between the tool-calling advisor and
+`SessionMemoryAdvisor` (default order `HIGHEST_PRECEDENCE + 900`) and relies on the memory
+advisor's turn tracking (`trackStatus`, the default). Whatever the loop's position, keep
+the gate outside the memory advisor (a lower order value): it parks after the reply is
+stored and resumes before the history is loaded. If you set the memory advisor's order
+below the loop's to wrap it, set the gate's order below the memory advisor's too:
+
+```java
+ToolConfirmationPolicy policy = ToolConfirmationPolicy.forTools("bash");
+ToolCallingManager toolCallingManager = ToolCallingManager.builder().build();
+
+ChatClient chatClient = ChatClient.builder(chatModel)
+    .defaultAdvisors(
+        ToolCallingAdvisor.builder()
+            .toolCallingManager(toolCallingManager)
+            .toolExecutionEligibilityChecker(policy.eligibilityChecker())
+            .build(),
+        ToolConfirmationAdvisor.builder(sessionService)
+            .policy(policy)
+            .toolCallingManager(toolCallingManager) // optional: share the loop's manager
+            .build(),
+        SessionMemoryAdvisor.builder(sessionService).build())
+    .defaultTools(bashTool, readFileTool)
+    .build();
+```
+
+A reply that asks for `bash` comes back to the application with the tool call still in
+it, and the session is idle with `stopReason() == StopReason.REQUIRES_ACTION`. Show the
+call, then send the decision on the next request. The request carries no new user text
+(new text goes in the next turn) but must carry the tools, because the gate runs the
+allowed call with them:
+
+```java
+ChatResponse reply = chatClient.prompt()
+    .advisors(a -> a
+        .param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId)
+        .param(ToolConfirmationAdvisor.TOOL_CONFIRMATION_CONTEXT_KEY, ToolConfirmation.allow(toolCallId)))
+    .call()
+    .chatResponse();
+```
+
+`ToolConfirmation.deny(toolCallId, "Not on production.")` answers the call with that text
+instead of running it. Every gated call needs a decision in the same request (a
+collection of confirmations for parallel calls); a call of the same reply the policy does
+not gate is allowed implicitly. A decision for a call that is not pending,
+a session that is not waiting, or new user text next to the decisions is an
+`IllegalArgumentException`, raised before anything is recorded. Resuming starts the turn
+with the same compare-and-set as any call, so a second request with the same decisions
+fails instead of running the tool twice. The log keeps a `TOOL_CONFIRMATION` event per
+decision, so the approval can arrive on another node, and the tool results are stored like
+any other. One known limitation: a confirmed tool marked `returnDirect` sends its result to
+the model like any other, since a resumption cannot short-circuit the advisor chain.
 
 ---
 

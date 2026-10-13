@@ -85,7 +85,7 @@ An event is appended once and never changed. Compaction does not flag it: it app
 | `MESSAGE` | A conversation message. The only type that takes part in prompt assembly and compaction | yes |
 | `STATUS` | A status change of the session: `RUNNING` when a turn starts, `IDLE` with a stop reason when it ends, `TERMINATED` on archive. `SessionStatusEvents` builds and reads them | no |
 | `INTERRUPT` | A caller interrupted the running turn | no |
-| `TOOL_CONFIRMATION` | A caller allowed or denied a tool call that was waiting for confirmation | no |
+| `TOOL_CONFIRMATION` | A caller allowed or denied a tool call that was waiting for confirmation. `ToolConfirmationEvents` builds and reads them; see [Tool confirmation](#tool-confirmation) | no |
 | `USAGE` | Token usage of a model call, or a cumulative snapshot | no |
 | `COMPACTION` | A compaction boundary: which earlier events are pinned, which summary events stand in for the covered ones, and which recent events are preserved. The newest one defines the active view. Its payload is a `CompactionBoundary` | no |
 | `CHILD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED` | The lifecycle of a delegated child session and the messages exchanged with it. The payload names the child; the two message markers also carry the message that crossed the boundary, as a user message (the task) or an assistant message (the answer). Only `MESSAGE` events start turns and enter the prompt, but text searches find a marker's message | no |
@@ -565,6 +565,51 @@ factories for a principal leave them out.
 
 `aggregateStatus(rootId)` is the status of a tree as a whole, never stored: `RUNNING` while
 any member runs a turn, otherwise the root's own status.
+
+### Tool confirmation
+
+Some tools should not run until a person has seen the call. A `ToolConfirmationPolicy`
+names them (`ToolConfirmationPolicy.forTools("bash", "delete_file")`, or any predicate on
+the `ToolCall`). When the model asks for such a call, the turn is **parked** instead of
+run: the assistant message with the call is stored, the session goes `IDLE` with
+`stopReason = REQUIRES_ACTION`, and the `STATUS` event names the event the caller has to
+answer (`SessionStatusEvents.eventIds(event)`). The session stays idle for as long as it
+takes, can be archived meanwhile, and the decision can arrive in a later request or on
+another node, because everything needed is in the log.
+
+The decision is a `ToolConfirmation`: `ToolConfirmation.allow(toolCallId)` or
+`ToolConfirmation.deny(toolCallId, "why")`. The next request on the session carries one per
+pending call and no new user text. `ToolConfirmationAdvisor` resumes the turn, records each
+decision as a `TOOL_CONFIRMATION` event, runs the allowed calls with the tools the request
+carries, answers the denied ones with their deny message (or
+`ToolConfirmation.DEFAULT_DENY_MESSAGE`) and puts the tool results in front of the prompt;
+`SessionMemoryAdvisor` stores them like any tool result, and the model continues where the
+turn was parked. A call that fails to run leaves the decision in the log and ends the turn
+with `ERROR`; confirming it again retries. See
+[ChatClient Integration](../chat-client/chat-client.md#tool-confirmation) for the wiring.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App
+    participant Gate as ToolConfirmationAdvisor
+    participant SMA as SessionMemoryAdvisor
+    participant Log as Session log
+    App->>SMA: "run echo hello"
+    SMA->>Log: STATUS RUNNING, user message
+    SMA-->>Gate: assistant: tool call bash (the loop left it unexecuted)
+    SMA->>Log: assistant message
+    Gate->>Log: STATUS IDLE with stop reason REQUIRES_ACTION [assistant event id]
+    Gate-->>App: reply with the pending tool call
+    Note over App: shows the call, waits for a person
+    App->>Gate: ToolConfirmation.allow(callId)
+    Gate->>Log: STATUS RUNNING, TOOL_CONFIRMATION allow
+    Gate->>Gate: runs bash with the request's tools
+    Gate->>SMA: prompt: [tool result]
+    SMA->>Log: tool result
+    SMA-->>Gate: assistant: "hello"
+    SMA->>Log: assistant message, STATUS IDLE with stop reason END_TURN
+```
 
 ### Expiry cleanup
 

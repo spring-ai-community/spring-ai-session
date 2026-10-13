@@ -16,6 +16,8 @@
 
 package org.springframework.ai.session;
 
+import java.util.List;
+
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.messages.UserMessage;
@@ -54,6 +56,17 @@ class SessionStatusEventsTests {
 
 		assertThat(SessionStatusEvents.status(message)).isNull();
 		assertThat(SessionStatusEvents.stopReason(message)).isNull();
+	}
+
+	@Test
+	void aParkedTurnNamesTheEventsItWaitsOn() {
+		SessionEvent parked = SessionStatusEvents.idle("s", StopReason.REQUIRES_ACTION, List.of("e1", "e2"));
+		SessionEvent plain = SessionStatusEvents.idle("s", StopReason.END_TURN);
+
+		assertThat(SessionStatusEvents.eventIds(parked)).containsExactly("e1", "e2");
+		assertThat(parked.getPayload()).containsEntry(SessionStatusEvents.PAYLOAD_EVENT_IDS, List.of("e1", "e2"));
+		assertThat(SessionStatusEvents.eventIds(plain)).isEmpty();
+		assertThat(plain.getPayload()).doesNotContainKey(SessionStatusEvents.PAYLOAD_EVENT_IDS);
 	}
 
 }

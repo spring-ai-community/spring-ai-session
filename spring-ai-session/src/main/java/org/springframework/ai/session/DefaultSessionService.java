@@ -214,15 +214,16 @@ public class DefaultSessionService implements SessionService {
 	}
 
 	@Override
-	public Session endTurn(String sessionId, StopReason stopReason) {
+	public Session endTurn(String sessionId, StopReason stopReason, List<String> eventIds) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(stopReason, "stopReason must not be null");
+		Assert.notNull(eventIds, "eventIds must not be null");
 		if (!this.sessionRepository.updateStatus(sessionId, SessionStatus.RUNNING, SessionStatus.IDLE, stopReason,
 				null)) {
 			Session session = requireSession(sessionId);
 			throw new IllegalStateException("Session '" + sessionId + "' is not running a turn; it is " + session.status());
 		}
-		this.sessionRepository.appendEvent(SessionStatusEvents.idle(sessionId, stopReason));
+		this.sessionRepository.appendEvent(SessionStatusEvents.idle(sessionId, stopReason, eventIds));
 		return requireSession(sessionId);
 	}
 

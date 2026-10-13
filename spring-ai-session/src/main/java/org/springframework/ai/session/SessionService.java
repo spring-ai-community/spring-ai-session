@@ -112,7 +112,21 @@ public interface SessionService {
 	 * @throws IllegalArgumentException if the session does not exist
 	 * @throws IllegalStateException if the session is not running a turn
 	 */
-	Session endTurn(String sessionId, StopReason stopReason);
+	default Session endTurn(String sessionId, StopReason stopReason) {
+		return endTurn(sessionId, stopReason, List.of());
+	}
+
+	/**
+	 * Ends the running turn and names the events it waits on: for
+	 * {@link StopReason#REQUIRES_ACTION}, the assistant message whose tool calls need a
+	 * {@link ToolConfirmation}. The ids go into the {@link EventType#STATUS} event's
+	 * payload ({@link SessionStatusEvents#PAYLOAD_EVENT_IDS}).
+	 * @param eventIds the events the turn waits on; empty for any other stop reason
+	 * @return the session, idle
+	 * @throws IllegalArgumentException if the session does not exist
+	 * @throws IllegalStateException if the session is not running a turn
+	 */
+	Session endTurn(String sessionId, StopReason stopReason, List<String> eventIds);
 
 	/**
 	 * The status of a session tree as a whole, never stored: {@link SessionStatus#RUNNING}

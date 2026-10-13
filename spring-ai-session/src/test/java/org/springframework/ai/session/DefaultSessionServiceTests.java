@@ -804,4 +804,18 @@ class DefaultSessionServiceTests {
 		assertThatIllegalArgumentException().isThrownBy(() -> this.service.aggregateStatus("missing"));
 	}
 
+	@Test
+	void aParkedTurnRecordsTheEventsItWaitsOn() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		this.service.startTurn(session.id());
+
+		Session parked = this.service.endTurn(session.id(), StopReason.REQUIRES_ACTION, List.of("evt-1"));
+
+		assertThat(parked.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(parked.stopReason()).isEqualTo(StopReason.REQUIRES_ACTION);
+		List<SessionEvent> statuses = this.service.getEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build());
+		assertThat(SessionStatusEvents.eventIds(statuses.get(1))).containsExactly("evt-1");
+	}
+
 }

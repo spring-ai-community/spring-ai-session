@@ -46,6 +46,7 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.content.MediaContent;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
@@ -335,8 +336,9 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// 4. Append the current user message to the session, subject to the configured
 		// message filter. Skipping only affects persistence — the outgoing prompt is
 		// untouched. A tool response is stored exactly when the tool call it answers was
-		// stored, whatever the filter says: either half alone makes an unusable log.
-		Message userMessage = request.prompt().getLastUserOrToolResponseMessage();
+		// stored, whatever the filter says: either half alone makes an unusable log. A
+		// request without one stores nothing.
+		Message userMessage = lastUserOrToolResponse(request.prompt().getInstructions());
 		if (userMessage != null && shouldPersistTrailing(userMessage, events, eventFilter, sessionId)) {
 			this.sessionService.appendEvent(SessionEvent.builder()
 				.id(this.requestEventIdGenerator.generate(request, userMessage))
@@ -387,8 +389,9 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		}
 
 		// 3. End the turn once it is complete: a reply that requests tool calls keeps the
-		// session running until the loop's final reply. A turn someone ended by hand in the
-		// meantime (an interrupt) must not fail the reply that was already produced.
+		// session running until the loop's final reply (or until a ToolConfirmationAdvisor
+		// parks it). A turn someone ended by hand in the meantime (an interrupt) must not
+		// fail the reply that was already produced.
 		if (this.trackStatus && !requestsToolCalls(response)) {
 			try {
 				this.sessionService.endTurn(sessionId, StopReason.END_TURN);
@@ -511,6 +514,17 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 					+ "interrupted mid-loop is the likely cause; the session log is unchanged", dropped, sessionId);
 		}
 		return kept;
+	}
+
+	/** The last user or tool response message of the prompt, or {@code null} when it has none. */
+	private static @Nullable Message lastUserOrToolResponse(List<Message> messages) {
+		for (int i = messages.size() - 1; i >= 0; i--) {
+			Message message = messages.get(i);
+			if (message instanceof UserMessage || message instanceof ToolResponseMessage) {
+				return message;
+			}
+		}
+		return null;
 	}
 
 	/** Returns {@code true} if every response answers one of the assistant's tool calls. */
