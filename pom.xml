@@ -66,6 +66,7 @@
         <module>spring-ai-session-bom</module>
         <module>spring-ai-session</module>
         <module>spring-ai-session-chatclient</module>
+        <module>spring-ai-session-agent</module>
         <module>spring-ai-session-jdbc</module>
         <module>spring-ai-session-test</module>
         <module>spring-ai-session-security</module>
@@ -82,6 +83,7 @@
 
         <!-- Dependency versions -->
         <spring-ai.version>2.1.0-SNAPSHOT</spring-ai.version>
+        <spring-ai-agent.version>2.1.0-SNAPSHOT</spring-ai-agent.version>
         <spring-boot.version>4.1.1</spring-boot.version>
 
         <!-- Plugin versions -->

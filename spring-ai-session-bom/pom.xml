@@ -84,6 +84,11 @@
             </dependency>
             <dependency>
                 <groupId>org.springaicommunity</groupId>
+                <artifactId>spring-ai-session-agent</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springaicommunity</groupId>
                 <artifactId>spring-ai-session-jdbc</artifactId>
                 <version>${project.version}</version>
             </dependency>

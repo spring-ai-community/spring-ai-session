@@ -261,6 +261,14 @@ The summarizing strategy keeps its `org.springframework.ai.session.compaction` p
 the two modules therefore share; an application on the Java module path would have to merge
 them, which is not supported.
 
+### New: `spring-ai-session-agent`
+
+A new module keeps a spring-ai-agent run in a session tree: `SessionFeature` (the run as a
+turn, the main conversation in the root session, nested contexts as child sessions, the
+agent's events as typed log events, an interruption as a parked turn), `SessionCheckpointer`
+(the log as the checkpoint store), `BudgetFeature` and `ToolConfirmationFeature`. It depends
+on `spring-ai-agent` 2.1.0-SNAPSHOT. See [spring-ai-agent Integration](agent/spring-ai-agent.md).
+
 ### Breaking: `EventType` is a class, and four value types moved to the core package
 
 `EventType` is no longer an enum. It is a final class whose well-known types are the same

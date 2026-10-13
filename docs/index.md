@@ -28,6 +28,7 @@ how the main types fit together.
 |--------|----------|-------------|
 | **Session Management** | `spring-ai-session` | Core SPI: `Session`, `SessionEvent`, `SessionService`, `SessionRepository`, compaction framework, recall tools; no dependency on `ChatClient` |
 | **Session ChatClient** | `spring-ai-session-chatclient` | The `ChatClient` integration: `SessionMemoryAdvisor`, `ToolConfirmationAdvisor`, `BudgetAdvisor`, and the summarizing compaction strategy |
+| **Session Agent** | `spring-ai-session-agent` | The spring-ai-agent integration: `SessionFeature`, a `Checkpointer` over the log, `BudgetFeature`, `ToolConfirmationFeature` |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
