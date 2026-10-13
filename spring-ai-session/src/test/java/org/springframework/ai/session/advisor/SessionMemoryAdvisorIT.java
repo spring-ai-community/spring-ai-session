@@ -40,6 +40,9 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
@@ -60,8 +63,10 @@ import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.SessionStatusEvents;
 import org.springframework.ai.session.StopReason;
+import org.springframework.ai.session.TokenUsage;
 import org.springframework.ai.session.ToolConfirmation;
 import org.springframework.ai.session.ToolConfirmationEvents;
+import org.springframework.ai.session.UsageEvents;
 import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.compaction.TurnCountTrigger;
@@ -1612,6 +1617,183 @@ class SessionMemoryAdvisorIT {
 		assertThatThrownBy(() -> after(gate, untracked, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("trackStatus");
+	}
+
+	// --- Usage and budget ---
+
+	private static ChatClientResponse buildResponseWithUsage(String sessionId, String assistantText, int prompt,
+			int completion) {
+		ChatResponse chatResponse = ChatResponse.builder()
+			.generations(List.of(new Generation(new AssistantMessage(assistantText))))
+			.metadata(ChatResponseMetadata.builder().model("test-model").usage(new DefaultUsage(prompt, completion)).build())
+			.build();
+		return ChatClientResponse.builder()
+			.chatResponse(chatResponse)
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
+			.build();
+	}
+
+	@Test
+	void afterRecordsTheCallsUsageAndTheServiceSumsIt() {
+		SessionMemoryAdvisor tracking = tracking();
+		AdvisorChain chain = mock(AdvisorChain.class);
+		tracking.before(buildRequest(this.sessionId, "Hi"), chain);
+		tracking.after(buildResponseWithUsage(this.sessionId, "Hello", 100, 10), chain);
+		tracking.before(buildRequest(this.sessionId, "More"), chain);
+		tracking.after(buildResponseWithUsage(this.sessionId, "Sure", 200, 20), chain);
+		// A reply without usage records nothing
+		tracking.before(buildRequest(this.sessionId, "Again"), chain);
+		tracking.after(buildResponse(this.sessionId, "Yes"), chain);
+
+		List<SessionEvent> usage = this.sessionService.getEvents(this.sessionId,
+				EventFilter.builder().eventTypes(Set.of(EventType.USAGE)).build());
+		assertThat(usage).hasSize(2);
+		assertThat(UsageEvents.usage(usage.get(0))).isEqualTo(new TokenUsage(100, 10, 110, 0, 0));
+		assertThat(UsageEvents.model(usage.get(0))).isEqualTo("test-model");
+		assertThat(this.sessionService.usage(this.sessionId)).isEqualTo(new TokenUsage(300, 30, 330, 0, 0));
+		// The usage events sit between the reply and the turn's end, outside the conversation
+		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getType)
+			.containsSubsequence(EventType.MESSAGE, EventType.USAGE, EventType.STATUS);
+		assertThat(this.sessionService.getActiveMessages(this.sessionId)).hasSize(6);
+	}
+
+	@Test
+	void aStreamedReplyRecordsTheAggregatedUsageWithoutCacheCounts() {
+		SessionMemoryAdvisor tracking = tracking();
+		StreamAdvisorChain chain = mock(StreamAdvisorChain.class);
+		ChatClientResponse textChunk = buildResponse(this.sessionId, "Hel");
+		ChatClientResponse usageChunk = ChatClientResponse.builder()
+			.chatResponse(ChatResponse.builder()
+				.generations(List.of(new Generation(new AssistantMessage("lo"),
+						ChatGenerationMetadata.builder().finishReason("stop").build())))
+				.metadata(ChatResponseMetadata.builder()
+					.model("test-model")
+					.usage(new Usage() {
+						@Override
+						public Integer getPromptTokens() {
+							return 100;
+						}
+
+						@Override
+						public Integer getCompletionTokens() {
+							return 10;
+						}
+
+						@Override
+						public Object getNativeUsage() {
+							return null;
+						}
+
+						@Override
+						public Long getCacheReadInputTokens() {
+							return 80L;
+						}
+					})
+					.build())
+				.build())
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build();
+		given(chain.nextStream(any())).willReturn(Flux.just(textChunk, usageChunk));
+
+		tracking.adviseStream(buildRequest(this.sessionId, "Hi"), chain).blockLast();
+
+		List<SessionEvent> usage = this.sessionService.getEvents(this.sessionId,
+				EventFilter.builder().eventTypes(Set.of(EventType.USAGE)).build());
+		assertThat(usage).hasSize(1);
+		// Spring AI's stream aggregator carries the three counts and the model, not the cache counts
+		assertThat(UsageEvents.usage(usage.get(0))).isEqualTo(new TokenUsage(100, 10, 110, 0, 0));
+		assertThat(UsageEvents.model(usage.get(0))).isEqualTo("test-model");
+		assertThat(this.sessionService.findById(this.sessionId).stopReason()).isEqualTo(StopReason.END_TURN);
+	}
+
+	@Test
+	void aRetriedAfterWithADeterministicGeneratorCountsTheUsageOnce() {
+		SessionMemoryAdvisor idempotent = SessionMemoryAdvisor.builder(this.sessionService)
+			.trackStatus(false)
+			.responseEventIdGenerator(new IdempotentSessionEventIdGenerator())
+			.build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+		idempotent.before(buildRequest(this.sessionId, "Hi"), chain);
+		ChatClientResponse reply = buildResponseWithUsage(this.sessionId, "Hello", 100, 10);
+
+		idempotent.after(reply, chain);
+		idempotent.after(reply, chain);
+
+		assertThat(this.sessionService.usage(this.sessionId)).isEqualTo(new TokenUsage(100, 10, 110, 0, 0));
+	}
+
+	@Test
+	void recordUsageFalseRecordsNothing() {
+		SessionMemoryAdvisor quiet = SessionMemoryAdvisor.builder(this.sessionService).recordUsage(false).build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+		quiet.before(buildRequest(this.sessionId, "Hi"), chain);
+		quiet.after(buildResponseWithUsage(this.sessionId, "Hello", 100, 10), chain);
+
+		assertThat(this.sessionService.usage(this.sessionId)).isEqualTo(TokenUsage.ZERO);
+	}
+
+	private BudgetAdvisor budget(long maxTotalTokens) {
+		return BudgetAdvisor.builder(this.sessionService)
+			.policy(BudgetPolicy.fixed(Budget.ofTotalTokens(maxTotalTokens)))
+			.build();
+	}
+
+	@Test
+	void aTurnIsRefusedOnceTheTreeHasReachedItsBudget() {
+		SessionMemoryAdvisor memory = tracking();
+		BudgetAdvisor budget = budget(150);
+		AdvisorChain chain = mock(AdvisorChain.class);
+		// The first call is under budget and completes, taking the usage to 110
+		budget.before(memory.before(buildRequest(this.sessionId, "Hi"), chain), chain);
+		memory.after(buildResponseWithUsage(this.sessionId, "Hello", 100, 10), chain);
+		// Still under budget: the call that goes over it completes
+		budget.before(memory.before(buildRequest(this.sessionId, "More"), chain), chain);
+		memory.after(buildResponseWithUsage(this.sessionId, "Sure", 100, 10), chain);
+		assertThat(this.sessionService.findById(this.sessionId).stopReason()).isEqualTo(StopReason.END_TURN);
+
+		// The next call is refused and the turn the memory advisor started ends as BUDGET_REACHED
+		ChatClientRequest started = memory.before(buildRequest(this.sessionId, "Again"), chain);
+		assertThatThrownBy(() -> budget.before(started, chain)).isInstanceOf(BudgetReachedException.class)
+			.hasMessageContaining("220 of 150")
+			.satisfies(ex -> assertThat(((BudgetReachedException) ex).getBudget()).isEqualTo(Budget.ofTotalTokens(150)));
+		Session session = this.sessionService.findById(this.sessionId);
+		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(session.stopReason()).isEqualTo(StopReason.BUDGET_REACHED);
+		// A higher budget lets it continue
+		BudgetAdvisor raised = budget(1000);
+		raised.before(memory.before(buildRequest(this.sessionId, "Again"), chain), chain);
+		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
+	}
+
+	@Test
+	void aChildsUsageCountsTowardsItsRootsBudget() {
+		SessionMemoryAdvisor memory = tracking();
+		BudgetAdvisor budget = budget(100);
+		AdvisorChain chain = mock(AdvisorChain.class);
+		Session child = this.sessionService.createChild(this.sessionId, "worker");
+		this.sessionService.appendEvent(UsageEvents.of(child.id(), new TokenUsage(90, 10, 100, 0, 0), "m"));
+
+		ChatClientRequest onRoot = memory.before(buildRequest(this.sessionId, "Hi"), chain);
+		assertThatThrownBy(() -> budget.before(onRoot, chain)).isInstanceOf(BudgetReachedException.class);
+		ChatClientRequest onChild = memory.before(buildRequest(child.id(), "Hi"), chain);
+		assertThatThrownBy(() -> budget.before(onChild, chain)).isInstanceOf(BudgetReachedException.class);
+		assertThat(this.sessionService.findById(child.id()).stopReason()).isEqualTo(StopReason.BUDGET_REACHED);
+		// No budget for the tree: nothing is checked
+		BudgetAdvisor unlimited = BudgetAdvisor.builder(this.sessionService).build();
+		assertThat(unlimited.before(memory.before(buildRequest(child.id(), "Hi"), chain), chain)).isNotNull();
+	}
+
+	@Test
+	void aStreamedCallIsRefusedWithTheSameException() {
+		SessionMemoryAdvisor memory = tracking();
+		BudgetAdvisor budget = budget(10);
+		this.sessionService.appendEvent(UsageEvents.of(this.sessionId, new TokenUsage(9, 1, 10, 0, 0), "m"));
+		StreamAdvisorChain chain = mock(StreamAdvisorChain.class);
+		ChatClientRequest started = memory.before(buildRequest(this.sessionId, "Hi"), chain);
+
+		assertThatThrownBy(() -> budget.adviseStream(started, chain).blockLast())
+			.isInstanceOf(BudgetReachedException.class);
+		assertThat(this.sessionService.findById(this.sessionId).stopReason()).isEqualTo(StopReason.BUDGET_REACHED);
 	}
 
 	// --- Spring Boot configuration ---

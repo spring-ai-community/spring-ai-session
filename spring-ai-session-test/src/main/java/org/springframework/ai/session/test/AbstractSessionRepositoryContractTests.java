@@ -54,6 +54,8 @@ import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.SessionTreeEvents;
+import org.springframework.ai.session.UsageEvents;
+import org.springframework.ai.session.TokenUsage;
 import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.util.MimeTypeUtils;
 
@@ -1015,6 +1017,22 @@ public abstract class AbstractSessionRepositoryContractTests {
 			.containsExactly("u2", "a2");
 		assertThat(texts(session.id(), EventFilter.active().merge(EventFilter.lastN(1)))).containsExactly("u2",
 				"a2");
+	}
+
+	@Test
+	void aUsageEventKeepsItsCountsThroughTheStore() {
+		Session session = newSession("user-usage");
+		append(session.id(), user("u1"), assistant("a1"));
+		this.repository.appendEvent(UsageEvents.of(session.id(), new TokenUsage(1200, 30, 1230, 1000, 0), "claude"));
+
+		List<SessionEvent> usage = this.repository.findEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.USAGE)).build());
+		assertThat(usage).hasSize(1);
+		assertThat(UsageEvents.usage(usage.get(0))).isEqualTo(new TokenUsage(1200, 30, 1230, 1000, 0));
+		assertThat(UsageEvents.model(usage.get(0))).isEqualTo("claude");
+		assertThat(usage.get(0).hasMessage()).isFalse();
+		// Never part of the active conversation
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active())).hasSize(2);
 	}
 
 	@Test

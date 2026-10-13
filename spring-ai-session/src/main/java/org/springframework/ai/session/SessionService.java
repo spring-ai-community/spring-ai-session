@@ -129,6 +129,19 @@ public interface SessionService {
 	Session endTurn(String sessionId, StopReason stopReason, List<String> eventIds);
 
 	/**
+	 * The token usage of a session: the sum of its {@link EventType#USAGE} events, never
+	 * stored on its own.
+	 * @throws IllegalArgumentException if the session does not exist
+	 */
+	TokenUsage usage(String sessionId);
+
+	/**
+	 * The token usage of a session tree as a whole: the root's usage plus its children's.
+	 * @throws IllegalArgumentException if the root session does not exist
+	 */
+	TokenUsage aggregateUsage(String rootSessionId);
+
+	/**
 	 * The status of a session tree as a whole, never stored: {@link SessionStatus#RUNNING}
 	 * while any member of the tree runs a turn, otherwise the root's own status.
 	 * @throws IllegalArgumentException if the root does not exist

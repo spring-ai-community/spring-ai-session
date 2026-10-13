@@ -31,6 +31,7 @@ import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.StopReason;
+import org.springframework.ai.session.TokenUsage;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
@@ -187,6 +188,18 @@ public class AuthorizingSessionService implements SessionService {
 	public Session endTurn(String sessionId, StopReason stopReason, List<String> eventIds) {
 		authorized(sessionId);
 		return this.delegate.endTurn(sessionId, stopReason, eventIds);
+	}
+
+	@Override
+	public TokenUsage usage(String sessionId) {
+		authorized(sessionId);
+		return this.delegate.usage(sessionId);
+	}
+
+	@Override
+	public TokenUsage aggregateUsage(String rootSessionId) {
+		authorized(rootSessionId);
+		return this.delegate.aggregateUsage(rootSessionId);
 	}
 
 	@Override

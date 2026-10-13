@@ -86,7 +86,7 @@ An event is appended once and never changed. Compaction does not flag it: it app
 | `STATUS` | A status change of the session: `RUNNING` when a turn starts, `IDLE` with a stop reason when it ends, `TERMINATED` on archive. `SessionStatusEvents` builds and reads them | no |
 | `INTERRUPT` | A caller interrupted the running turn | no |
 | `TOOL_CONFIRMATION` | A caller allowed or denied a tool call that was waiting for confirmation. `ToolConfirmationEvents` builds and reads them; see [Tool confirmation](#tool-confirmation) | no |
-| `USAGE` | Token usage of a model call, or a cumulative snapshot | no |
+| `USAGE` | Token usage of one model call. `UsageEvents` builds and reads them; `SessionService.usage` sums them; see [Usage and budget](#usage-and-budget) | no |
 | `COMPACTION` | A compaction boundary: which earlier events are pinned, which summary events stand in for the covered ones, and which recent events are preserved. The newest one defines the active view. Its payload is a `CompactionBoundary` | no |
 | `CHILD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED` | The lifecycle of a delegated child session and the messages exchanged with it. The payload names the child; the two message markers also carry the message that crossed the boundary, as a user message (the task) or an assistant message (the answer). Only `MESSAGE` events start turns and enter the prompt, but text searches find a marker's message | no |
 
@@ -610,6 +610,24 @@ sequenceDiagram
     SMA-->>Gate: assistant: "hello"
     SMA->>Log: assistant message, STATUS IDLE with stop reason END_TURN
 ```
+
+### Usage and budget
+
+`SessionMemoryAdvisor` records every model call's token usage as a `USAGE` event
+(prompt, completion and total tokens, the provider's cache read and write counts when it
+reports them, and the model). A streamed reply records the three token counts and the
+model, not the cache counts: Spring AI's stream aggregator does not carry them. A session's
+usage is the sum of its events, never stored on its own: `usage(sessionId)` returns a `TokenUsage`, and `aggregateUsage(rootId)` adds the
+children of a tree, the way an agent runtime sums its threads into the session.
+
+A **budget** is a limit on a tree's total tokens. `BudgetAdvisor` checks it before every
+model call, including every round of a tool loop: once the tree's usage has reached the
+budget its `BudgetPolicy` gives the root (`BudgetPolicy.fixed(Budget.ofTotalTokens(n))`,
+`fromMetadata("budget")`, or your own), the running turn ends with
+`stopReason = BUDGET_REACHED` and the call is refused with a `BudgetReachedException`.
+The call that takes the usage over the budget completes; the next one is refused, and so
+is every request after it until the policy returns a higher budget. See
+[ChatClient Integration](../chat-client/chat-client.md#budget) for the wiring.
 
 ### Expiry cleanup
 

@@ -45,6 +45,9 @@ On every request the advisor:
    loop the later rounds (whose prompt ends with tool results) continue the running turn.
    `trackStatus(false)` on the builder leaves the status alone. See
    [Status, turns and archive](../session-management/concepts.md#status-turns-and-archive).
+8. Records the call's token usage as a `USAGE` event, with the model's name, when the
+   reply carries usage. `recordUsage(false)` turns it off. See
+   [Usage and budget](../session-management/concepts.md#usage-and-budget).
 
 The diagram below shows the round-trip: the **before** phase loads history and builds the
 expanded prompt, the **after** phase appends the assistant message and compacts on trigger.
@@ -335,6 +338,33 @@ fails instead of running the tool twice. The log keeps a `TOOL_CONFIRMATION` eve
 decision, so the approval can arrive on another node, and the tool results are stored like
 any other. One known limitation: a confirmed tool marked `returnDirect` sends its result to
 the model like any other, since a resumption cannot short-circuit the advisor chain.
+
+---
+
+## Budget
+
+`BudgetAdvisor` refuses a model call once the session tree's usage has reached its budget.
+It reads the `USAGE` events the memory advisor records, so it sits inside the memory
+advisor (default order `HIGHEST_PRECEDENCE + 1100`), where the turn is running and every
+round of a tool loop passes through it:
+
+```java
+ChatClient chatClient = ChatClient.builder(chatModel)
+    .defaultAdvisors(
+        SessionMemoryAdvisor.builder(sessionService).build(),
+        BudgetAdvisor.builder(sessionService)
+            .policy(BudgetPolicy.fixed(Budget.ofTotalTokens(200_000)))
+            .build())
+    .build();
+```
+
+The refused call throws `BudgetReachedException`, which carries the session id, the tree's
+usage and the budget; in a stream it arrives as the error signal. The session is then idle
+with `stopReason() == StopReason.BUDGET_REACHED`, and every call on the tree is refused the
+same way until the policy returns a higher budget, for example
+`BudgetPolicy.fromMetadata("budget")` after the root's metadata was raised. A child's usage
+counts towards its root's budget, and a call on a child is refused like one on the root.
+The budget is checked before a call, not after it, so the call that crosses it completes.
 
 ---
 

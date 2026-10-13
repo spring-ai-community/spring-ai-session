@@ -818,4 +818,20 @@ class DefaultSessionServiceTests {
 		assertThat(SessionStatusEvents.eventIds(statuses.get(1))).containsExactly("evt-1");
 	}
 
+	@Test
+	void usageIsTheSumOfTheUsageEventsAndATreeAddsItsChildren() {
+		Session root = this.service.create(CreateSessionRequest.builder().build());
+		Session child = this.service.createChild(root.id(), "worker");
+		assertThat(this.service.usage(root.id())).isEqualTo(TokenUsage.ZERO);
+		this.service.appendEvent(UsageEvents.of(root.id(), new TokenUsage(100, 10, 110, 0, 0), "m"));
+		this.service.appendEvent(UsageEvents.of(root.id(), new TokenUsage(200, 20, 220, 50, 0), "m"));
+		this.service.appendEvent(UsageEvents.of(child.id(), new TokenUsage(1, 1, 2, 0, 0), "m"));
+		this.service.appendMessage(root.id(), new UserMessage("not usage"));
+
+		assertThat(this.service.usage(root.id())).isEqualTo(new TokenUsage(300, 30, 330, 50, 0));
+		assertThat(this.service.usage(child.id())).isEqualTo(new TokenUsage(1, 1, 2, 0, 0));
+		assertThat(this.service.aggregateUsage(root.id())).isEqualTo(new TokenUsage(301, 31, 332, 50, 0));
+		assertThatIllegalArgumentException().isThrownBy(() -> this.service.usage("missing"));
+	}
+
 }

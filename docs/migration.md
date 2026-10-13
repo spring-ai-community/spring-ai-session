@@ -219,6 +219,17 @@ advisor. See [Tool confirmation](chat-client/chat-client.md#tool-confirmation).
 One small behaviour change: a request without a user or tool message no longer stores the
 empty user message `Prompt.getLastUserOrToolResponseMessage()` fabricates.
 
+### New: usage and budget
+
+`SessionMemoryAdvisor` now records every model call's token usage as a `USAGE` event
+(`UsageEvents`, read back as a `TokenUsage`); `recordUsage(false)` turns it off.
+`SessionService.usage(id)` and `aggregateUsage(rootId)` sum them for a session and a tree,
+and `AuthorizingSessionService` guards both. A new `BudgetAdvisor`, ordered inside the
+memory advisor, refuses a call with `BudgetReachedException` and ends the turn with
+`BUDGET_REACHED` once the tree's usage has reached the `Budget` its `BudgetPolicy` gives
+the root. Nothing is enforced without the advisor. See
+[Budget](chat-client/chat-client.md#budget).
+
 ### Renames and small API changes
 
 - `EventFilter.compactedView` is `activeView` (record accessor, builder method and

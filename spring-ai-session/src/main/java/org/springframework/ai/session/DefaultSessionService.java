@@ -22,6 +22,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -225,6 +226,39 @@ public class DefaultSessionService implements SessionService {
 		}
 		this.sessionRepository.appendEvent(SessionStatusEvents.idle(sessionId, stopReason, eventIds));
 		return requireSession(sessionId);
+	}
+
+	@Override
+	public TokenUsage usage(String sessionId) {
+		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		requireSession(sessionId);
+		return sumUsage(List.of(sessionId));
+	}
+
+	@Override
+	public TokenUsage aggregateUsage(String rootSessionId) {
+		Assert.hasText(rootSessionId, "rootSessionId must not be null or empty");
+		Session root = requireSession(rootSessionId);
+		List<String> ids = new ArrayList<>();
+		ids.add(root.id());
+		this.sessionRepository.findByRootSessionId(rootSessionId)
+			.stream()
+			.map(Session::id)
+			.filter(id -> !id.equals(root.id()))
+			.forEach(ids::add);
+		return sumUsage(ids);
+	}
+
+	private TokenUsage sumUsage(List<String> sessionIds) {
+		EventFilter usageEvents = EventFilter.builder().eventTypes(Set.of(EventType.USAGE)).build();
+		TokenUsage sum = TokenUsage.ZERO;
+		for (SessionEvent event : this.sessionRepository.findEvents(sessionIds, usageEvents)) {
+			TokenUsage usage = UsageEvents.usage(event);
+			if (usage != null) {
+				sum = sum.plus(usage);
+			}
+		}
+		return sum;
 	}
 
 	@Override

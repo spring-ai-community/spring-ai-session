@@ -47,6 +47,7 @@ import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.content.MediaContent;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
@@ -56,6 +57,8 @@ import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.StopReason;
+import org.springframework.ai.session.TokenUsage;
+import org.springframework.ai.session.UsageEvents;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 import org.springframework.core.Ordered;
@@ -84,6 +87,9 @@ import org.springframework.util.Assert;
  * {@link StopReason#ERROR} when the call fails. The start is a compare-and-set, so a
  * second concurrent turn on the same session is rejected; see
  * {@link Builder#trackStatus(boolean)}.</li>
+ * <li>Records every model call's token usage as a
+ * {@link org.springframework.ai.session.EventType#USAGE} event; see
+ * {@link Builder#recordUsage(boolean)}.</li>
  * </ol>
  *
  * <p>
@@ -189,11 +195,14 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	private final boolean trackStatus;
 
+	private final boolean recordUsage;
+
 	private SessionMemoryAdvisor(SessionService sessionService, int order, Scheduler scheduler,
 			EventFilter eventFilter, MessageFilter messageFilter, SessionEventRequestIdGenerator requestEventIdGenerator,
 			SessionEventResponseIdGenerator responseEventIdGenerator, @Nullable CompactionTrigger compactionTrigger,
-			@Nullable CompactionStrategy compactionStrategy, boolean trackStatus) {
+			@Nullable CompactionStrategy compactionStrategy, boolean trackStatus, boolean recordUsage) {
 		this.trackStatus = trackStatus;
+		this.recordUsage = recordUsage;
 		this.sessionService = sessionService;
 		this.order = order;
 		this.scheduler = scheduler;
@@ -370,6 +379,12 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 					.build()));
 		}
 
+		// 1.1. Record the call's token usage. The id derives from the reply's first
+		// message, so a retried after() with a deterministic generator counts it once.
+		if (this.recordUsage && response.chatResponse() != null) {
+			recordUsage(response, response.chatResponse(), sessionId);
+		}
+
 		// 2. Compact synchronously if configured, once the turn is complete. Inside a
 		// tool-calling loop this advisor's after() runs once per round; a reply that
 		// still requests tool calls means the turn is in progress. Compacting then could
@@ -514,6 +529,21 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 					+ "interrupted mid-loop is the likely cause; the session log is unchanged", dropped, sessionId);
 		}
 		return kept;
+	}
+
+	private void recordUsage(ChatClientResponse response, ChatResponse chatResponse, String sessionId) {
+		TokenUsage usage = TokenUsage.of(chatResponse.getMetadata().getUsage());
+		if (usage.isEmpty() || chatResponse.getResults().isEmpty()) {
+			return;
+		}
+		Message first = chatResponse.getResults().get(0).getOutput();
+		SessionEvent usageEvent = UsageEvents.of(sessionId, usage, chatResponse.getMetadata().getModel());
+		this.sessionService.appendEvent(SessionEvent.builder()
+			.id(this.responseEventIdGenerator.generate(response, first) + "-usage")
+			.sessionId(sessionId)
+			.type(usageEvent.getType())
+			.payload(usageEvent.getPayload())
+			.build());
 	}
 
 	/** The last user or tool response message of the prompt, or {@code null} when it has none. */
@@ -785,6 +815,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		private boolean trackStatus = true;
 
+		private boolean recordUsage = true;
+
 		private Builder(SessionService sessionService) {
 			Assert.notNull(sessionService, "sessionService must not be null");
 			this.sessionService = sessionService;
@@ -878,6 +910,16 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			return this;
 		}
 
+		/**
+		 * Whether every model call's token usage is recorded as a
+		 * {@link org.springframework.ai.session.EventType#USAGE} event (the default).
+		 * {@link SessionService#usage} sums them and a {@link BudgetAdvisor} reads them.
+		 */
+		public Builder recordUsage(boolean recordUsage) {
+			this.recordUsage = recordUsage;
+			return this;
+		}
+
 		public SessionMemoryAdvisor build() {
 			if ((this.compactionTrigger == null) != (this.compactionStrategy == null)) {
 				throw new IllegalArgumentException(
@@ -885,7 +927,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			}
 			return new SessionMemoryAdvisor(this.sessionService, this.order, this.scheduler,
 					this.eventFilter, this.messageFilter, this.requestEventIdGenerator, this.responseEventIdGenerator,
-					this.compactionTrigger, this.compactionStrategy, this.trackStatus);
+					this.compactionTrigger, this.compactionStrategy, this.trackStatus, this.recordUsage);
 		}
 
 	}
