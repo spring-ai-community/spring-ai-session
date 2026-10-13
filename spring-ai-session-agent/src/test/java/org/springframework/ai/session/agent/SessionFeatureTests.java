@@ -125,6 +125,25 @@ class SessionFeatureTests {
 	}
 
 	@Test
+	void aFailingCompactionDoesNotFailTheRun() {
+		ScriptedChatModel chatModel = new ScriptedChatModel().reply("Paris is lovely in October");
+		Agent<String, String> agent = ModelAwareGraphAgent.builder(Graphs.toolCallLoop(), chatModel)
+			.enable(SessionFeature.builder(this.sessions)
+				.compaction(new TurnCountTrigger(1), request -> {
+					throw new IllegalStateException("summarizer down");
+				})
+				.build())
+			.build();
+
+		assertThat(agent.output("I am planning a trip to Paris in October.", "trip-1"))
+			.isEqualTo("Paris is lovely in October");
+
+		assertThat(texts(this.sessions.getActiveMessages("trip-1")))
+			.containsExactly("I am planning a trip to Paris in October.", "Paris is lovely in October");
+		assertThat(this.sessions.findById("trip-1").stopReason()).isEqualTo(StopReason.END_TURN);
+	}
+
+	@Test
 	void aReattemptOfACrashedRunResumesFromTheLogAndStoresNothingTwice() {
 		AtomicInteger replies = new AtomicInteger();
 		AtomicBoolean crash = new AtomicBoolean(true);
@@ -245,6 +264,28 @@ class SessionFeatureTests {
 				EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build());
 		assertThat(statuses).extracting(SessionStatusEvents::runId).containsExactly("other-run");
 		assertThat(this.sessions.getActiveMessages("held")).isEmpty();
+	}
+
+	@Test
+	void aCancelledRunLeavesAnInterruptedTurn() {
+		Node<String, String> cancelled = Node.builder("cancelled")
+			.withInputType(String.class)
+			.withOutputType(String.class)
+			.withAction(text -> {
+				throw new java.util.concurrent.CancellationException("Agent run cancelled");
+			})
+			.build();
+		Graph<String, String> graph = Graph.builder()
+			.withInputType(String.class)
+			.withOutputType(String.class)
+			.build(g -> g.edge(g.start, cancelled).edge(cancelled, g.end));
+		Agent<String, String> agent = GraphAgent.builder(graph).enable(SessionFeature.builder(this.sessions).build()).build();
+
+		assertThatExceptionOfType(RunException.class).isThrownBy(() -> agent.output("go", "s-cancel"));
+
+		Session session = this.sessions.findById("s-cancel");
+		assertThat(session.stopReason()).isEqualTo(StopReason.INTERRUPTED);
+		assertThat(this.sessions.getEvents("s-cancel")).extracting(SessionEvent::getType).contains(EventType.INTERRUPT);
 	}
 
 	private static Graph<String, String> replyThenPublish(AtomicInteger replies, AtomicBoolean crash) {

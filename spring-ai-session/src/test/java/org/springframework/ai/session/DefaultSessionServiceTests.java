@@ -934,4 +934,23 @@ class DefaultSessionServiceTests {
 		assertThat(statuses).extracting(SessionStatusEvents::runId).containsExactly("run-7", "run-7", null, null);
 	}
 
+	@Test
+	void aCallerInterruptsARunningTurn() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		this.service.startTurn(session.id(), "run-3");
+
+		Session idle = this.service.interrupt(session.id(), "operator stop");
+
+		assertThat(idle.stopReason()).isEqualTo(StopReason.INTERRUPTED);
+		List<SessionEvent> log = this.service.getEvents(session.id());
+		assertThat(log).extracting(SessionEvent::getType)
+			.containsExactly(EventType.STATUS, EventType.INTERRUPT, EventType.STATUS);
+		assertThat(InterruptEvents.reason(log.get(1))).isEqualTo("operator stop");
+		assertThat(SessionStatusEvents.runId(log.get(2))).isEqualTo("run-3");
+		assertThatIllegalStateException().isThrownBy(() -> this.service.interrupt(session.id()));
+		// A refused interrupt writes nothing
+		assertThat(this.service.getEvents(session.id())).hasSize(3);
+		assertThatIllegalArgumentException().isThrownBy(() -> this.service.interrupt("missing"));
+	}
+
 }

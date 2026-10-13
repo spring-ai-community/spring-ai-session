@@ -17,16 +17,16 @@
 package org.springframework.ai.session;
 
 import org.jspecify.annotations.Nullable;
-
 import org.springframework.util.Assert;
+import java.util.List;
 
 /**
  * The {@link EventType#INTERACTION} events of a human-in-the-loop interaction: the
  * question a turn parked on, and the answer that resumed it. A turn parks with
  * {@link SessionService#endTurn(String, StopReason, java.util.List)} and
- * {@link StopReason#REQUIRES_ACTION} naming the {@linkplain #required required} event; the
- * {@linkplain #answered answer} is recorded before the turn starts again, so a run can be
- * resumed from the session on any node.
+ * {@link StopReason#REQUIRES_ACTION} naming the {@linkplain #required required} event;
+ * the {@linkplain #answered answer} is recorded before the turn starts again, so a run
+ * can be resumed from the session on any node.
  *
  * @author Christian Tzolov
  * @since 0.11.0
@@ -88,6 +88,24 @@ public final class InteractionEvents {
 		return event.build();
 	}
 
+	/**
+	 * The newest question among the given {@link EventType#INTERACTION} events that no
+	 * answer follows, or {@code null}: what a parked session waits on.
+	 * @param interactions the session's interaction events, oldest first
+	 */
+	public static @Nullable SessionEvent pending(List<SessionEvent> interactions) {
+		SessionEvent pending = null;
+		for (SessionEvent event : interactions) {
+			if (isRequired(event)) {
+				pending = event;
+			}
+			else if (pending != null && pending.getId().equals(requiredEventId(event))) {
+				pending = null;
+			}
+		}
+		return pending;
+	}
+
 	/** Whether the event records a question. */
 	public static boolean isRequired(SessionEvent event) {
 		return event.getType().equals(EventType.INTERACTION)
@@ -100,7 +118,10 @@ public final class InteractionEvents {
 				&& PHASE_ANSWERED.equals(event.getPayload().get(PAYLOAD_PHASE));
 	}
 
-	/** The question a {@linkplain #isRequired required} event records, or {@code null} for another event. */
+	/**
+	 * The question a {@linkplain #isRequired required} event records, or {@code null} for
+	 * another event.
+	 */
 	public static @Nullable Interaction interaction(SessionEvent event) {
 		if (!isRequired(event)) {
 			return null;
@@ -111,13 +132,19 @@ public final class InteractionEvents {
 				resumeType != null ? String.valueOf(resumeType) : null);
 	}
 
-	/** The id of the question an {@linkplain #isAnswered answer} answers, or {@code null} for another event. */
+	/**
+	 * The id of the question an {@linkplain #isAnswered answer} answers, or {@code null}
+	 * for another event.
+	 */
 	public static @Nullable String requiredEventId(SessionEvent event) {
 		Object id = event.getPayload().get(PAYLOAD_REQUIRED_EVENT_ID);
 		return (isAnswered(event) && id != null) ? String.valueOf(id) : null;
 	}
 
-	/** The answer an {@linkplain #isAnswered answer} event records; {@code null} when none was given. */
+	/**
+	 * The answer an {@linkplain #isAnswered answer} event records; {@code null} when none
+	 * was given.
+	 */
 	public static @Nullable Object answer(SessionEvent event) {
 		return isAnswered(event) ? event.getPayload().get(PAYLOAD_VALUE) : null;
 	}

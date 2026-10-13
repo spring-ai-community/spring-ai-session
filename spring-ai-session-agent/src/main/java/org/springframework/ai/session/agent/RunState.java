@@ -34,7 +34,13 @@ final class RunState {
 	/** The session of each context path; the root path is {@code ""}. */
 	final Map<String, String> sessions = new ConcurrentHashMap<>();
 
-	/** How many messages of each path's conversation are stored. */
+	/**
+	 * How many messages the run stored for each path. For the root path it is the ordinal
+	 * the next message's id is built from, a count the compaction of the root conversation
+	 * does not touch; for a nested path it is also the index of the next message of that
+	 * conversation to store, inherited prefix included, since a nested conversation is
+	 * never compacted. The checkpoint carries it, so a resumed run continues both.
+	 */
 	final Map<String, Integer> stored = new ConcurrentHashMap<>();
 
 	/** How many messages a nested conversation started with (inherited, not its own). */

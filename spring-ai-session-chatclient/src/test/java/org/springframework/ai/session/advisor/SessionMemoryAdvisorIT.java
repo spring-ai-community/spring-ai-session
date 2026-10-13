@@ -62,6 +62,7 @@ import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.MessageFilter;
+import org.springframework.ai.session.InteractionEvents;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
@@ -1370,7 +1371,12 @@ class SessionMemoryAdvisorIT {
 		SessionEvent assistant = log.stream().filter(SessionEvent::hasToolCalls).findFirst().orElseThrow();
 		SessionEvent parked = log.get(log.size() - 1);
 		assertThat(SessionStatusEvents.stopReason(parked)).isEqualTo(StopReason.REQUIRES_ACTION);
-		assertThat(SessionStatusEvents.eventIds(parked)).containsExactly(assistant.getId());
+		// The turn names the reply with the calls and the question it parks on
+		SessionEvent question = log.stream().filter(InteractionEvents::isRequired).findFirst().orElseThrow();
+		assertThat(SessionStatusEvents.eventIds(parked)).containsExactly(assistant.getId(), question.getId());
+		assertThat(InteractionEvents.interaction(question).payload()).isEqualTo(Map.of("toolCalls",
+				List.of(Map.of("id", "c1", "name", "get_weather", "arguments", "{\"city\":\"Paris\"}"))));
+		assertThat(InteractionEvents.interaction(question).resumeType()).isEqualTo(ToolConfirmation.class.getName());
 
 		// A call the policy does not name is left to the loop: the turn stays running
 		String free = this.sessionService.create(CreateSessionRequest.builder().build()).id();
@@ -1408,6 +1414,12 @@ class SessionMemoryAdvisorIT {
 			.findFirst()
 			.orElseThrow();
 		assertThat(ToolConfirmationEvents.confirmation(decision)).isEqualTo(ToolConfirmation.allow("c1"));
+		// The decisions answer the question the turn parked on
+		List<SessionEvent> interactions = log.stream().filter(e -> e.getType().equals(EventType.INTERACTION)).toList();
+		assertThat(interactions).hasSize(2);
+		assertThat(InteractionEvents.requiredEventId(interactions.get(1))).isEqualTo(interactions.get(0).getId());
+		assertThat(InteractionEvents.answer(interactions.get(1))).isEqualTo(List.of(Map.of("toolCallId", "c1", "allowed", true)));
+		assertThat(InteractionEvents.pending(interactions)).isNull();
 		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
 		assertThat(describe(this.sessionService.getActiveMessages(this.sessionId))).containsExactly("Weather in Paris?",
 				"call:c1", "result:c1");

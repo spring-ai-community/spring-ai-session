@@ -19,7 +19,9 @@ package org.springframework.ai.session.agent;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -52,6 +54,7 @@ import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Interaction;
 import org.springframework.ai.session.InteractionEvents;
+import org.springframework.ai.session.InterruptEvents;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
@@ -61,6 +64,7 @@ import org.springframework.ai.session.SessionTreeEvents;
 import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.TokenUsage;
 import org.springframework.ai.session.UsageEvents;
+import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 import org.springframework.core.ParameterizedTypeReference;
@@ -127,12 +131,13 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 		return new SessionCheckpointer(this.sessions, this, this.jsonMapper);
 	}
 
-	SessionService sessions() {
-		return this.sessions;
+	/** The state of a run in flight, created on first sight; keyed by the session and the run. */
+	RunState state(RunIdentification runId) {
+		return this.runs.computeIfAbsent(key(runId), id -> new RunState());
 	}
 
-	RunState state(RunIdentification runId) {
-		return this.runs.computeIfAbsent(runId.runId(), id -> new RunState());
+	private static String key(RunIdentification runId) {
+		return runId.sessionId() + "\u0000" + runId.runId();
 	}
 
 	// --- the run is a turn ----------------------------------------------------------------
@@ -165,7 +170,7 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 		catch (RuntimeException ex) {
 			// The run cannot start (another run holds the session, or the session is archived):
 			// forget it, so its end never touches a turn this run does not own
-			this.runs.remove(runId.runId());
+			this.runs.remove(key(runId));
 			throw ex;
 		}
 	}
@@ -205,45 +210,55 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 
 	/** The newest question of the session that has no answer yet, or {@code null}. */
 	public @Nullable SessionEvent pendingInteraction(String sessionId) {
-		List<SessionEvent> interactions = this.sessions.getEvents(sessionId,
-				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).build());
-		SessionEvent pending = null;
-		for (SessionEvent event : interactions) {
-			if (InteractionEvents.isRequired(event)) {
-				pending = event;
-			}
-			else if (pending != null && pending.getId().equals(InteractionEvents.requiredEventId(event))) {
-				pending = null;
-			}
-		}
-		return pending;
+		return InteractionEvents.pending(this.sessions.getEvents(sessionId,
+				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).build()));
 	}
 
 	@Override
 	public void onRunCompleted(RunCompletedEvent event, ExecutionContext context) {
-		endRun(context, StopReason.END_TURN, List.of());
+		endRun(context, StopReason.END_TURN, List.of(), null);
 	}
 
 	@Override
 	public void onRunFailed(RunFailedEvent event, ExecutionContext context) {
-		endRun(context, StopReason.ERROR, List.of());
+		if (isCancellation(event.error())) {
+			// The caller cancelled the run (an AgentRun was closed): the turn was interrupted, not failed
+			endRun(context, StopReason.INTERRUPTED, List.of(),
+					root -> this.sessions.appendEvent(InterruptEvents.of(root, event.error().getMessage())));
+			return;
+		}
+		endRun(context, StopReason.ERROR, List.of(), null);
+	}
+
+	private static boolean isCancellation(Throwable error) {
+		for (Throwable t = error; t != null; t = t.getCause()) {
+			if (t instanceof CancellationException || t instanceof InterruptedException) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	@Override
 	public void onRunInterrupted(RunInterruptedEvent event, ExecutionContext context) {
-		RunState state = this.runs.get(context.getRunId().runId());
+		RunState state = this.runs.get(key(context.getRunId()));
 		if (state == null) {
 			return;
 		}
 		SessionEvent required = InteractionEvents.required(state.root(),
 				new Interaction(event.path(), this.jsonMapper.convertValue(event.payload(), Object.class), null));
 		this.sessions.appendEvent(required);
-		endRun(context, StopReason.REQUIRES_ACTION, List.of(required.getId()));
+		endRun(context, StopReason.REQUIRES_ACTION, List.of(required.getId()), null);
 	}
 
-	private void endRun(ExecutionContext context, StopReason stopReason, List<String> eventIds) {
+	/**
+	 * Ends the run's turn, when the run holds it: optionally records something first (an
+	 * interruption), then the status.
+	 */
+	private void endRun(ExecutionContext context, StopReason stopReason, List<String> eventIds,
+			@Nullable Consumer<String> beforeEnding) {
 		RunIdentification runId = context.getRunId();
-		RunState state = this.runs.remove(runId.runId());
+		RunState state = this.runs.remove(key(runId));
 		if (state == null) {
 			return; // the run never started a turn
 		}
@@ -251,6 +266,9 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 		if (!ownsTurn(root, runId)) {
 			logger.warn("Run [{}] does not hold the turn of session [{}]; leaving it as it is", runId.runId(), root);
 			return;
+		}
+		if (beforeEnding != null) {
+			beforeEnding.accept(root);
 		}
 		try {
 			this.sessions.endTurn(root, stopReason, eventIds);
@@ -265,7 +283,7 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 	@Override
 	public List<Message> aroundUpdate(Joinpoint jp, List<Message> oldMessages, List<Message> newMessages,
 			RunIdentification runId) {
-		RunState state = this.runs.get(runId.runId());
+		RunState state = this.runs.get(key(runId));
 		if (state == null || !startsWith(newMessages, oldMessages)) {
 			// Not a run this feature follows, or a reset: nothing to store
 			return jp.proceed(oldMessages, newMessages, runId);
@@ -277,8 +295,20 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 		if (this.trigger == null || this.strategy == null) {
 			return jp.proceed(oldMessages, newMessages, runId);
 		}
-		this.sessions.compact(sessionId, this.trigger, this.strategy);
-		return jp.proceed(oldMessages, this.sessions.getActiveMessages(sessionId), runId);
+		// Compaction is a projection: when it happened, the conversation becomes the active
+		// view the log now projects. It is best effort, as in the memory advisor: the
+		// messages are in the log, so a failing summarizer must not fail the run
+		try {
+			CompactionResult result = this.sessions.compact(sessionId, this.trigger, this.strategy);
+			if (result.isUnchanged()) {
+				return jp.proceed(oldMessages, newMessages, runId);
+			}
+			return jp.proceed(oldMessages, this.sessions.getActiveMessages(sessionId), runId);
+		}
+		catch (RuntimeException ex) {
+			logger.warn("Compaction of session [{}] failed; the conversation continues uncompacted", sessionId, ex);
+			return jp.proceed(oldMessages, newMessages, runId);
+		}
 	}
 
 	private void append(String sessionId, String runId, String path, RunState state, Message message) {
@@ -302,7 +332,7 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 				|| event instanceof MessageEvent) {
 			return; // run events are the turn, chunks are streamed, messages come from the conversations
 		}
-		RunState state = this.runs.get(context.getRunId().runId());
+		RunState state = this.runs.get(key(context.getRunId()));
 		if (state == null) {
 			return;
 		}

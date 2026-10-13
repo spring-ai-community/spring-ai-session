@@ -74,4 +74,15 @@ class InteractionEventsTests {
 		assertThat(service.findById(session.id()).status()).isEqualTo(SessionStatus.RUNNING);
 	}
 
+	@Test
+	void thePendingQuestionIsTheNewestWithoutAnAnswer() {
+		SessionEvent first = InteractionEvents.required("s", new Interaction("a", "one?", null));
+		SessionEvent second = InteractionEvents.required("s", new Interaction("b", "two?", null));
+
+		assertThat(InteractionEvents.pending(List.of())).isNull();
+		assertThat(InteractionEvents.pending(List.of(first))).isSameAs(first);
+		assertThat(InteractionEvents.pending(List.of(first, InteractionEvents.answered("s", first.getId(), true)))).isNull();
+		assertThat(InteractionEvents.pending(List.of(first, second))).isSameAs(second);
+	}
+
 }

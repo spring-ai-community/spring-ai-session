@@ -84,7 +84,7 @@ An event is appended once and never changed. Compaction does not flag it: it app
 |---|---|---|
 | `MESSAGE` | A conversation message. The only type that takes part in prompt assembly and compaction | yes |
 | `STATUS` | A status change of the session: `RUNNING` when a turn starts, `IDLE` with a stop reason when it ends, `TERMINATED` on archive. `SessionStatusEvents` builds and reads them | no |
-| `INTERRUPT` | A caller interrupted the running turn | no |
+| `INTERRUPT` | A caller interrupted the running turn: `SessionService.interrupt(id, reason)` records it and ends the turn with `INTERRUPTED`; `InterruptEvents` reads it | no |
 | `TOOL_CONFIRMATION` | A caller allowed or denied a tool call that was waiting for confirmation. `ToolConfirmationEvents` builds and reads them; see [Tool confirmation](#tool-confirmation) | no |
 | `USAGE` | Token usage of one model call. `UsageEvents` builds and reads them; `SessionService.usage` sums them; see [Usage and budget](#usage-and-budget) | no |
 | `COMPACTION` | A compaction boundary: which earlier events are pinned, which summary events stand in for the covered ones, and which recent events are preserved. The newest one defines the active view. Its payload is a `CompactionBoundary` | no |
@@ -545,8 +545,9 @@ which events and a re-attempt of the same run reads as one.
 `SessionMemoryAdvisor` does both around every `ChatClient` call (see
 [ChatClient Integration](../chat-client/chat-client.md#what-the-advisor-does)). The start is
 a compare-and-set from `IDLE`, so two concurrent calls cannot run turns on one session at
-the same time: the second gets an `IllegalStateException`. A turn that was abandoned, for
-example by a crashed process, is ended by hand with `endTurn(id, StopReason.INTERRUPTED)`.
+the same time: the second gets an `IllegalStateException`. A caller interrupts a running
+turn with `interrupt(id, reason)`, which records an `INTERRUPT` event and ends the turn with
+`INTERRUPTED`; it is also how a turn a crashed process left running is ended.
 
 ```mermaid
 stateDiagram-v2
@@ -583,8 +584,10 @@ on, answered later, possibly on another node. `InteractionEvents.required(sessio
 interaction)` records the question (where in the run it was asked, the question as JSON, the
 type of the answer), `endTurn(id, REQUIRES_ACTION, [thatEventId])` parks the turn naming it,
 and `InteractionEvents.answered(sessionId, requiredEventId, value)` records the answer before
-the turn starts again. An agent runtime's human-in-the-loop interrupt maps onto it directly;
-see the spring-ai-agent alignment report on the design branch.
+the turn starts again; `InteractionEvents.pending(events)` finds the question a session waits
+on. The tool-confirmation gate records one too, with the gated calls as the question and the
+decisions as the answer, next to its `TOOL_CONFIRMATION` events, so every parked turn reads the
+same way in the log whichever integration parked it.
 
 ### Tool confirmation
 

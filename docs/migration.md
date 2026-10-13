@@ -261,6 +261,15 @@ The summarizing strategy keeps its `org.springframework.ai.session.compaction` p
 the two modules therefore share; an application on the Java module path would have to merge
 them, which is not supported.
 
+### New: `interrupt`, and the gate as an interaction
+
+`SessionService.interrupt(id, reason)` records an `INTERRUPT` event (`InterruptEvents`) and
+ends the running turn with `INTERRUPTED`; it is the first-class form of the manual
+`endTurn(id, INTERRUPTED)`. `InteractionEvents.pending(events)` finds the question a session
+waits on. The tool-confirmation gate records its parked turn as an `INTERACTION` question and
+answer next to its `TOOL_CONFIRMATION` events, and the status event that parks the turn names
+the reply with the calls and the question.
+
 ### New: `spring-ai-session-agent`
 
 A new module keeps a spring-ai-agent run in a session tree: `SessionFeature` (the run as a

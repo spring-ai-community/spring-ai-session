@@ -346,7 +346,9 @@ a session that is not waiting, or new user text next to the decisions is an
 with the same compare-and-set as any call, so a second request with the same decisions
 fails instead of running the tool twice. The log keeps a `TOOL_CONFIRMATION` event per
 decision, so the approval can arrive on another node, and the tool results are stored like
-any other. One known limitation: a confirmed tool marked `returnDirect` sends its result to
+any other. The parked turn is also an [interaction](../session-management/concepts.md#interactions-a-parked-turn-in-general):
+an `INTERACTION` question with the gated calls, named by the status event next to the reply,
+and an `INTERACTION` answer with the decisions. One known limitation: a confirmed tool marked `returnDirect` sends its result to
 the model like any other, since a resumption cannot short-circuit the advisor chain.
 
 ---

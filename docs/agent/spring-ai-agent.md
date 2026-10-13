@@ -47,6 +47,7 @@ agent.output("Which city did I mention?", new RunIdentification("trip-1", "run-2
 | `ToolCallStartedEvent`, `ToolCallCompletedEvent`, `ToolCallFailedEvent` | `TOOL_CALL` events with the name, arguments, phase and result |
 | An application's own `AgentEvent` record | An event of type `AGENT.<CLASS_NAME>`, its fields as the payload |
 | `RunInterruptedEvent` (`Nodes.interrupt`) | An `INTERACTION` question and a turn parked with `REQUIRES_ACTION`; `resumeOutput(..)` on any agent instance records the answer and resumes |
+| A cancelled run (`AgentRun#close`, a `CancellationException`) | An `INTERRUPT` event and a turn ended with `INTERRUPTED`, not `ERROR` |
 | `ChatResponseEvent` (chunks), `TurnProgressedEvent` | Not stored |
 
 **Message ids are deterministic.** A message appended by a run gets an id from the run, the
@@ -110,6 +111,21 @@ agent = ModelAwareGraphAgent.builder(Graphs.toolCallLoop(), chatModel)
 
 ---
 
+## Following a session as a run
+
+`AgentRun.events()` is the live stream of one run on one node, model chunks included.
+`SessionService.subscribe(sessionId)` is the live stream of what the session kept, on the
+node that writes it, and `EventFilter.after(eventId)` fills the gap on reconnect. The
+`reactor-adapter` of stream-source turns the one into the other:
+
+```java
+Source<SessionEvent> source = SourceAdapter.toSource(sessionService.subscribe(sessionId));
+```
+
+The stored events are session events, not the runtime's records: a `NODE` or `MODEL_CALL`
+event carries the step's name, phase and JSON values, not the `Prompt` or `ChatResponse`
+objects, which were never stored.
+
 ## Limitations
 
 - A nested conversation seeded by a custom propagation is stored from its first event on,
@@ -123,5 +139,8 @@ agent = ModelAwareGraphAgent.builder(Graphs.toolCallLoop(), chatModel)
   for what was kept.
 - Without the checkpointer, a re-attempt of a run re-records the `MESSAGE_RECEIVED` marker of
   a nested agent that completes again; with it, a completed node is skipped and nothing repeats.
+- An agent exposed as a tool runs under the tool's name, which the runtime does not make
+  unique when the model calls it more than once in a run, so repeated calls share one child
+  session; its log then holds the messages of every call.
 - The module depends on a `spring-ai-agent` snapshot that is not published yet, so it is the
   integration that validates the design, not part of a release until the runtime is.

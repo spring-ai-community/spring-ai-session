@@ -146,6 +146,35 @@ public interface SessionService {
 	Session endTurn(String sessionId, StopReason stopReason, List<String> eventIds);
 
 	/**
+	 * Interrupts the running turn, as a caller would: an {@link EventType#INTERRUPT} event
+	 * records it ({@link InterruptEvents}) and the turn ends with
+	 * {@link StopReason#INTERRUPTED}. The run that holds the turn is not stopped by this;
+	 * its next write finds the turn gone. Also the way to end a turn a crashed process left
+	 * running.
+	 * @param reason why, for the log; may be {@code null}
+	 * @return the session, idle
+	 * @throws IllegalArgumentException if the session does not exist
+	 * @throws IllegalStateException if the session is not running a turn
+	 */
+	default Session interrupt(String sessionId, @Nullable String reason) {
+		Session session = findById(sessionId);
+		if (session == null) {
+			throw new IllegalArgumentException("Session not found: " + sessionId);
+		}
+		if (session.status() != SessionStatus.RUNNING) {
+			// Refused before anything is written; endTurn's compare-and-set covers the race
+			throw new IllegalStateException("Session '" + sessionId + "' is not running a turn; it is " + session.status());
+		}
+		appendEvent(InterruptEvents.of(sessionId, reason));
+		return endTurn(sessionId, StopReason.INTERRUPTED);
+	}
+
+	/** Interrupts the running turn; see {@link #interrupt(String, String)}. */
+	default Session interrupt(String sessionId) {
+		return interrupt(sessionId, null);
+	}
+
+	/**
 	 * The token usage of a session: the sum of its {@link EventType#USAGE} events, never
 	 * stored on its own.
 	 * @throws IllegalArgumentException if the session does not exist
