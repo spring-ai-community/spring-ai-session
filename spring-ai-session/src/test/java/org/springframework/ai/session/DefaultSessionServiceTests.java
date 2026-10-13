@@ -921,4 +921,17 @@ class DefaultSessionServiceTests {
 			.containsExactly(child.id());
 	}
 
+	@Test
+	void aTurnNamesItsRunOnBothStatusEvents() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		this.service.startTurn(session.id(), "run-7");
+		this.service.endTurn(session.id(), StopReason.END_TURN);
+		this.service.startTurn(session.id());
+		this.service.endTurn(session.id(), StopReason.END_TURN);
+
+		List<SessionEvent> statuses = this.service.getEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build());
+		assertThat(statuses).extracting(SessionStatusEvents::runId).containsExactly("run-7", "run-7", null, null);
+	}
+
 }

@@ -46,12 +46,27 @@ public final class SessionStatusEvents {
 	 */
 	public static final String PAYLOAD_EVENT_IDS = "eventIds";
 
+	/** Payload key: the id of the run the turn belongs to, when the caller named one. */
+	public static final String PAYLOAD_RUN_ID = "runId";
+
 	private SessionStatusEvents() {
 	}
 
 	/** The event recorded when a turn starts. */
 	public static SessionEvent running(String sessionId) {
-		return changed(sessionId, SessionStatus.RUNNING, null);
+		return running(sessionId, null);
+	}
+
+	/** The event recorded when a turn starts, naming the run it belongs to. */
+	public static SessionEvent running(String sessionId, @Nullable String runId) {
+		SessionEvent.Builder event = SessionEvent.builder()
+			.sessionId(sessionId)
+			.type(EventType.STATUS)
+			.payload(PAYLOAD_STATUS, SessionStatus.RUNNING.name());
+		if (runId != null && !runId.isBlank()) {
+			event.payload(PAYLOAD_RUN_ID, runId);
+		}
+		return event.build();
 	}
 
 	/** The event recorded when a turn ends, with why it ended. */
@@ -64,6 +79,15 @@ public final class SessionStatusEvents {
 	 * ({@link StopReason#REQUIRES_ACTION}).
 	 */
 	public static SessionEvent idle(String sessionId, StopReason stopReason, List<String> eventIds) {
+		return idle(sessionId, stopReason, eventIds, null);
+	}
+
+	/**
+	 * The event recorded when a turn ends, with why it ended, the events it waits on and
+	 * the run it belonged to.
+	 */
+	public static SessionEvent idle(String sessionId, StopReason stopReason, List<String> eventIds,
+			@Nullable String runId) {
 		Assert.notNull(stopReason, "stopReason must not be null");
 		Assert.notNull(eventIds, "eventIds must not be null");
 		SessionEvent.Builder event = SessionEvent.builder()
@@ -73,6 +97,9 @@ public final class SessionStatusEvents {
 			.payload(PAYLOAD_STOP_REASON, stopReason.name());
 		if (!eventIds.isEmpty()) {
 			event.payload(PAYLOAD_EVENT_IDS, List.copyOf(eventIds));
+		}
+		if (runId != null && !runId.isBlank()) {
+			event.payload(PAYLOAD_RUN_ID, runId);
 		}
 		return event.build();
 	}
@@ -102,10 +129,16 @@ public final class SessionStatusEvents {
 				: null;
 	}
 
+	/** The run a {@link EventType#STATUS} event belongs to, or {@code null} when none was named. */
+	public static @Nullable String runId(SessionEvent event) {
+		Object value = event.getPayload().get(PAYLOAD_RUN_ID);
+		return (event.getType().equals(EventType.STATUS) && value != null) ? String.valueOf(value) : null;
+	}
+
 	/** The ids of the events a {@link EventType#STATUS} event says the turn waits on; empty when none. */
 	public static List<String> eventIds(SessionEvent event) {
 		Object value = event.getPayload().get(PAYLOAD_EVENT_IDS);
-		if (event.getType() != EventType.STATUS || !(value instanceof List<?> list)) {
+		if (!event.getType().equals(EventType.STATUS) || !(value instanceof List<?> list)) {
 			return List.of();
 		}
 		return list.stream().filter(Objects::nonNull).map(String::valueOf).toList();

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.springframework.ai.session.advisor;
+package org.springframework.ai.session;
 
 import java.util.List;
 

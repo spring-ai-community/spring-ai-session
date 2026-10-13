@@ -49,6 +49,7 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
+import org.springframework.ai.session.ToolConfirmationPolicy;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;

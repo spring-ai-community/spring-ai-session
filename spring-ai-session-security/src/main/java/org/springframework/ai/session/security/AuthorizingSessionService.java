@@ -181,9 +181,9 @@ public class AuthorizingSessionService implements SessionService {
 	}
 
 	@Override
-	public Session startTurn(String sessionId) {
+	public Session startTurn(String sessionId, @Nullable String runId) {
 		authorized(sessionId);
-		return this.delegate.startTurn(sessionId);
+		return this.delegate.startTurn(sessionId, runId);
 	}
 
 	@Override

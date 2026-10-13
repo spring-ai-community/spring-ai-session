@@ -88,7 +88,15 @@ An event is appended once and never changed. Compaction does not flag it: it app
 | `TOOL_CONFIRMATION` | A caller allowed or denied a tool call that was waiting for confirmation. `ToolConfirmationEvents` builds and reads them; see [Tool confirmation](#tool-confirmation) | no |
 | `USAGE` | Token usage of one model call. `UsageEvents` builds and reads them; `SessionService.usage` sums them; see [Usage and budget](#usage-and-budget) | no |
 | `COMPACTION` | A compaction boundary: which earlier events are pinned, which summary events stand in for the covered ones, and which recent events are preserved. The newest one defines the active view. Its payload is a `CompactionBoundary` | no |
+| `INTERACTION` | A question a turn parked on (a human-in-the-loop interrupt, the general form of a tool confirmation), or its answer. `InteractionEvents` builds and reads them; the turn ends with `REQUIRES_ACTION` naming the question | no |
+| `MODEL_CALL`, `TOOL_CALL`, `NODE`, `CHECKPOINT` | The steps of an agent runtime's run: a model call, a tool call, a graph node, a point to resume from. Reserved names for the spring-ai-agent integration; the session core defines no producer | no |
 | `CHILD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED` | The lifecycle of a delegated child session and the messages exchanged with it. The payload names the child; the two message markers also carry the message that crossed the boundary, as a user message (the task) or an assistant message (the answer). Only `MESSAGE` events start turns and enter the prompt, but text searches find a marker's message | no |
+
+`EventType` is open: a type is its name, the table lists the well-known ones, and an
+application or an agent runtime defines its own with `EventType.of("MY_APP.PROGRESS")`
+(upper case, digits, underscores and dots). Every store keeps the name, a filter by type
+works for any of them, and only `MESSAGE` events and the two message markers take part in
+prompt assembly and compaction.
 
 `EventFilter.active()` returns the active conversation: the `MESSAGE` events of the compacted
 view. `EventFilter.all()` returns every event of every type, boundaries included; use
@@ -531,6 +539,9 @@ Deleted sessions are removed from the repository entirely — there is no tombst
 A session records what it is doing. A **turn** is one model call including its tool loop:
 `startTurn(id)` puts the session in `RUNNING` and `endTurn(id, stopReason)` back in `IDLE`,
 each appending a `STATUS` event so the log tells when every turn started and how it ended.
+`startTurn(id, runId)` names the run the turn belongs to, an agent runtime's run id, on both
+status events (`SessionStatusEvents.runId(event)`), so the log tells which run produced
+which events and a re-attempt of the same run reads as one.
 `SessionMemoryAdvisor` does both around every `ChatClient` call (see
 [ChatClient Integration](../chat-client/chat-client.md#what-the-advisor-does)). The start is
 a compare-and-set from `IDLE`, so two concurrent calls cannot run turns on one session at
@@ -564,6 +575,16 @@ factories for a principal leave them out.
 
 `aggregateStatus(rootId)` is the status of a tree as a whole, never stored: `RUNNING` while
 any member runs a turn, otherwise the root's own status.
+
+### Interactions: a parked turn, in general
+
+The tool-confirmation gate below is one kind of **interaction**: a question the turn parks
+on, answered later, possibly on another node. `InteractionEvents.required(sessionId,
+interaction)` records the question (where in the run it was asked, the question as JSON, the
+type of the answer), `endTurn(id, REQUIRES_ACTION, [thatEventId])` parks the turn naming it,
+and `InteractionEvents.answered(sessionId, requiredEventId, value)` records the answer before
+the turn starts again. An agent runtime's human-in-the-loop interrupt maps onto it directly;
+see the spring-ai-agent alignment report on the design branch.
 
 ### Tool confirmation
 

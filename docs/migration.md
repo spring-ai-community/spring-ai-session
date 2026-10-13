@@ -247,6 +247,30 @@ ids of the events it stored for the request's message and the reply (#20).
 [Event Filtering](session-management/event-filtering.md#cursor-reads) and
 [Live events](session-management/concepts.md#live-events).
 
+### Breaking: `EventType` is a class, and four value types moved to the core package
+
+`EventType` is no longer an enum. It is a final class whose well-known types are the same
+constants (`EventType.MESSAGE`, `STATUS`, …), compared by name, so every caller that uses the
+constants compiles unchanged. `EventType.valueOf(name)` is `EventType.of(name)`, which also
+accepts an application's own name; `values()` and `ordinal()` are gone, and a `switch` over the
+constants becomes `if`/`else` or a map. The JDBC `event_type` column already stores the name,
+so nothing migrates. New well-known types: `INTERACTION`, `MODEL_CALL`, `TOOL_CALL`, `NODE`,
+`CHECKPOINT`.
+
+`Budget`, `BudgetPolicy`, `BudgetReachedException` and `ToolConfirmationPolicy` moved from
+`org.springframework.ai.session.advisor` to `org.springframework.ai.session`: they are value
+types the advisors and the agent features share. Update the imports.
+
+### New: run ids on turns, interaction events, the agent on the child marker
+
+- `SessionService.startTurn(id, runId)` names the run a turn belongs to; both `STATUS` events
+  of the turn carry it (`SessionStatusEvents.runId(event)`). `startTurn(id)` is now a default
+  method.
+- `InteractionEvents` and `Interaction` record a question a turn parks on and its answer
+  (`EventType.INTERACTION`), the general form of a tool confirmation.
+- `SessionTreeEvents.childCreated` and the message markers carry the child's agent version
+  and model next to its name when the child has them.
+
 ### New: agent snapshot
 
 `AgentSnapshot` (name, version, model) records the agent a session was created with, as

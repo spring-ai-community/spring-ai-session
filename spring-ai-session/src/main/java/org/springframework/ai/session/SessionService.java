@@ -109,7 +109,18 @@ public interface SessionService {
 	 * @throws IllegalStateException if the session is already running a turn, or is
 	 * archived
 	 */
-	Session startTurn(String sessionId);
+	default Session startTurn(String sessionId) {
+		return startTurn(sessionId, null);
+	}
+
+	/**
+	 * Starts a turn and names the run it belongs to: an agent runtime's run id, recorded on
+	 * the turn's {@link EventType#STATUS} events ({@link SessionStatusEvents#runId}) so the
+	 * log tells which run produced which events, and a re-attempt of the same run reads as
+	 * one. Otherwise as {@link #startTurn(String)}.
+	 * @param runId the run's id, or {@code null} for an anonymous turn
+	 */
+	Session startTurn(String sessionId, @Nullable String runId);
 
 	/**
 	 * Ends the running turn: the session goes {@link SessionStatus#IDLE} with the given

@@ -88,7 +88,7 @@ criteria combined with AND; in practice, callers set one. The window is one valu
 | `from` | `Instant` | Exclude events before this instant |
 | `to` | `Instant` | Exclude events after this instant |
 | `messageTypes` | `Set<MessageType>` | Keep only events carrying a message of these message types. A `MESSAGE_SENT` / `MESSAGE_RECEIVED` tree marker carries one too; add `eventTypes` to narrow to `MESSAGE` |
-| `eventTypes` | `Set<EventType>` | Keep only events of these event types; unset means every type. `EventFilter.active()` sets `MESSAGE` |
+| `eventTypes` | `Set<EventType>` | Keep only events of these event types, an application's own (`EventType.of("MY_APP.PROGRESS")`) included; unset means every type. `EventFilter.active()` sets `MESSAGE` |
 | `excludeSynthetic` | `boolean` | When `true`, synthetic summary events are excluded |
 | `keywords` | `List<String>` | Case-insensitive substring terms matched against `message.getText()`, combined per `matchMode`; `Builder.keyword(String)` sets one. The text criteria apply to every event that carries a message, tree markers included |
 | `matchMode` | `EventFilter.MatchMode` | `ANY` (at least one term present) or `ALL` (every term present) — only meaningful when `keywords` is set. Import `org.springframework.ai.session.EventFilter.MatchMode` |

@@ -212,7 +212,7 @@ public class DefaultSessionService implements SessionService {
 	}
 
 	@Override
-	public Session startTurn(String sessionId) {
+	public Session startTurn(String sessionId, @Nullable String runId) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		if (!this.sessionRepository.updateStatus(sessionId, SessionStatus.IDLE, SessionStatus.RUNNING, null, null)) {
 			Session session = requireSession(sessionId);
@@ -220,8 +220,15 @@ public class DefaultSessionService implements SessionService {
 			throw new IllegalStateException("Session '" + sessionId + "' could not start a turn: it is "
 					+ session.status() + "; a turn that was abandoned is ended with endTurn(id, StopReason.INTERRUPTED)");
 		}
-		append(SessionStatusEvents.running(sessionId));
+		append(SessionStatusEvents.running(sessionId, runId));
 		return requireSession(sessionId);
+	}
+
+	/** The run id the newest running status event names, so the idle event can repeat it. */
+	private @Nullable String currentRunId(String sessionId) {
+		List<SessionEvent> newest = this.sessionRepository.findEvents(sessionId,
+				EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).lastN(1).build());
+		return newest.isEmpty() ? null : SessionStatusEvents.runId(newest.get(0));
 	}
 
 	@Override
@@ -234,7 +241,7 @@ public class DefaultSessionService implements SessionService {
 			Session session = requireSession(sessionId);
 			throw new IllegalStateException("Session '" + sessionId + "' is not running a turn; it is " + session.status());
 		}
-		append(SessionStatusEvents.idle(sessionId, stopReason, eventIds));
+		append(SessionStatusEvents.idle(sessionId, stopReason, eventIds, currentRunId(sessionId)));
 		return requireSession(sessionId);
 	}
 

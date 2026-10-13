@@ -14,14 +14,12 @@
  * limitations under the License.
  */
 
-package org.springframework.ai.session.advisor;
+package org.springframework.ai.session;
 
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 
-import org.springframework.ai.session.Session;
-import org.springframework.ai.session.TokenUsage;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;

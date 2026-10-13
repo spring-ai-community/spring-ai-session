@@ -14,12 +14,11 @@
  * limitations under the License.
  */
 
-package org.springframework.ai.session.advisor;
+package org.springframework.ai.session;
 
-import org.springframework.ai.session.TokenUsage;
 
 /**
- * Thrown by the {@link BudgetAdvisor} instead of a model call when the session tree's
+ * Thrown by the {@link org.springframework.ai.session.advisor.BudgetAdvisor} instead of a model call when the session tree's
  * usage has reached its {@link Budget}. The session is idle with
  * {@link org.springframework.ai.session.StopReason#BUDGET_REACHED}; raise the budget to
  * continue.

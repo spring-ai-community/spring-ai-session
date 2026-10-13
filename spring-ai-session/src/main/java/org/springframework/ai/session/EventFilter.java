@@ -406,7 +406,9 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	 */
 	public List<SessionEvent> applyTurnAwareWindow(List<SessionEvent> matched) {
 		Assert.notNull(matched, "matched must not be null");
-		if (!(this.window instanceof Window.Last last) || hasTextCriteria() || matched.size() <= last.n()) {
+		if (!(this.window instanceof Window.Last last) || hasTextCriteria() || matched.size() <= last.n()
+				|| (this.eventTypes != null && !this.eventTypes.contains(EventType.MESSAGE))) {
+			// A text search is not a prompt, and a window without MESSAGE events has no turn start
 			return applyWindow(matched);
 		}
 		int from = matched.size() - last.n();

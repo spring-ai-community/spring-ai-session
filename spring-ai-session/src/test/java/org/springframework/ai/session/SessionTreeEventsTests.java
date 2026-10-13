@@ -139,4 +139,20 @@ class SessionTreeEventsTests {
 					EventType.MESSAGE);
 	}
 
+	@Test
+	void aMarkerCarriesTheChildsAgentSnapshot() {
+		Session root = Session.builder().id("root").build();
+		Session child = Session.builder()
+			.id("child")
+			.parentSessionId(root.id())
+			.rootSessionId(root.id())
+			.metadata(AgentSnapshot.of("worker", "3", "m-small").toAttributes())
+			.build();
+
+		assertThat(SessionTreeEvents.childCreated(child).getPayload())
+			.containsEntry(SessionTreeEvents.PAYLOAD_AGENT_NAME, "worker")
+			.containsEntry(SessionTreeEvents.PAYLOAD_AGENT_VERSION, "3")
+			.containsEntry(SessionTreeEvents.PAYLOAD_AGENT_MODEL, "m-small");
+	}
+
 }

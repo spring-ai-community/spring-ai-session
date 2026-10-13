@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-package org.springframework.ai.session.advisor;
+package org.springframework.ai.session;
 
-import org.springframework.ai.session.TokenUsage;
 
 /**
  * The token budget of a session tree: a turn is refused once the tree's usage reaches

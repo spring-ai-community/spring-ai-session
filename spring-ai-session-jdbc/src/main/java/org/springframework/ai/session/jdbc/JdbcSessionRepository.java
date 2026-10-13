@@ -658,7 +658,9 @@ public final class JdbcSessionRepository implements SessionRepository {
 	private List<SessionEvent> extendToTurnStart(String sessionId, EventFilter filter, List<SessionEvent> window) {
 		if (!(filter.window() instanceof EventFilter.Window.Last last) || window.size() < last.n()
 				|| window.get(0).isTurnStart() || filter.hasTextCriteria()
-				|| (filter.messageTypes() != null && !filter.messageTypes().contains(MessageType.USER))) {
+				|| (filter.messageTypes() != null && !filter.messageTypes().contains(MessageType.USER))
+				|| (filter.eventTypes() != null && !filter.eventTypes().contains(EventType.MESSAGE))) {
+			// A turn start is a USER message: a filter that admits none has no turn to extend to
 			return window;
 		}
 		StringBuilder sql = new StringBuilder(SELECT_EVENTS_BASE);
@@ -850,7 +852,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 		public SessionEvent mapRow(ResultSet rs, int rowNum) throws SQLException {
 			SessionEventCodec codec = JdbcSessionRepository.this.codec;
 			String eventTypeName = rs.getString("event_type");
-			EventType eventType = (eventTypeName != null) ? EventType.valueOf(eventTypeName) : EventType.MESSAGE;
+			EventType eventType = (eventTypeName != null) ? EventType.of(eventTypeName) : EventType.MESSAGE;
 			String messageTypeName = rs.getString("message_type");
 			MessageType messageType = (messageTypeName != null) ? MessageType.valueOf(messageTypeName) : null;
 			String payload = rs.getString("payload");

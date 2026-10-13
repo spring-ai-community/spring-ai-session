@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.springframework.ai.session.advisor;
+package org.springframework.ai.session;
 
 import java.util.Arrays;
 import java.util.HashSet;
@@ -28,7 +28,7 @@ import org.springframework.util.Assert;
 /**
  * Which tool calls must be confirmed by a caller before they run: the counterpart of an
  * agent runtime's {@code always_ask} tool permission. The same policy is given to the
- * {@link ToolConfirmationAdvisor}, which parks a turn whose reply asks for such a call
+ * {@link org.springframework.ai.session.advisor.ToolConfirmationAdvisor}, which parks a turn whose reply asks for such a call
  * ({@link org.springframework.ai.session.StopReason#REQUIRES_ACTION}) and runs it on the
  * next request when a {@link org.springframework.ai.session.ToolConfirmation} allows it,
  * and, as {@link #eligibilityChecker()}, to the tool-calling advisor, so its loop does not
@@ -68,7 +68,7 @@ public interface ToolConfirmationPolicy {
 	 * The checker to configure on the tool-calling advisor
 	 * ({@code ToolCallingAdvisor.builder().toolExecutionEligibilityChecker(...)}): a reply
 	 * with tool calls is executed by the loop only when none of them needs confirmation;
-	 * otherwise the loop returns the reply as it is and the {@link ToolConfirmationAdvisor}
+	 * otherwise the loop returns the reply as it is and the {@link org.springframework.ai.session.advisor.ToolConfirmationAdvisor}
 	 * parks the turn.
 	 */
 	default ToolExecutionEligibilityChecker eligibilityChecker() {

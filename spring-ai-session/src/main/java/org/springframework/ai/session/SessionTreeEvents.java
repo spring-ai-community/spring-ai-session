@@ -49,6 +49,12 @@ public final class SessionTreeEvents {
 	/** Payload key: the agent name of the child, when it has one. */
 	public static final String PAYLOAD_AGENT_NAME = "agentName";
 
+	/** Payload key: the version of the child's agent definition, when the child has one. */
+	public static final String PAYLOAD_AGENT_VERSION = "agentVersion";
+
+	/** Payload key: the model the child's agent runs, when the child names one. */
+	public static final String PAYLOAD_AGENT_MODEL = "agentModel";
+
 	private SessionTreeEvents() {
 	}
 
@@ -98,9 +104,15 @@ public final class SessionTreeEvents {
 			.sessionId(parentSessionId)
 			.type(type)
 			.payload(PAYLOAD_SESSION_ID, child.id());
-		String agentName = SessionAttributes.agentName(child);
-		if (agentName != null) {
-			event.payload(PAYLOAD_AGENT_NAME, agentName);
+		AgentSnapshot agent = SessionAttributes.agent(child);
+		if (agent != null) {
+			event.payload(PAYLOAD_AGENT_NAME, agent.name());
+			if (agent.version() != null) {
+				event.payload(PAYLOAD_AGENT_VERSION, agent.version());
+			}
+			if (agent.model() != null) {
+				event.payload(PAYLOAD_AGENT_MODEL, agent.model());
+			}
 		}
 		if (message != null) {
 			event.message(message);

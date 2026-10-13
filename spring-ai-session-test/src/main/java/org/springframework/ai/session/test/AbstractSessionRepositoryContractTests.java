@@ -47,6 +47,8 @@ import org.springframework.ai.content.Media;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.EventFilter.MatchMode;
+import org.springframework.ai.session.Interaction;
+import org.springframework.ai.session.InteractionEvents;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
@@ -1072,6 +1074,62 @@ public abstract class AbstractSessionRepositoryContractTests {
 			.containsExactly("u2", "a2");
 		assertThat(texts(session.id(), EventFilter.active().merge(EventFilter.lastN(1)))).containsExactly("u2",
 				"a2");
+	}
+
+	@Test
+	void anApplicationsOwnEventTypeGoesThroughTheStore() {
+		Session session = newSession("user-custom-type");
+		EventType progress = EventType.of("MY_APP.PROGRESS");
+		append(session.id(), user("u1"));
+		this.repository.appendEvent(SessionEvent.builder()
+			.sessionId(session.id())
+			.type(progress)
+			.payload("step", 2)
+			.payload("note", "halfway")
+			.build());
+
+		List<SessionEvent> stored = this.repository.findEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(progress)).build());
+		assertThat(stored).hasSize(1);
+		assertThat(stored.get(0).getType()).isEqualTo(progress);
+		assertThat(stored.get(0).hasMessage()).isFalse();
+		assertThat(stored.get(0).getPayload()).containsEntry("note", "halfway");
+		assertThat(((Number) stored.get(0).getPayload().get("step")).intValue()).isEqualTo(2);
+		// Never part of the conversation
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active())).hasSize(1);
+	}
+
+	@Test
+	void anInteractionKeepsItsQuestionAndAnswerThroughTheStore() {
+		Session session = newSession("user-interaction");
+		append(session.id(), user("u1"));
+		SessionEvent question = InteractionEvents.required(session.id(),
+				new Interaction("approve/", Map.of("question", "Publish?", "draft", 3), "com.acme.Approval"));
+		this.repository.appendEvent(question);
+		this.repository.appendEvent(InteractionEvents.answered(session.id(), question.getId(), Map.of("approved", true)));
+
+		List<SessionEvent> stored = this.repository.findEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).build());
+		assertThat(stored).hasSize(2);
+		Interaction asked = InteractionEvents.interaction(stored.get(0));
+		assertThat(asked).isNotNull();
+		assertThat(asked.path()).isEqualTo("approve/");
+		assertThat(asked.resumeType()).isEqualTo("com.acme.Approval");
+		// The question comes back as JSON data: a map with its scalars
+		assertThat(asked.payload()).isInstanceOf(Map.class);
+		@SuppressWarnings("unchecked")
+		Map<String, Object> askedPayload = (Map<String, Object>) asked.payload();
+		assertThat(askedPayload).containsEntry("question", "Publish?");
+		assertThat(((Number) askedPayload.get("draft")).intValue()).isEqualTo(3);
+		assertThat(InteractionEvents.requiredEventId(stored.get(1))).isEqualTo(question.getId());
+		@SuppressWarnings("unchecked")
+		Map<String, Object> answer = (Map<String, Object>) InteractionEvents.answer(stored.get(1));
+		assertThat(answer).containsEntry("approved", true);
+		// A last-1 window of non-message events is plain: no turn to extend to
+		assertThat(this.repository.findEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).lastN(1).build()))
+			.singleElement()
+			.satisfies(e -> assertThat(InteractionEvents.isAnswered(e)).isTrue());
 	}
 
 	@Test
