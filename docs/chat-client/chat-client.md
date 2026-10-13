@@ -4,6 +4,12 @@
 `ChatClient`. It wires session management into the ChatClient pipeline transparently —
 no manual history loading or appending required in application code.
 
+The advisors live in the `spring-ai-session-chatclient` module, with the
+`ToolConfirmationAdvisor`, the `BudgetAdvisor` and the `RecursiveSummarizationCompactionStrategy`;
+the core `spring-ai-session` module has no dependency on `ChatClient`, so an agent runtime
+that is not built on `ChatClient` can use the session without the advisors. The JDBC
+starter includes the `ChatClient` module.
+
 ---
 
 ## What the advisor does

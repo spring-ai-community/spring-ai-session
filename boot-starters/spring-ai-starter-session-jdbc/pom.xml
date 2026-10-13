@@ -71,6 +71,11 @@
             <artifactId>spring-ai-session-jdbc</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.springaicommunity</groupId>
+            <artifactId>spring-ai-session-chatclient</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
     </dependencies>
 

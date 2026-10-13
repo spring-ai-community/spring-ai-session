@@ -22,7 +22,7 @@ import org.springframework.util.Assert;
 
 /**
  * Which {@link Budget} a session tree has, decided from its root session: a fixed one, one
- * read from the root's metadata, or none. Given to the {@link org.springframework.ai.session.advisor.BudgetAdvisor}.
+ * read from the root's metadata, or none. Given to the {@code BudgetAdvisor}.
  *
  * @author Christian Tzolov
  * @since 0.11.0

@@ -23,7 +23,6 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
@@ -44,8 +43,8 @@ import org.springframework.util.StringUtils;
  *
  * <p>
  * The session to search is resolved from {@link ToolContext} using the
- * {@link ChatMemory#CONVERSATION_ID} key — the same key
- * {@link org.springframework.ai.session.advisor.SessionMemoryAdvisor#SESSION_ID_CONTEXT_KEY}
+ * {@code ChatMemory.CONVERSATION_ID} key — the same key
+ * {@code SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY}
  * reads from the advisor context. Advisor parameters are <em>not</em> propagated into the
  * {@code ToolContext}, so the caller must pass the session ID to both on every request:
  *
@@ -79,10 +78,10 @@ public class SessionEventTools {
 
 	/**
 	 * Context key used to resolve the session ID from {@link ToolContext}. Equals
-	 * {@link ChatMemory#CONVERSATION_ID} and
-	 * {@link org.springframework.ai.session.advisor.SessionMemoryAdvisor#SESSION_ID_CONTEXT_KEY}.
+	 * {@code ChatMemory.CONVERSATION_ID} and
+	 * {@code SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY}.
 	 */
-	public static final String SESSION_ID_CONTEXT_KEY = ChatMemory.CONVERSATION_ID;
+	public static final String SESSION_ID_CONTEXT_KEY = "chat_memory_conversation_id";
 
 	static final String MISSING_SESSION_ID_RESULT = "Error: conversation_search is unavailable because no session ID "
 			+ "was provided in the tool context.";

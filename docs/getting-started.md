@@ -99,12 +99,12 @@ or to a snapshot version (see [Maven Repositories](#maven-repositories)):
 
 === "In-memory (testing only)"
 
-    Add the session management module:
+    Add the `ChatClient` integration, which brings the core module with it:
 
     ```xml
     <dependency>
         <groupId>org.springaicommunity</groupId>
-        <artifactId>spring-ai-session</artifactId>
+        <artifactId>spring-ai-session-chatclient</artifactId>
     </dependency>
     ```
 

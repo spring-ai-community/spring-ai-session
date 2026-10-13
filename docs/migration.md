@@ -247,6 +247,20 @@ ids of the events it stored for the request's message and the reply (#20).
 [Event Filtering](session-management/event-filtering.md#cursor-reads) and
 [Live events](session-management/concepts.md#live-events).
 
+### Breaking: the `ChatClient` integration is its own module
+
+`spring-ai-session` no longer depends on `spring-ai-client-chat`. `SessionMemoryAdvisor`,
+`ToolConfirmationAdvisor`, `BudgetAdvisor`, the event id generators and
+`RecursiveSummarizationCompactionStrategy` moved to the new `spring-ai-session-chatclient`
+module, in the BOM and in the JDBC starter; packages are unchanged, so a `ChatClient`
+application adds that dependency and changes no import. The core keeps the model, the
+service, the repositories, the other compaction strategies and triggers, and the recall tools
+(`SessionEventTools`, `CrossSessionRecallTools`), which are plain tool callbacks.
+`SessionEventTools.SESSION_ID_CONTEXT_KEY` keeps its value, `chat_memory_conversation_id`.
+The summarizing strategy keeps its `org.springframework.ai.session.compaction` package, which
+the two modules therefore share; an application on the Java module path would have to merge
+them, which is not supported.
+
 ### Breaking: `EventType` is a class, and four value types moved to the core package
 
 `EventType` is no longer an enum. It is a final class whose well-known types are the same

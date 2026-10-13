@@ -20,7 +20,8 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 
 | Module | Artifact | Description |
 |--------|----------|-------------|
-| **Session Management** | `spring-ai-session` | `Session`, `SessionEvent`, `SessionService`, `SessionRepository` SPI, compaction framework, `SessionMemoryAdvisor` |
+| **Session Management** | `spring-ai-session` | `Session`, `SessionEvent`, `SessionService`, `SessionRepository` SPI, compaction framework, recall tools; no dependency on `ChatClient` |
+| **Session ChatClient** | `spring-ai-session-chatclient` | The `ChatClient` integration: `SessionMemoryAdvisor`, `ToolConfirmationAdvisor`, `BudgetAdvisor`, and the summarizing compaction strategy |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
@@ -49,10 +50,10 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 **2. Add a module dependency:**
 
 ```xml
-<!-- Core only (in-memory repository) -->
+<!-- The ChatClient integration (brings the core, in-memory repository) -->
 <dependency>
     <groupId>org.springaicommunity</groupId>
-    <artifactId>spring-ai-session</artifactId>
+    <artifactId>spring-ai-session-chatclient</artifactId>
 </dependency>
 
 <!-- Or JDBC starter (Spring Boot, recommended) -->

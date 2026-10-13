@@ -34,6 +34,7 @@ import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
@@ -76,6 +77,7 @@ import org.springframework.ai.session.UsageEvents;
 import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.compaction.TurnCountTrigger;
+import org.springframework.ai.session.tool.SessionEventTools;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
@@ -1624,6 +1626,14 @@ class SessionMemoryAdvisorIT {
 		assertThatThrownBy(() -> after(gate, untracked, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("trackStatus");
+	}
+
+	// --- The context key the core's tools share with the advisor ---
+
+	@Test
+	void theToolsAndTheAdvisorShareSpringAisConversationKey() {
+		assertThat(SessionEventTools.SESSION_ID_CONTEXT_KEY).isEqualTo(ChatMemory.CONVERSATION_ID)
+			.isEqualTo(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY);
 	}
 
 	// --- Agent snapshot ---

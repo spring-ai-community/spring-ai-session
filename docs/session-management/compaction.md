@@ -112,7 +112,7 @@ for the covered ones.
 | `SlidingWindowCompactionStrategy` | No | Last N messages verbatim | Cost-sensitive, short-term context |
 | `TurnWindowCompactionStrategy` | No | Last N complete turns verbatim | Turn-structured dialogues |
 | `TokenCountCompactionStrategy` | No | Token-budget suffix verbatim | Hard context window limits |
-| `RecursiveSummarizationCompactionStrategy` | Yes | Rolling LLM summary + active window | Long-running, context-rich sessions |
+| `RecursiveSummarizationCompactionStrategy` (in `spring-ai-session-chatclient`) | Yes | Rolling LLM summary + active window | Long-running, context-rich sessions |
 
 **Common behaviour.** Every strategy:
 
@@ -219,6 +219,9 @@ conversation, or keep system prompts out of the session (see
 [System Messages](system-messages.md)).
 
 ### RecursiveSummarizationCompactionStrategy
+
+This strategy summarizes with a `ChatClient`, so it lives in the `spring-ai-session-chatclient`
+module, in the same `compaction` package as the others.
 
 LLM-powered strategy that uses a `ChatClient` to summarize the events being covered.
 The summary is stored as a synthetic user+assistant turn so subsequent compaction passes

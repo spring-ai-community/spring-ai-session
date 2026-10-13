@@ -30,7 +30,7 @@ import org.springframework.util.Assert;
  *
  * <p>
  * Pair with {@link TurnWindowCompactionStrategy} or
- * {@link RecursiveSummarizationCompactionStrategy} to keep the threshold and the
+ * {@code RecursiveSummarizationCompactionStrategy} to keep the threshold and the
  * compaction unit consistent.
  *
  * @author Christian Tzolov

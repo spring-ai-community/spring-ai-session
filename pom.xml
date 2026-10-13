@@ -65,6 +65,7 @@
     <modules>
         <module>spring-ai-session-bom</module>
         <module>spring-ai-session</module>
+        <module>spring-ai-session-chatclient</module>
         <module>spring-ai-session-jdbc</module>
         <module>spring-ai-session-test</module>
         <module>spring-ai-session-security</module>

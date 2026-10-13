@@ -45,7 +45,6 @@ import org.springframework.util.CollectionUtils;
  *
  * @author Sukhrob Tokhirov
  * @since 0.6.0
- * @see org.springframework.ai.session.advisor.SessionMemoryAdvisor.Builder#messageFilter(MessageFilter)
  */
 @FunctionalInterface
 public interface MessageFilter {
@@ -93,7 +92,7 @@ public interface MessageFilter {
 	 *
 	 * <p>
 	 * This is the default filter of
-	 * {@link org.springframework.ai.session.advisor.SessionMemoryAdvisor}.
+	 * {@code SessionMemoryAdvisor}.
 	 */
 	static MessageFilter skipEmptyMessages() {
 		return message -> !(message instanceof AssistantMessage am
