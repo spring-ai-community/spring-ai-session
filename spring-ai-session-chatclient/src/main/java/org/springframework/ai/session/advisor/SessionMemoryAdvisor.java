@@ -136,13 +136,12 @@ import org.springframework.util.Assert;
  * {@code ToolCallingAdvisor} that implements its own tool-call loop re-enters the rest of
  * the advisor chain once per round, so if this advisor's order places it deeper in the
  * chain than the looping advisor, {@code before()}/{@code after()} run once per round too.
- * From round 2 onward the prompt passed in already carries this turn's messages (they were
- * persisted to the session by the previous round), so {@code before()} detects that the
- * session history it just retrieved is already a contiguous run within the prompt and skips
- * prepending it again -- avoiding duplicate messages in the prompt sent to the model. System
- * messages are excluded from that check (they are moved to the front of the prompt, so
- * their position says nothing about what was already sent); stored system messages are
- * always included and exact-text duplicates are dropped. Actual
+ * From round 2 onward the prompt passed in starts with this turn's messages, which the
+ * session history ends with (the previous rounds persisted them), so {@code before()}
+ * prepends only the history before that overlap -- avoiding duplicate messages in the
+ * prompt sent to the model. System messages are excluded from that check (they are moved to
+ * the front of the prompt, so their position says nothing about what was already sent);
+ * stored system messages are always included and exact-text duplicates are dropped. Actual
  * persistence is unaffected by nesting depth: only the current turn's trailing
  * user/tool-response message and the model's own reply are ever appended, and with a
  * deterministic {@link IdempotentSessionEventIdGenerator} configured, a re-derived id makes
@@ -292,21 +291,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, eventFilter);
 
-		// 2.1. Skip re-prepending history that the prompt already carries. This
-		// happens when this advisor is nested inside a looping advisor -- e.g. a
-		// ToolCallingAdvisor with an order placing it deeper in the chain (see the
-		// order Javadoc on the Builder) -- whose tool-call loop re-enters before()
-		// once per round. From round 2 onward, request.prompt().getInstructions()
-		// already contains this turn's user/assistant/tool messages, persisted to
-		// the session by the previous round's before()/after(); without this guard
-		// getEvents() would return that same prefix and it would be prepended a
-		// second time.
-		// System messages are left out of this check on both sides: step 3 below moves
-		// every system message to the front, so a stored system message is never
-		// contiguous with the rest of the history in a prompt produced by an earlier round
-		// (e.g. when the request also carries its own system prompt). Stored system
-		// messages are always added; step 3 then drops the exact-text copy an earlier
-		// round already put in the prompt.
 		// Latest wins: of the system messages stored in the session, only the latest one
 		// is the system prompt. Earlier ones are superseded (a later compaction covers them),
 		// so they are not sent. Synthetic events (e.g. legacy SYSTEM summaries) are kept.
@@ -336,17 +320,21 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		List<Message> promptConversation = promptMessages.stream()
 			.filter(m -> !(m instanceof SystemMessage))
 			.toList();
-		// A tool call without its results (or the reverse) makes a prompt every provider
-		// rejects; drop the stranded side before deciding what to prepend, so the check
-		// below compares like with like on every round.
-		List<Message> historyConversation = withoutOrphanToolMessages(events.stream()
+		// 2.1. Prepend only the history the prompt does not already start with. A looping
+		// advisor such as ToolCallingAdvisor re-enters before() once per round with the
+		// turn so far (its own copy: the user message, then each round's tool calls and
+		// results), which the log ends with, as the previous rounds stored them. System
+		// messages are left out on both sides: step 3 moves them all to the front.
+		List<Message> historyConversation = events.stream()
 			.filter(e -> e.getMessageType() != MessageType.SYSTEM)
 			.map(SessionEvent::getMessage)
-			.toList(), promptConversation, sessionId);
+			.toList();
+		List<Message> missing = historyConversation.subList(0,
+				historyConversation.size() - overlap(historyConversation, promptConversation));
+		// A tool call without its results (or the reverse) makes a prompt every provider
+		// rejects; drop the stranded side of what is prepended.
 		List<Message> combined = new ArrayList<>(historySystem);
-		if (!isHistoryAlreadyInPrompt(promptConversation, historyConversation)) {
-			combined.addAll(historyConversation);
-		}
+		combined.addAll(withoutOrphanToolMessages(missing, promptConversation, sessionId));
 		combined.addAll(promptMessages);
 
 		// 3. Ensure all system messages appear first (preserving their relative order).
@@ -745,36 +733,22 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	}
 
 	/**
-	 * Returns {@code true} if {@code history} already occurs as a contiguous run
-	 * somewhere in {@code promptMessages}, in which case prepending it again would
-	 * duplicate it. Meant to guard against the same class of duplication when a memory
-	 * advisor is re-entered inside a tool-calling loop.
+	 * Returns how many of the last {@code history} messages the prompt starts with: the
+	 * largest {@code k} for which the history's last {@code k} messages are the prompt's
+	 * first {@code k}, compared by {@link #sameContent}.
 	 */
-	private static boolean isHistoryAlreadyInPrompt(List<Message> promptMessages, List<Message> history) {
-		if (history.isEmpty()) {
-			return true;
-		}
-		if (promptMessages.size() < history.size()) {
-			return false;
-		}
-		for (int offset = 0; offset <= promptMessages.size() - history.size(); offset++) {
-			if (startsWith(promptMessages, history, offset)) {
-				return true;
+	private static int overlap(List<Message> history, List<Message> prompt) {
+		for (int k = Math.min(history.size(), prompt.size()); k > 0; k--) {
+			int offset = history.size() - k;
+			int i = 0;
+			while (i < k && sameContent(history.get(offset + i), prompt.get(i))) {
+				i++;
+			}
+			if (i == k) {
+				return k;
 			}
 		}
-		return false;
-	}
-
-	private static boolean startsWith(List<Message> messages, List<Message> prefix, int offset) {
-		if (messages.size() - offset < prefix.size()) {
-			return false;
-		}
-		for (int i = 0; i < prefix.size(); i++) {
-			if (!sameContent(messages.get(i + offset), prefix.get(i))) {
-				return false;
-			}
-		}
-		return true;
+		return 0;
 	}
 
 	/**
@@ -834,8 +808,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// (HIGHEST_PRECEDENCE + 300): with ascending order sort, the lower value runs
 		// outer, so this places SessionMemoryAdvisor nested inside a default-configured
 		// ToolCallingAdvisor's tool-call loop rather than wrapping it -- before()/after()
-		// then run once per round, which is what the isHistoryAlreadyInPrompt() guard in
-		// before() is built to tolerate (see the class Javadoc "Nesting inside a
+		// then run once per round, which is what the overlap() check in before() is built
+		// to tolerate (see the class Javadoc "Nesting inside a
 		// tool-calling loop" section).
 		private int order = Ordered.HIGHEST_PRECEDENCE + 1000;
 

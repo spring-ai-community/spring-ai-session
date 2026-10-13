@@ -97,8 +97,10 @@ ChatClient client = ChatClient.builder(chatModel)
     wraps `SessionMemoryAdvisor`, whose `before()`/`after()` run once per round of the
     tool-call loop.
 
-    This is deliberate and safe. From round 2 on, `before()` finds its loaded history
-    already present as a contiguous run in the prompt and doesn't prepend it again. Messages
+    This is deliberate and safe. From round 2 on, the prompt starts with the turn so far,
+    which the loaded history ends with, so `before()` prepends only the history before
+    that overlap. This holds with or without the tool loop's own history
+    (`conversationHistoryEnabled`). Messages
     are compared by content (type, text, tool calls and tool responses), not `equals`, so the
     check also works when the repository doesn't store message metadata, as with JDBC. System
     messages are left out of this check, because they are always moved to the front; the
