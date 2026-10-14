@@ -21,6 +21,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -47,6 +48,7 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.model.ToolContext;
@@ -54,6 +56,7 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallDecision;
 import org.springframework.ai.model.tool.ToolCallDecisions;
+import org.springframework.ai.model.tool.ToolCallLimitExceededException;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
@@ -88,7 +91,9 @@ import org.springframework.util.Assert;
  * <li>Ends the turn with {@link StopReason#END_TURN} once the call returns, or with
  * {@link StopReason#ERROR} when it fails or a stream errors ({@link StopReason#INTERRUPTED}
  * when a stream is cancelled). A turn someone else ended (interrupted, or out of budget)
- * is left as it is.</li>
+ * is left as it is. After a loop that ended on a {@code returnDirect} tool or a breached
+ * tool call limit, it first stores the reply's tool results, which no model round
+ * stored.</li>
  * <li>Compacts the session once the turn has ended, if a {@link Builder#compactionTrigger
  * trigger} fires: before the call returns, or after it on the scheduler with
  * {@link Builder#asyncCompaction(boolean)}. Compaction is best-effort: a failure is logged
@@ -152,6 +157,9 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 
 	/** Context key for how the turn began: a new call or a resumption. */
 	static final String PHASE_CONTEXT_KEY = "chat_memory_session_phase";
+
+	/** The result a tool call gets in the log when the loop ended before it ran. */
+	public static final String NOT_RUN_TOOL_RESULT = "The tool call did not run: the tool call limit was reached.";
 
 	private static final Logger logger = LoggerFactory.getLogger(SessionTurnAdvisor.class);
 
@@ -230,18 +238,24 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 			if (start.response() != null) {
 				return Flux.just(start.response());
 			}
-			// A paused stream ends on a chunk with the ids; the aggregated reply drops them
+			// A paused stream ends on a chunk with the ids, which the aggregated reply drops;
+			// a returnDirect result or a breached limit ends it on a chunk of its own
 			AtomicReference<ChatResponse> paused = new AtomicReference<>();
+			AtomicReference<ChatResponse> unanswered = new AtomicReference<>();
 			// Back on the scheduler, so the session writes never run on the model's thread
 			return chain.nextStream(start.request())
 				.doOnNext(response -> {
 					if (ToolCallDecisions.isAwaitingDecision(response.chatResponse())) {
 						paused.set(response.chatResponse());
 					}
+					else if (endsWithoutModel(response.chatResponse())) {
+						unanswered.set(response.chatResponse());
+					}
 				})
 				.publishOn(this.scheduler)
 				.doOnError(ex -> end(sessionId, start.runId(), StopReason.ERROR))
-				.doOnComplete(() -> complete(sessionId, start.runId(), paused.get()))
+				.doOnComplete(() -> complete(sessionId, start.runId(),
+						(paused.get() != null) ? paused.get() : unanswered.get()))
 				.doOnCancel(() -> end(sessionId, start.runId(), StopReason.INTERRUPTED));
 		});
 	}
@@ -476,8 +490,77 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 			park(sessionId, turnRunId, response);
 		}
 		else {
+			if (response != null && endsWithoutModel(response)) {
+				storeResults(sessionId, turnRunId, response);
+			}
 			finish(sessionId, turnRunId);
 		}
+	}
+
+	/**
+	 * Whether the loop ended on a reply's tool calls without a model round after them: a
+	 * {@code returnDirect} result or a breached tool call limit. No round stored the
+	 * results then.
+	 */
+	private static boolean endsWithoutModel(@Nullable ChatResponse response) {
+		return response != null && response.getResults().stream().map(Generation::getMetadata).anyMatch(metadata ->
+				ToolExecutionResult.FINISH_REASON.equals(metadata.getFinishReason())
+						|| ToolCallLimitExceededException.FINISH_REASON.equals(metadata.getFinishReason()));
+	}
+
+	/**
+	 * Answers the stored reply's tool calls in the log after a loop that ended without a
+	 * model round: with the results that came back directly, or, for a breached limit, with
+	 * the results of the calls that ran, the breach for the call that broke it and a note
+	 * for the calls after it. The results come in the order of the calls. Only while the
+	 * turn is still this run's, and once: the id derives from the reply's.
+	 */
+	private void storeResults(String sessionId, String turnRunId, ChatResponse response) {
+		try {
+			Session session = this.sessionService.findById(sessionId);
+			SessionEvent stored = newestConversationEvent(sessionId);
+			if (session == null || !turnRunId.equals(session.runId()) || stored == null || !stored.hasToolCalls()) {
+				return;
+			}
+			List<AssistantMessage.ToolCall> calls = ((AssistantMessage) stored.getMessage()).getToolCalls();
+			List<String> answers = answers(response, calls.size());
+			List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
+			for (int i = 0; i < calls.size(); i++) {
+				responses.add(new ToolResponseMessage.ToolResponse(calls.get(i).id(), calls.get(i).name(), answers.get(i)));
+			}
+			this.sessionService.appendEvent(SessionEvent.builder()
+				.id(stored.getId() + "-results")
+				.sessionId(sessionId)
+				.message(ToolResponseMessage.builder().responses(responses).build())
+				.build());
+		}
+		catch (RuntimeException ex) {
+			logger.warn("Could not store the tool results of session [{}]: {}", sessionId, ex.getMessage());
+		}
+	}
+
+	/** One answer per call, in the order of the calls. */
+	private static List<String> answers(ChatResponse response, int calls) {
+		List<String> answers = new ArrayList<>(calls);
+		for (Generation generation : response.getResults()) {
+			ChatGenerationMetadata metadata = generation.getMetadata();
+			if (ToolExecutionResult.FINISH_REASON.equals(metadata.getFinishReason())) {
+				answers.add(Objects.requireNonNullElse(generation.getOutput().getText(), ""));
+			}
+			else if (ToolCallLimitExceededException.FINISH_REASON.equals(metadata.getFinishReason())) {
+				if (metadata.get(ToolCallLimitExceededException.METADATA_PARTIAL_TOOL_RESPONSES) instanceof List<?> ran) {
+					ran.stream()
+						.filter(ToolResponseMessage.ToolResponse.class::isInstance)
+						.map(result -> ((ToolResponseMessage.ToolResponse) result).responseData())
+						.forEach(answers::add);
+				}
+				answers.add(Objects.requireNonNullElse(generation.getOutput().getText(), ""));
+			}
+		}
+		while (answers.size() < calls) {
+			answers.add(NOT_RUN_TOOL_RESULT);
+		}
+		return answers.subList(0, calls);
 	}
 
 	private void park(String sessionId, String turnRunId, ChatResponse response) {

@@ -531,7 +531,12 @@ advisor keeps that from happening at both ends, without touching the log:
   read filter hiding `TOOL` events, a log an earlier version wrote with a `MessageFilter`
   that skipped them, or a turn interrupted between the call and its result.
 - **Write side.** Tool calls and tool results are always stored, whatever the
-  `MessageFilter` says, so the log never holds one half without the other. A replay of a
+  `MessageFilter` says, so the log never holds one half without the other. A loop that ends
+  without a model round after the calls stores no results of its own: a `returnDirect`
+  tool, or a breached tool call limit (`onLimitExceeded(THROW)`, the default). The
+  `SessionTurnAdvisor` stores them then: the results that came back directly, or, for a
+  breach, the results of the calls that ran, the breach for the call that broke the limit,
+  and a note for the calls after it. A replay of a
   call without a run id writes its tool results again after the first attempt's answer;
   the read guard drops those from the prompt. With a run id the replay writes nothing
   (see [Idempotent session-event ids](#idempotent-session-event-ids)).

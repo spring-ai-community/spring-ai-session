@@ -144,6 +144,64 @@ class SessionTurnAdvisorTests {
 	}
 
 	@Test
+	void returnDirectResultsAreStoredAfterTheirCalls() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", ToolMetadata.builder().returnDirect(true).build()),
+				tool("get_time", "Noon in ", ToolMetadata.builder().returnDirect(true).build()));
+		this.model.then(prompt -> calls(call("c1", "get_weather", "Paris"), call("c2", "get_time", "Paris")))
+			.thenAnswer("You are welcome.");
+
+		say(client, "Weather and time in Paris?");
+
+		assertThat(toolResults(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
+			.containsExactly("\"Sunny in Paris\"", "\"Noon in Paris\"");
+		// The next turn's model sees what ran, and the history is valid as stored
+		assertThat(say(client, "Thanks", "You are welcome.")).isEqualTo("You are welcome.");
+		assertThat(describe(this.model.prompts().get(1))).containsExactly("Weather and time in Paris?", "call:c1",
+				"result:c1", "Thanks");
+	}
+
+	@Test
+	void streamedReturnDirectResultIsStoredAfterItsCall() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", ToolMetadata.builder().returnDirect(true).build()));
+		this.model.thenCall("c1", "Paris");
+
+		client.prompt()
+			.user("Weather in Paris?")
+			.advisors(SessionAdvisors.session(this.sessionId))
+			.stream()
+			.content()
+			.blockLast();
+
+		assertThat(describe(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
+			.containsExactly("Weather in Paris?", "call:c1", "result:c1");
+		assertThat(session().stopReason()).isEqualTo(StopReason.END_TURN);
+	}
+
+	@Test
+	void breachedLimitAnswersEveryCallOfBatch() {
+		ToolCallingManager limited = ToolCallingManager.builder().maxTotalToolCalls(1).build();
+		ChatClient client = ChatClient.builder(this.model)
+			.defaultAdvisors(SessionTurnAdvisor.builder(this.sessionService).toolCallingManager(limited).build(),
+					ToolCallingAdvisor.builder().toolCallingManager(limited).build(),
+					SessionMemoryAdvisor.builder(this.sessionService).build())
+			.defaultToolCallbacks(tool("get_weather", "Sunny in ", ToolMetadata.builder().build()))
+			.build();
+		this.model.then(prompt -> calls(call("c1", "get_weather", "Paris"), call("c2", "get_weather", "Rome"),
+				call("c3", "get_weather", "Oslo")));
+
+		say(client, "Weather in Paris, Rome and Oslo?");
+
+		// The first call ran, the second broke the limit, the third never ran
+		assertThat(this.ran).containsExactly("get_weather");
+		List<String> results = toolResults(new Prompt(this.sessionService.getActiveMessages(this.sessionId)));
+		assertThat(results).hasSize(3);
+		assertThat(results.get(0)).isEqualTo("\"Sunny in Paris\"");
+		assertThat(results.get(1)).isNotBlank().isNotEqualTo(SessionTurnAdvisor.NOT_RUN_TOOL_RESULT);
+		assertThat(results.get(2)).isEqualTo(SessionTurnAdvisor.NOT_RUN_TOOL_RESULT);
+		assertThat(session().stopReason()).isEqualTo(StopReason.END_TURN);
+	}
+
+	@Test
 	void aBreachedToolCallLimitEndsTheTurn() {
 		this.model.thenCall("c1", "Lisbon").thenCall("c2", "Porto").thenAnswer("Hello again.");
 		ToolCallingAdvisor limited = ToolCallingAdvisor.builder()

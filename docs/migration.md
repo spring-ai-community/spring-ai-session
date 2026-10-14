@@ -335,6 +335,13 @@ deprecated: it derives ids from the message's content, so identical messages col
 nothing was stored for a request, `REQUEST_EVENT_ID_CONTEXT_KEY` is now absent instead of
 `null`. See [Idempotent session-event ids](chat-client/chat-client.md#idempotent-session-event-ids).
 
+### New: the results of a `returnDirect` tool and of a breached limit are stored
+
+A tool-calling loop that ended on a `returnDirect` tool or a breached tool call limit left
+the reply's tool calls without results in the log, since no model round followed to store
+them. The `SessionTurnAdvisor` now stores them: the direct results, or the results of the
+calls that ran, the breach and a note for the calls that never ran.
+
 ### New: asynchronous compaction
 
 `SessionTurnAdvisor.builder(...).asyncCompaction(true)`, or `asyncCompaction(true)` on
