@@ -126,25 +126,23 @@ or to a snapshot version (see [Maven Repositories](#maven-repositories)):
 
 ---
 
-## Wire the ChatClient advisor
+## Wire the ChatClient advisors
 
-`SessionMemoryAdvisor` loads history before each request, appends the user and assistant
-messages after each response, and compacts when a trigger fires.
+`SessionMemoryAdvisor` loads history before each model call and appends the user and
+assistant messages after it. `SessionTurnAdvisor` runs each `ChatClient` call as one turn of
+the session and compacts when a trigger fires once the turn has ended.
 
 ```java
 @Bean
-SessionMemoryAdvisor sessionMemoryAdvisor(SessionService sessionService) {
-    return SessionMemoryAdvisor.builder(sessionService)
-        // Compact when 20 turns accumulate, keeping the last 10 events
-        .compactionTrigger(new TurnCountTrigger(20))
-        .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
-        .build();
-}
-
-@Bean
-ChatClient chatClient(ChatModel chatModel, SessionMemoryAdvisor advisor) {
+ChatClient chatClient(ChatModel chatModel, SessionService sessionService) {
     return ChatClient.builder(chatModel)
-        .defaultAdvisors(advisor)
+        .defaultAdvisors(
+            SessionTurnAdvisor.builder(sessionService)
+                // Compact when 20 turns accumulate, keeping the last 10 events
+                .compactionTrigger(new TurnCountTrigger(20))
+                .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
+                .build(),
+            SessionMemoryAdvisor.builder(sessionService).build())
         .build();
 }
 ```

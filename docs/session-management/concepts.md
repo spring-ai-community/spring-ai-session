@@ -469,7 +469,7 @@ boundaries).
 ## Session Lifecycle
 
 A session from creation to cleanup, driven by any integration: your own agent loop, or
-`SessionMemoryAdvisor`, which performs the per-turn steps automatically for `ChatClient`
+`SessionTurnAdvisor` and `SessionMemoryAdvisor`, which perform the per-turn steps automatically for `ChatClient`
 (see [ChatClient Integration](../chat-client/chat-client.md)).
 
 ```mermaid
@@ -642,8 +642,8 @@ and, when known, the version of its definition and its model, stored as the
 with `SessionAttributes.agent(session)`. It is set at creation and never updated, the way
 an agent runtime snapshots the agent a session runs so that a later change to the agent
 never changes a running session. Set it with `CreateSessionRequest.builder().agent(...)`,
-`createChild(parentId, agentSnapshot)`, or `SessionMemoryAdvisor.builder().agent(...)`,
-which stamps it on the sessions the advisor creates on first use, unless the request's
+`createChild(parentId, agentSnapshot)`, or the `agent(...)` of the `SessionTurnAdvisor` or
+`SessionMemoryAdvisor` builder, which stamps it on the sessions the advisor creates on first use, unless the request's
 metadata names an agent itself. A child's agent is its
 own, never inherited. Index `agentName` (see the JDBC page) to find every session an agent
 runs.

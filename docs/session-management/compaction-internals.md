@@ -36,7 +36,7 @@ expiring the whole session removes events.
 
 The **trigger** decides *whether* to compact, the **strategy** decides *what* leaves the
 view, and the **repository** records the decision atomically. `DefaultSessionService.compact(...)`
-connects them. Any caller can invoke it: `SessionMemoryAdvisor`, or your own code.
+connects them. Any caller can invoke it: `SessionTurnAdvisor`, or your own code.
 
 ```mermaid
 classDiagram
@@ -226,13 +226,13 @@ including the two "nothing happens" paths and the lost-race path.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Adv as SessionMemoryAdvisor
+    participant Adv as SessionTurnAdvisor
     participant Svc as DefaultSessionService
     participant Repo as SessionRepository
     participant Trg as CompactionTrigger
     participant Str as CompactionStrategy
 
-    Note over Adv: after(): the assistant reply is already persisted
+    Note over Adv: the turn has ended: its messages are already persisted
     Adv->>Svc: compact(sessionId, trigger, strategy)
     Svc->>Repo: findById(sessionId)
     Repo-->>Svc: session (IllegalArgumentException if missing)
@@ -381,7 +381,7 @@ sequenceDiagram
     end
     opt the LLM call throws
         LLM--xR: exception
-        R--xCaller: propagates (SessionMemoryAdvisor catches and logs it)
+        R--xCaller: propagates (SessionTurnAdvisor catches and logs it)
     end
 ```
 

@@ -22,17 +22,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Answers;
 
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
-import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -75,9 +71,7 @@ import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.TokenUsage;
 import org.springframework.ai.session.ToolConfirmation;
 import org.springframework.ai.session.UsageEvents;
-import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
-import org.springframework.ai.session.compaction.TurnCountTrigger;
 import org.springframework.ai.session.tool.SessionEventTools;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -91,7 +85,6 @@ import reactor.core.publisher.Flux;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 
@@ -349,111 +342,6 @@ class SessionMemoryAdvisorIT {
 		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
 		assertThat(events).hasSize(3);
 		assertThat(events.get(2).getMessage()).isEqualTo(toolResponse);
-	}
-
-	@Test
-	void compactionIsTriggeredAfterThreshold() {
-		// Wire advisor with a very low compaction threshold (1 turn) and small window
-		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
-			.compactionTrigger(new TurnCountTrigger(2))
-			.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(2).build())
-			.build();
-
-		AdvisorChain chain = mock(AdvisorChain.class);
-
-		// Append 3 complete turns (user + assistant each)
-		for (int i = 1; i <= 3; i++) {
-			compactingAdvisor.before(buildRequest(this.sessionId, "question " + i), chain);
-			compactingAdvisor.after(buildResponse(this.sessionId, "answer " + i), chain);
-		}
-
-		// Compaction runs synchronously after each turn, so by the time we get here
-		// the sliding window (maxEvents=2) has already been applied to the active
-		// context.
-		// (The compacted events are archived, not deleted, so the full log is larger.)
-		List<SessionEvent> active = this.sessionService.getEvents(this.sessionId, EventFilter.active());
-		assertThat(active.size()).isLessThanOrEqualTo(2);
-	}
-
-	@Test
-	void compactionWaitsUntilTheTurnIsComplete() {
-		AtomicInteger triggerCalls = new AtomicInteger();
-		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
-			.compactionTrigger(request -> triggerCalls.incrementAndGet() > 0)
-			.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(2).build())
-			.build();
-		AdvisorChain chain = mock(AdvisorChain.class);
-		AssistantMessage toolCall = AssistantMessage.builder()
-			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{}")))
-			.build();
-
-		compactingAdvisor.before(buildRequest(this.sessionId, "What is the weather?"), chain);
-		compactingAdvisor.after(buildResponseFromMessages(this.sessionId, toolCall), chain);
-		assertThat(triggerCalls).hasValue(0);
-
-		compactingAdvisor.after(buildResponse(this.sessionId, "Sunny."), chain);
-		assertThat(triggerCalls).hasValue(1);
-	}
-
-	@Test
-	void summarizingCompactionInsideAToolLoopDoesNotResendHistory() {
-		// A summarizing strategy that always fires: if it ran in the middle of the turn,
-		// round 2's history would start with a summary the prompt doesn't carry and the
-		// whole conversation would be sent twice.
-		ChatClient summarizer = mock(ChatClient.class, Answers.RETURNS_DEEP_STUBS);
-		given(summarizer.prompt().system(anyString()).user(anyString()).call().content()).willReturn("summary");
-		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
-			.compactionTrigger(request -> true)
-			.compactionStrategy(RecursiveSummarizationCompactionStrategy.builder(summarizer).maxEvents(4).build())
-			.build();
-		for (int i = 1; i <= 3; i++) {
-			this.sessionService.appendMessage(this.sessionId, new UserMessage("question " + i));
-			this.sessionService.appendMessage(this.sessionId, new AssistantMessage("answer " + i));
-		}
-		AdvisorChain chain = mock(AdvisorChain.class);
-		AssistantMessage toolCall = AssistantMessage.builder()
-			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{}")))
-			.build();
-		ToolResponseMessage toolResponse = ToolResponseMessage.builder()
-			.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "Sunny")))
-			.build();
-
-		// Round 1
-		List<Message> round1 = compactingAdvisor.before(buildRequest(this.sessionId, "Weather?"), chain)
-			.prompt()
-			.getInstructions();
-		compactingAdvisor.after(buildResponseFromMessages(this.sessionId, toolCall), chain);
-
-		// Round 2: the looping advisor re-sends round 1's prompt plus the tool exchange
-		List<Message> round2Input = new ArrayList<>(round1);
-		round2Input.add(toolCall);
-		round2Input.add(toolResponse);
-		List<Message> round2 = compactingAdvisor.before(ChatClientRequest.builder()
-			.prompt(new Prompt(round2Input))
-			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
-			.build(), chain).prompt().getInstructions();
-
-		assertThat(round2).containsExactlyElementsOf(round2Input);
-	}
-
-	@Test
-	void compactionFailureDoesNotFailTheCall() {
-		SessionMemoryAdvisor compactingAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
-			.compactionTrigger(request -> true)
-			.compactionStrategy(request -> {
-				throw new IllegalStateException("summarizer unavailable");
-			})
-			.build();
-		AdvisorChain chain = mock(AdvisorChain.class);
-
-		compactingAdvisor.before(buildRequest(this.sessionId, "question"), chain);
-		ChatClientResponse response = buildResponse(this.sessionId, "answer");
-
-		// The reply is returned as produced (with the stored event ids added to its context)
-		assertThat(compactingAdvisor.after(response, chain).chatResponse()).isSameAs(response.chatResponse());
-		assertThat(this.sessionService.getEvents(this.sessionId, EventFilter.active()))
-			.extracting(e -> e.getMessage().getText())
-			.containsExactly("question", "answer");
 	}
 
 	@Test
@@ -811,7 +699,7 @@ class SessionMemoryAdvisorIT {
 	void customMessageFilterBlocksUserMessagePersistenceInBefore() {
 		// A filter rejecting USER messages must prevent persistence in before(), while
 		// the outgoing prompt still carries the user message.
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.messageFilter(msg -> msg.getMessageType() != MessageType.USER)
 			.build();
 
@@ -827,7 +715,7 @@ class SessionMemoryAdvisorIT {
 	void customMessageFilterExcludesToolResponseMessages() {
 		// Store user + assistant turns but keep verbose tool responses out of the
 		// session log.
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
 				.and(MessageFilter.skipEmptyMessages()))
 			.build();
@@ -857,7 +745,7 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void customMessageFilterAppliedInAfter() {
 		// A content-based filter must gate which generations get persisted.
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.messageFilter(MessageFilter.containsText("confidential").negate())
 			.build();
 
@@ -874,7 +762,7 @@ class SessionMemoryAdvisorIT {
 	void composedCustomFilterStillSkipsEmptyAssistantMessages() {
 		// Composing a custom filter with skipEmptyMessages() preserves the
 		// empty end_turn protection (compose, don't replace).
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
 				.and(MessageFilter.skipEmptyMessages()))
 			.build();
@@ -891,7 +779,7 @@ class SessionMemoryAdvisorIT {
 	void requestEventIdGeneratorMakesRetriedBeforeCallIdempotent() {
 		// A fixed id simulates a caller supplying a deterministic id for retry safety
 		// (e.g. derived from an upstream durability layer's own idempotency key).
-		SessionMemoryAdvisor deterministicAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
+		SessionMemoryAdvisor deterministicAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.requestEventIdGenerator((request, message) -> "fixed-request-id")
 			.build();
 
@@ -906,7 +794,7 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void responseEventIdGeneratorMakesRetriedAfterCallIdempotent() {
-		SessionMemoryAdvisor deterministicAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
+		SessionMemoryAdvisor deterministicAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.responseEventIdGenerator((response, message) -> "fixed-response-id")
 			.build();
 
@@ -937,25 +825,9 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void builderRejectsNullMessageFilter() {
-		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false).messageFilter(null))
+		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService).messageFilter(null))
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("messageFilter must not be null");
-	}
-
-	@Test
-	void builderRejectsOnlyTriggerWithoutStrategy() {
-		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
-			.compactionTrigger(new TurnCountTrigger(5))
-			.build()).isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("compactionTrigger and compactionStrategy must be set together");
-	}
-
-	@Test
-	void builderRejectsOnlyStrategyWithoutTrigger() {
-		assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
-			.compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(5).build())
-			.build()).isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("compactionTrigger and compactionStrategy must be set together");
 	}
 
 	// --- Helpers ---
@@ -967,7 +839,7 @@ class SessionMemoryAdvisorIT {
 		// #44: a lastN window that landed on the tool result used to send an assistant
 		// tool call without the tool message answering it, which providers reject.
 		storeToolTurn(this.sessionId, "Weather in Paris?", "call-1", "Sunny.");
-		SessionMemoryAdvisor windowed = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
+		SessionMemoryAdvisor windowed = SessionMemoryAdvisor.builder(this.sessionService)
 			.eventFilter(EventFilter.lastN(2))
 			.build();
 
@@ -981,7 +853,7 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void messageTypesFilterHidingToolResultsDropsTheStrandedToolCall() {
 		storeToolTurn(this.sessionId, "Weather in Paris?", "call-1", "Sunny.");
-		SessionMemoryAdvisor noToolMessages = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
+		SessionMemoryAdvisor noToolMessages = SessionMemoryAdvisor.builder(this.sessionService)
 			.eventFilter(EventFilter.builder().messageTypes(Set.of(MessageType.USER, MessageType.ASSISTANT)).build())
 			.build();
 
@@ -1055,7 +927,7 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void aToolResponseWhoseCallWasStoredIsPersistedDespiteTheMessageFilter() {
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT))
 			.build();
 		AdvisorChain chain = mock(AdvisorChain.class);
@@ -1077,7 +949,7 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void aToolResponseWhoseCallWasNotStoredIsSkippedDespiteTheMessageFilter() {
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
 			.messageFilter(message -> !(message instanceof AssistantMessage assistant && assistant.hasToolCalls()))
 			.build();
 		AdvisorChain chain = mock(AdvisorChain.class);
@@ -1104,7 +976,7 @@ class SessionMemoryAdvisorIT {
 			this.sessionService.appendMessage(this.sessionId, new UserMessage("q" + i));
 			this.sessionService.appendMessage(this.sessionId, new AssistantMessage("a" + i));
 		}
-		SessionMemoryAdvisor windowed = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false)
+		SessionMemoryAdvisor windowed = SessionMemoryAdvisor.builder(this.sessionService)
 			.eventFilter(EventFilter.lastN(2))
 			.build();
 
@@ -1189,124 +1061,22 @@ class SessionMemoryAdvisorIT {
 
 	// --- Turn status ---
 
-	private SessionMemoryAdvisor tracking() {
+	private SessionMemoryAdvisor memoryAdvisor() {
 		return SessionMemoryAdvisor.builder(this.sessionService).build();
 	}
 
-	@Test
-	void aCallRunsATurnAndRecordsItInTheStatusAndTheLog() {
-		SessionMemoryAdvisor tracking = tracking();
-		CallAdvisorChain chain = mock(CallAdvisorChain.class);
-		given(chain.nextCall(any())).willAnswer(invocation -> {
-			assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
-			return buildResponse(this.sessionId, "Hi!");
-		});
+	/** Starts a turn, as the SessionTurnAdvisor does before the tool loop. */
+	private void startTurn(String sessionId) {
+		this.sessionService.startTurn(sessionId);
+	}
 
-		tracking.adviseCall(buildRequest(this.sessionId, "Hello"), chain);
-
-		Session session = this.sessionService.findById(this.sessionId);
-		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
-		assertThat(session.stopReason()).isEqualTo(StopReason.END_TURN);
-		assertThat(this.sessionService.getEvents(this.sessionId, EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build()))
-			.extracting(SessionStatusEvents::status)
-			.containsExactly(SessionStatus.RUNNING, SessionStatus.IDLE);
-		// The conversation is untouched by the status events
-		assertThat(describe(this.sessionService.getActiveMessages(this.sessionId))).containsExactly("Hello", "Hi!");
+	/** Ends the turn, as the SessionTurnAdvisor does once the call returns. */
+	private void endTurn(String sessionId) {
+		this.sessionService.endTurn(sessionId, StopReason.END_TURN);
 	}
 
 	@Test
-	void aToolLoopKeepsTheSessionRunningUntilTheFinalReply() {
-		SessionMemoryAdvisor tracking = tracking();
-		AdvisorChain chain = mock(AdvisorChain.class);
-
-		tracking.before(buildRequest(this.sessionId, "Weather?"), chain);
-		tracking.after(buildResponseFromMessages(this.sessionId, toolCall("c1")), chain);
-		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
-
-		// Round 2: the prompt ends with the tool result, so the running turn continues
-		ChatClientRequest round2 = ChatClientRequest.builder()
-			.prompt(new Prompt(List.of(new UserMessage("Weather?"), toolCall("c1"), toolResponse("c1"))))
-			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
-			.build();
-		tracking.before(round2, chain);
-		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
-		tracking.after(buildResponse(this.sessionId, "Sunny."), chain);
-
-		Session session = this.sessionService.findById(this.sessionId);
-		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
-		assertThat(session.stopReason()).isEqualTo(StopReason.END_TURN);
-	}
-
-	@Test
-	void aFailedCallEndsTheTurnWithAnError() {
-		SessionMemoryAdvisor tracking = tracking();
-		CallAdvisorChain chain = mock(CallAdvisorChain.class);
-		given(chain.nextCall(any())).willThrow(new IllegalStateException("model down"));
-
-		assertThatThrownBy(() -> tracking.adviseCall(buildRequest(this.sessionId, "Hello"), chain))
-			.isInstanceOf(IllegalStateException.class)
-			.hasMessage("model down");
-
-		Session session = this.sessionService.findById(this.sessionId);
-		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
-		assertThat(session.stopReason()).isEqualTo(StopReason.ERROR);
-		// The next call starts a fresh turn
-		assertThat(tracking.before(buildRequest(this.sessionId, "Again"), mock(AdvisorChain.class))).isNotNull();
-	}
-
-	@Test
-	void aFailedStreamEndsTheTurnWithAnError() {
-		SessionMemoryAdvisor tracking = tracking();
-		StreamAdvisorChain chain = mock(StreamAdvisorChain.class);
-		given(chain.nextStream(any())).willReturn(Flux.error(new IllegalStateException("stream down")));
-
-		assertThatThrownBy(() -> tracking.adviseStream(buildRequest(this.sessionId, "Hello"), chain).blockLast())
-			.hasMessageContaining("stream down");
-
-		Session session = this.sessionService.findById(this.sessionId);
-		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
-		assertThat(session.stopReason()).isEqualTo(StopReason.ERROR);
-	}
-
-	@Test
-	void aFailureInsideBeforeEndsTheTurnItStarted() {
-		SessionMemoryAdvisor tracking = tracking();
-		ChatClientRequest badFilter = ChatClientRequest.builder()
-			.prompt(new Prompt(List.of(new UserMessage("Hello"))))
-			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId,
-					SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, "not a filter"))
-			.build();
-
-		assertThatThrownBy(() -> tracking.before(badFilter, mock(AdvisorChain.class)))
-			.isInstanceOf(IllegalArgumentException.class);
-
-		Session session = this.sessionService.findById(this.sessionId);
-		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
-		assertThat(session.stopReason()).isEqualTo(StopReason.ERROR);
-		// A rejected start (another caller's turn) is left alone: it is not ours to end
-		this.sessionService.startTurn(this.sessionId);
-		assertThatThrownBy(() -> tracking.before(buildRequest(this.sessionId, "Again"), mock(AdvisorChain.class)))
-			.isInstanceOf(IllegalStateException.class);
-		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
-	}
-
-	@Test
-	void aSecondConcurrentTurnOnTheSameSessionIsRejected() {
-		SessionMemoryAdvisor tracking = tracking();
-		AdvisorChain chain = mock(AdvisorChain.class);
-		tracking.before(buildRequest(this.sessionId, "First"), chain);
-
-		assertThatThrownBy(() -> tracking.before(buildRequest(this.sessionId, "Second"), chain))
-			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("could not start a turn: it is RUNNING");
-
-		// Ending the abandoned turn by hand opens the session again
-		this.sessionService.endTurn(this.sessionId, StopReason.INTERRUPTED);
-		assertThat(tracking.before(buildRequest(this.sessionId, "Second"), chain)).isNotNull();
-	}
-
-	@Test
-	void trackStatusFalseLeavesTheStatusAlone() {
+	void theMemoryAdvisorLeavesTheStatusAlone() {
 		AdvisorChain chain = mock(AdvisorChain.class);
 		this.advisor.before(buildRequest(this.sessionId, "Hello"), chain);
 		this.advisor.after(buildResponse(this.sessionId, "Hi!"), chain);
@@ -1358,8 +1128,9 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void aReplyThatNeedsConfirmationParksTheTurnNamingTheAssistantEvent() {
 		ToolConfirmationAdvisor gate = gate();
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
+		startTurn(this.sessionId);
 		before(gate, memory, buildRequest(this.sessionId, "Weather in Paris?"), chain);
 
 		after(gate, memory, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain);
@@ -1381,6 +1152,7 @@ class SessionMemoryAdvisorIT {
 
 		// A call the policy does not name is left to the loop: the turn stays running
 		String free = this.sessionService.create(CreateSessionRequest.builder().build()).id();
+		startTurn(free);
 		before(gate, memory, buildRequest(free, "Hi"), chain);
 		after(gate, memory, buildResponseFromMessages(free, AssistantMessage.builder()
 			.toolCalls(List.of(new AssistantMessage.ToolCall("c9", "function", "read_file", "{}")))
@@ -1391,8 +1163,9 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void anAllowedCallIsRunRecordedAndSentToTheModelWithThePrompt() {
 		ToolConfirmationAdvisor gate = gate();
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
+		startTurn(this.sessionId);
 		before(gate, memory, buildRequest(this.sessionId, "Weather in Paris?"), chain);
 		after(gate, memory, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain);
 
@@ -1421,15 +1194,17 @@ class SessionMemoryAdvisorIT {
 		assertThat(describe(this.sessionService.getActiveMessages(this.sessionId))).containsExactly("Weather in Paris?",
 				"call:c1", "result:c1");
 
+		// The final reply leaves the turn to the SessionTurnAdvisor, which ends it once the call returns
 		after(gate, memory, buildResponse(this.sessionId, "It is sunny in Paris."), chain);
-		assertThat(this.sessionService.findById(this.sessionId).stopReason()).isEqualTo(StopReason.END_TURN);
+		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
 	}
 
 	@Test
 	void aDeniedCallAnswersTheModelWithTheDenyMessageWithoutRunningTheTool() {
 		ToolConfirmationAdvisor gate = gate();
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
+		startTurn(this.sessionId);
 		before(gate, memory, buildRequest(this.sessionId, "Weather in Paris?"), chain);
 		after(gate, memory, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain);
 
@@ -1447,7 +1222,7 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void aDecisionIsCheckedAgainstThePendingCallsBeforeAnythingIsRecorded() {
 		ToolConfirmationAdvisor gate = gate();
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
 
 		// Nothing pending
@@ -1455,6 +1230,7 @@ class SessionMemoryAdvisorIT {
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("not waiting");
 
+		startTurn(this.sessionId);
 		before(gate, memory, buildRequest(this.sessionId, "Weather in Paris?"), chain);
 		after(gate, memory, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain);
 		// The wrong call
@@ -1494,8 +1270,9 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void anUngatedCallParkedWithAGatedOneIsAllowedImplicitly() {
 		ToolConfirmationAdvisor gate = gate();
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
+		startTurn(this.sessionId);
 		before(gate, memory, buildRequest(this.sessionId, "Weather in Paris?"), chain);
 		AssistantMessage both = AssistantMessage.builder()
 			.toolCalls(List.of(new AssistantMessage.ToolCall("c1", "function", "get_weather", "{\"city\":\"Paris\"}"),
@@ -1537,8 +1314,9 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void aSecondResumptionOfTheSameTurnIsRejectedBeforeTheToolRuns() {
 		ToolConfirmationAdvisor gate = gate();
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
+		startTurn(this.sessionId);
 		before(gate, memory, buildRequest(this.sessionId, "Weather in Paris?"), chain);
 		after(gate, memory, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain);
 		gate.before(confirming(withWeatherTool(), ToolConfirmation.allow("c1")), chain);
@@ -1552,8 +1330,9 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void theRoundsThatFollowAResumptionPassThroughTheGate() {
 		ToolConfirmationAdvisor gate = gate();
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
+		startTurn(this.sessionId);
 		before(gate, memory, buildRequest(this.sessionId, "Weather in Paris?"), chain);
 		after(gate, memory, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain);
 		ChatClientRequest resumed = confirming(withWeatherTool(), ToolConfirmation.allow("c1"));
@@ -1580,8 +1359,9 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void aStreamedReplyIsParkedOnItsAggregatedToolCalls() {
 		ToolConfirmationAdvisor gate = gate();
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		StreamAdvisorChain chain = mock(StreamAdvisorChain.class);
+		startTurn(this.sessionId);
 		memory.before(buildRequest(this.sessionId, "Weather in Paris?"), chain);
 		memory.after(buildResponseFromMessages(this.sessionId, toolCall("c1")), chain);
 		// The chunk with the tool call comes first; the finish reason rides on an empty one
@@ -1605,8 +1385,9 @@ class SessionMemoryAdvisorIT {
 	@Test
 	void aTurnInterruptedBeforeItCouldBeParkedKeepsTheReply() {
 		ToolConfirmationAdvisor gate = gate();
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
+		startTurn(this.sessionId);
 		before(gate, memory, buildRequest(this.sessionId, "Weather in Paris?"), chain);
 		this.sessionService.endTurn(this.sessionId, StopReason.INTERRUPTED);
 
@@ -1622,15 +1403,15 @@ class SessionMemoryAdvisorIT {
 	}
 
 	@Test
-	void parkingNeedsTheMemoryAdvisorsTurnTracking() {
+	void parkingNeedsARunningTurn() {
 		ToolConfirmationAdvisor gate = gate();
-		SessionMemoryAdvisor untracked = SessionMemoryAdvisor.builder(this.sessionService).trackStatus(false).build();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
-		before(gate, untracked, buildRequest(this.sessionId, "Weather in Paris?"), chain);
+		before(gate, memory, buildRequest(this.sessionId, "Weather in Paris?"), chain);
 
-		assertThatThrownBy(() -> after(gate, untracked, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain))
+		assertThatThrownBy(() -> after(gate, memory, buildResponseFromMessages(this.sessionId, toolCall("c1")), chain))
 			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("trackStatus");
+			.hasMessageContaining("SessionTurnAdvisor");
 	}
 
 	// --- The context key the core's tools share with the advisor ---
@@ -1669,7 +1450,7 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void theAdvisorNamesTheEventsItStoredOnTheContext() {
-		SessionMemoryAdvisor advisor = tracking();
+		SessionMemoryAdvisor advisor = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
 
 		ChatClientRequest forwarded = advisor.before(buildRequest(this.sessionId, "Hi"), chain);
@@ -1693,7 +1474,7 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void theEventIdsAreSetWithoutTouchingAnUnmodifiableContext() {
-		SessionMemoryAdvisor advisor = tracking();
+		SessionMemoryAdvisor advisor = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
 		ChatClientRequest frozen = new ChatClientRequest(new Prompt(List.of(new UserMessage("Hi"))),
 				Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId));
@@ -1724,15 +1505,15 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void afterRecordsTheCallsUsageAndTheServiceSumsIt() {
-		SessionMemoryAdvisor tracking = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		AdvisorChain chain = mock(AdvisorChain.class);
-		tracking.before(buildRequest(this.sessionId, "Hi"), chain);
-		tracking.after(buildResponseWithUsage(this.sessionId, "Hello", 100, 10), chain);
-		tracking.before(buildRequest(this.sessionId, "More"), chain);
-		tracking.after(buildResponseWithUsage(this.sessionId, "Sure", 200, 20), chain);
+		memory.before(buildRequest(this.sessionId, "Hi"), chain);
+		memory.after(buildResponseWithUsage(this.sessionId, "Hello", 100, 10), chain);
+		memory.before(buildRequest(this.sessionId, "More"), chain);
+		memory.after(buildResponseWithUsage(this.sessionId, "Sure", 200, 20), chain);
 		// A reply without usage records nothing
-		tracking.before(buildRequest(this.sessionId, "Again"), chain);
-		tracking.after(buildResponse(this.sessionId, "Yes"), chain);
+		memory.before(buildRequest(this.sessionId, "Again"), chain);
+		memory.after(buildResponse(this.sessionId, "Yes"), chain);
 
 		List<SessionEvent> usage = this.sessionService.getEvents(this.sessionId,
 				EventFilter.builder().eventTypes(Set.of(EventType.USAGE)).build());
@@ -1740,15 +1521,15 @@ class SessionMemoryAdvisorIT {
 		assertThat(UsageEvents.usage(usage.get(0))).isEqualTo(new TokenUsage(100, 10, 110, 0, 0));
 		assertThat(UsageEvents.model(usage.get(0))).isEqualTo("test-model");
 		assertThat(this.sessionService.usage(this.sessionId)).isEqualTo(new TokenUsage(300, 30, 330, 0, 0));
-		// The usage events sit between the reply and the turn's end, outside the conversation
+		// The usage events follow the reply, outside the conversation
 		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getType)
-			.containsSubsequence(EventType.MESSAGE, EventType.USAGE, EventType.STATUS);
+			.containsSubsequence(EventType.MESSAGE, EventType.USAGE, EventType.MESSAGE, EventType.USAGE);
 		assertThat(this.sessionService.getActiveMessages(this.sessionId)).hasSize(6);
 	}
 
 	@Test
 	void aStreamedReplyRecordsTheAggregatedUsageWithoutCacheCounts() {
-		SessionMemoryAdvisor tracking = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		StreamAdvisorChain chain = mock(StreamAdvisorChain.class);
 		ChatClientResponse textChunk = buildResponse(this.sessionId, "Hel");
 		ChatClientResponse usageChunk = ChatClientResponse.builder()
@@ -1784,7 +1565,7 @@ class SessionMemoryAdvisorIT {
 			.build();
 		given(chain.nextStream(any())).willReturn(Flux.just(textChunk, usageChunk));
 
-		tracking.adviseStream(buildRequest(this.sessionId, "Hi"), chain).blockLast();
+		memory.adviseStream(buildRequest(this.sessionId, "Hi"), chain).blockLast();
 
 		List<SessionEvent> usage = this.sessionService.getEvents(this.sessionId,
 				EventFilter.builder().eventTypes(Set.of(EventType.USAGE)).build());
@@ -1792,13 +1573,11 @@ class SessionMemoryAdvisorIT {
 		// Spring AI's stream aggregator carries the three counts and the model, not the cache counts
 		assertThat(UsageEvents.usage(usage.get(0))).isEqualTo(new TokenUsage(100, 10, 110, 0, 0));
 		assertThat(UsageEvents.model(usage.get(0))).isEqualTo("test-model");
-		assertThat(this.sessionService.findById(this.sessionId).stopReason()).isEqualTo(StopReason.END_TURN);
 	}
 
 	@Test
 	void aRetriedAfterWithADeterministicGeneratorCountsTheUsageOnce() {
 		SessionMemoryAdvisor idempotent = SessionMemoryAdvisor.builder(this.sessionService)
-			.trackStatus(false)
 			.responseEventIdGenerator(new IdempotentSessionEventIdGenerator())
 			.build();
 		AdvisorChain chain = mock(AdvisorChain.class);
@@ -1829,18 +1608,22 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void aTurnIsRefusedOnceTheTreeHasReachedItsBudget() {
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		BudgetAdvisor budget = budget(150);
 		AdvisorChain chain = mock(AdvisorChain.class);
 		// The first call is under budget and completes, taking the usage to 110
+		startTurn(this.sessionId);
 		budget.before(memory.before(buildRequest(this.sessionId, "Hi"), chain), chain);
 		memory.after(buildResponseWithUsage(this.sessionId, "Hello", 100, 10), chain);
+		endTurn(this.sessionId);
 		// Still under budget: the call that goes over it completes
+		startTurn(this.sessionId);
 		budget.before(memory.before(buildRequest(this.sessionId, "More"), chain), chain);
 		memory.after(buildResponseWithUsage(this.sessionId, "Sure", 100, 10), chain);
-		assertThat(this.sessionService.findById(this.sessionId).stopReason()).isEqualTo(StopReason.END_TURN);
+		endTurn(this.sessionId);
 
-		// The next call is refused and the turn the memory advisor started ends as BUDGET_REACHED
+		// The next call is refused and its turn ends as BUDGET_REACHED
+		startTurn(this.sessionId);
 		ChatClientRequest started = memory.before(buildRequest(this.sessionId, "Again"), chain);
 		assertThatThrownBy(() -> budget.before(started, chain)).isInstanceOf(BudgetReachedException.class)
 			.hasMessageContaining("220 of 150")
@@ -1850,20 +1633,23 @@ class SessionMemoryAdvisorIT {
 		assertThat(session.stopReason()).isEqualTo(StopReason.BUDGET_REACHED);
 		// A higher budget lets it continue
 		BudgetAdvisor raised = budget(1000);
+		startTurn(this.sessionId);
 		raised.before(memory.before(buildRequest(this.sessionId, "Again"), chain), chain);
 		assertThat(this.sessionService.findById(this.sessionId).status()).isEqualTo(SessionStatus.RUNNING);
 	}
 
 	@Test
 	void aChildsUsageCountsTowardsItsRootsBudget() {
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		BudgetAdvisor budget = budget(100);
 		AdvisorChain chain = mock(AdvisorChain.class);
 		Session child = this.sessionService.createChild(this.sessionId, "worker");
 		this.sessionService.appendEvent(UsageEvents.of(child.id(), new TokenUsage(90, 10, 100, 0, 0), "m"));
 
+		startTurn(this.sessionId);
 		ChatClientRequest onRoot = memory.before(buildRequest(this.sessionId, "Hi"), chain);
 		assertThatThrownBy(() -> budget.before(onRoot, chain)).isInstanceOf(BudgetReachedException.class);
+		startTurn(child.id());
 		ChatClientRequest onChild = memory.before(buildRequest(child.id(), "Hi"), chain);
 		assertThatThrownBy(() -> budget.before(onChild, chain)).isInstanceOf(BudgetReachedException.class);
 		assertThat(this.sessionService.findById(child.id()).stopReason()).isEqualTo(StopReason.BUDGET_REACHED);
@@ -1874,10 +1660,11 @@ class SessionMemoryAdvisorIT {
 
 	@Test
 	void aStreamedCallIsRefusedWithTheSameException() {
-		SessionMemoryAdvisor memory = tracking();
+		SessionMemoryAdvisor memory = memoryAdvisor();
 		BudgetAdvisor budget = budget(10);
 		this.sessionService.appendEvent(UsageEvents.of(this.sessionId, new TokenUsage(9, 1, 10, 0, 0), "m"));
 		StreamAdvisorChain chain = mock(StreamAdvisorChain.class);
+		startTurn(this.sessionId);
 		ChatClientRequest started = memory.before(buildRequest(this.sessionId, "Hi"), chain);
 
 		assertThatThrownBy(() -> budget.adviseStream(started, chain).blockLast())
@@ -1906,9 +1693,7 @@ class SessionMemoryAdvisorIT {
 
 		@Bean
 		SessionMemoryAdvisor sessionMemoryAdvisor(SessionService sessionService) {
-			// The hook-level tests call before() and after() in isolation and out of order;
-			// the turn status is exercised by the dedicated status tests below
-			return SessionMemoryAdvisor.builder(sessionService).trackStatus(false).build();
+			return SessionMemoryAdvisor.builder(sessionService).build();
 		}
 
 	}

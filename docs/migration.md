@@ -189,12 +189,7 @@ compare-and-set behind them. `AuthorizingSessionService` guards the four calls.
 
 Behaviour changes:
 
-- **`SessionMemoryAdvisor` tracks the turn.** It calls `startTurn` in `before()` and
-  `endTurn(END_TURN)` in `after()` once the reply no longer requests tool calls, and ends a
-  failed call with `ERROR`. Two concurrent `ChatClient` calls on the same session therefore
-  no longer interleave: the second fails with `IllegalStateException`. A turn left running by
-  a crashed process is ended with `endTurn(id, StopReason.INTERRUPTED)`.
-  `SessionMemoryAdvisor.builder().trackStatus(false)` restores the old behaviour.
+- **The new `SessionTurnAdvisor` tracks the turn** (see the `ChatClient` section below).
 - **An archived session rejects `appendEvent`, `startTurn`, `createChild` and `compact`**
   with `IllegalStateException`; reads keep working.
 - **`SessionSelector.principal` and `principalWithChildren` leave archived sessions out**;
@@ -262,6 +257,34 @@ The summarizing strategy keeps its `org.springframework.ai.session.compaction` p
 the two modules therefore share; an application on the Java module path would have to merge
 them, which is not supported.
 
+### Breaking: a `SessionTurnAdvisor` runs the turn and compacts
+
+The turn moved out of `SessionMemoryAdvisor`, which runs inside the tool-calling loop and so
+never saw the turn's final response: a loop that ended on a `returnDirect` tool or a
+breached tool-call limit left the session `RUNNING`, and the next call was rejected. The new
+`SessionTurnAdvisor` (order `HIGHEST_PRECEDENCE + 200`) wraps the loop: it creates the
+session on first use, calls `startTurn` before the loop and `endTurn` once the call returns
+(`END_TURN`, `ERROR` when it fails, `INTERRUPTED` when a stream is cancelled), and compacts
+once per turn. Two concurrent `ChatClient` calls on the same session therefore no longer
+interleave: the second fails with `IllegalStateException`. A turn left running by a crashed
+process is ended with `endTurn(id, StopReason.INTERRUPTED)`.
+
+- `compactionTrigger` and `compactionStrategy` move from the `SessionMemoryAdvisor` builder
+  to the `SessionTurnAdvisor` builder; `trackStatus` goes. Without the turn advisor the
+  memory advisor keeps the history and leaves the status alone, as in 0.10.
+- The `ToolConfirmationAdvisor` and the `BudgetAdvisor` need the turn advisor.
+
+```java
+ChatClient.builder(chatModel)
+    .defaultAdvisors(
+        SessionTurnAdvisor.builder(sessionService)
+            .compactionTrigger(new TurnCountTrigger(20))
+            .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
+            .build(),
+        SessionMemoryAdvisor.builder(sessionService).build())
+    .build();
+```
+
 ### New: `interrupt`, and the gate as an interaction
 
 `SessionService.interrupt(id, reason)` records an `INTERRUPT` event (`InterruptEvents`) and
@@ -321,7 +344,7 @@ types the advisors and the agent features share. Update the imports.
 the `SessionAttributes.AGENT_NAME`, `AGENT_VERSION` and `AGENT_MODEL` attributes;
 `SessionAttributes.agent(session)` reads it back. `CreateSessionRequest.builder().agent(...)`,
 `SessionService.createChild(parentId, AgentSnapshot)` and
-`SessionMemoryAdvisor.builder().agent(...)` set it; nothing changes without them.
+the `agent(...)` of the `SessionTurnAdvisor` and `SessionMemoryAdvisor` builders set it; nothing changes without them.
 
 ### New: usage and budget
 

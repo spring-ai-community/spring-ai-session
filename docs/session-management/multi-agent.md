@@ -61,12 +61,12 @@ public class ResearcherTool {
 
     public ResearcherTool(SessionService sessionService, ChatClient.Builder chatClientBuilder) {
         this.sessionService = sessionService;
-        // The sub-agent has its own memory advisor, with compaction sized for its own model
+        // The sub-agent has its own session advisors, with compaction sized for its own model
         this.researcher = chatClientBuilder.defaultSystem("You are a researcher. Cite every source.")
-            .defaultAdvisors(SessionMemoryAdvisor.builder(sessionService)
+            .defaultAdvisors(SessionTurnAdvisor.builder(sessionService)
                 .compactionTrigger(new TurnCountTrigger(10))
                 .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(20).build())
-                .build())
+                .build(), SessionMemoryAdvisor.builder(sessionService).build())
             .build();
     }
 

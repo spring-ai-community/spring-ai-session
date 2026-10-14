@@ -64,18 +64,20 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 </dependency>
 ```
 
-**3. Wire a `SessionMemoryAdvisor` into your `ChatClient`:**
+**3. Wire the session advisors into your `ChatClient`:**
 
 ```java
 SessionService sessionService = DefaultSessionService.builder().sessionRepository(InMemorySessionRepository.builder().build()).build();
 
-SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
-    .compactionTrigger(new TurnCountTrigger(20))
-    .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
-    .build();
-
 ChatClient client = ChatClient.builder(chatModel)
-    .defaultAdvisors(advisor)
+    .defaultAdvisors(
+        // The turn: status, and compaction once it has ended
+        SessionTurnAdvisor.builder(sessionService)
+            .compactionTrigger(new TurnCountTrigger(20))
+            .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
+            .build(),
+        // Each model call: history in, messages and usage stored
+        SessionMemoryAdvisor.builder(sessionService).build())
     .build();
 
 // Every call automatically loads history, appends messages, and compacts when needed

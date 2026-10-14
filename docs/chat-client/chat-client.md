@@ -1,8 +1,17 @@
 # ChatClient Integration
 
-`SessionMemoryAdvisor` is the primary integration point between Spring AI Session and a
-`ChatClient`. It wires session management into the ChatClient pipeline transparently —
-no manual history loading or appending required in application code.
+Two advisors wire a session into a `ChatClient`, so application code never loads or
+appends history by hand:
+
+- `SessionMemoryAdvisor` works on each model call: it loads the history into the prompt
+  and stores the messages and the token usage.
+- `SessionTurnAdvisor` works on each `ChatClient` call: it runs the call as one turn of the
+  session (its status) and compacts the session once the turn has ended.
+
+The memory advisor runs inside the tool-calling loop, once per round; the turn advisor
+runs outside it, so it sees the turn's final response however the loop ended. The memory
+advisor works on its own and then leaves the status alone; the `ToolConfirmationAdvisor`
+and the `BudgetAdvisor` need the turn advisor.
 
 The advisors live in the `spring-ai-session-chatclient` module, with the
 `ToolConfirmationAdvisor`, the `BudgetAdvisor` and the `RecursiveSummarizationCompactionStrategy`;
@@ -12,9 +21,9 @@ starter includes the `ChatClient` module.
 
 ---
 
-## What the advisor does
+## What the advisors do
 
-On every request the advisor:
+On every model call the memory advisor:
 
 1. Resolves the session ID from `SESSION_ID_CONTEXT_KEY`, which **must** be present on
    every request, creating the session if it does not exist and checking ownership if it
@@ -42,22 +51,28 @@ On every request the advisor:
    assistant messages (blank text, no tool calls, and no media) are skipped — some
    models (e.g. Bedrock Converse) emit an empty `end_turn` frame after tool use that
    would otherwise be replayed and rejected on the next request.
-6. If a trigger fires, runs compaction **synchronously** before returning, once the turn
-   is complete: a reply that still requests tool calls means the turn is in progress, so
-   inside a tool-calling loop compaction waits for the final reply. The full turn is
-   already written at that point, so there is no race between compaction and message
-   appending.
-7. Records the turn in the session's status: `startTurn` before the model call, which
-   rejects a second concurrent turn on the same session, and `endTurn(END_TURN)` once the
-   final reply is in; a call that fails ends the turn with `ERROR`. Inside a tool-calling
-   loop the later rounds (whose prompt ends with tool results) continue the running turn.
-   `trackStatus(false)` on the builder leaves the status alone. See
-   [Status, turns and archive](../session-management/concepts.md#status-turns-and-archive).
-8. Records the call's token usage as a `USAGE` event, with the model's name, when the
+6. Records the call's token usage as a `USAGE` event, with the model's name, when the
    reply carries usage. `recordUsage(false)` turns it off. See
    [Usage and budget](../session-management/concepts.md#usage-and-budget).
 
-The diagram below shows the round-trip: the **before** phase loads history and builds the
+On every `ChatClient` call the turn advisor:
+
+1. Finds the session or creates it, like the memory advisor, stamped with its own
+   `agent(AgentSnapshot)`.
+2. Starts the turn (`startTurn`), which rejects a second concurrent turn on the same
+   session. A request that confirms tool calls resumes the parked turn instead; the
+   `ToolConfirmationAdvisor` starts it.
+3. Ends the turn once the call returns (`END_TURN`), whether the loop ended with a final
+   reply, a `returnDirect` tool or a breached tool-call limit. A call that fails ends it
+   with `ERROR`, a cancelled stream with `INTERRUPTED`. A turn that already ended (parked
+   for a confirmation, interrupted, out of budget) is left as it is. See
+   [Status, turns and archive](../session-management/concepts.md#status-turns-and-archive).
+4. If a trigger fires, compacts the session **synchronously** before returning, once per
+   turn. The whole turn is written by then, so compaction never races the message
+   appends. A failed compaction is logged; the reply is returned and the compaction is
+   retried after the next turn.
+
+The diagram below shows the memory advisor's round-trip: the **before** phase loads history and builds the
 expanded prompt, the **after** phase appends the assistant message and compacts on trigger.
 
 ![Spring AI Session — SessionMemoryAdvisor flow](../images/spring-ai-session-advisor-flow.png)
@@ -67,7 +82,7 @@ expanded prompt, the **after** phase appends the assistant message and compacts 
 ## Setup
 
 ```java
-SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
+SessionTurnAdvisor turn = SessionTurnAdvisor.builder(sessionService)
     // Compact when 20 turns accumulate, using LLM summarization to retain context
     .compactionTrigger(new TurnCountTrigger(20))
     .compactionStrategy(
@@ -77,8 +92,10 @@ SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
     )
     .build();
 
+SessionMemoryAdvisor memory = SessionMemoryAdvisor.builder(sessionService).build();
+
 ChatClient client = ChatClient.builder(chatModel)
-    .defaultAdvisors(advisor)
+    .defaultAdvisors(turn, memory)   // HIGHEST_PRECEDENCE + 200 and + 1000
     .build();
 ```
 
@@ -91,8 +108,9 @@ ChatClient client = ChatClient.builder(chatModel)
     Setting only one of `compactionTrigger` or `compactionStrategy` makes `build()` throw
     `IllegalArgumentException`. Set both or neither.
 
-!!! note "Default advisor order — nested inside the tool-calling loop"
-    The default order is `Ordered.HIGHEST_PRECEDENCE + 1000`, a lower precedence than
+!!! note "Default advisor order — the turn outside the loop, the memory inside it"
+    The turn advisor's default order is `Ordered.HIGHEST_PRECEDENCE + 200`, so it wraps the
+    tool-calling advisor. The memory advisor's is `Ordered.HIGHEST_PRECEDENCE + 1000`, a lower precedence than
     `ToolCallingAdvisor`'s `HIGHEST_PRECEDENCE + 300`. The tool-calling advisor therefore
     wraps `SessionMemoryAdvisor`, whose `before()`/`after()` run once per round of the
     tool-call loop.
@@ -299,8 +317,9 @@ A `ToolConfirmationPolicy` names the tools a person must confirm before they run
 two ends: its `eligibilityChecker()` on the tool-calling advisor keeps the loop from running
 those calls, and a `ToolConfirmationAdvisor` parks the turn when such a call comes back and
 resumes it when the decision arrives. The gate sits between the tool-calling advisor and
-`SessionMemoryAdvisor` (default order `HIGHEST_PRECEDENCE + 900`) and relies on the memory
-advisor's turn tracking (`trackStatus`, the default). Whatever the loop's position, keep
+`SessionMemoryAdvisor` (default order `HIGHEST_PRECEDENCE + 900`) and needs the
+`SessionTurnAdvisor`, which starts the turn the gate parks and ends the turn it resumes.
+Whatever the loop's position, keep
 the gate outside the memory advisor (a lower order value): it parks after the reply is
 stored and resumes before the history is loaded. If you set the memory advisor's order
 below the loop's to wrap it, set the gate's order below the memory advisor's too:
@@ -311,6 +330,7 @@ ToolCallingManager toolCallingManager = ToolCallingManager.builder().build();
 
 ChatClient chatClient = ChatClient.builder(chatModel)
     .defaultAdvisors(
+        SessionTurnAdvisor.builder(sessionService).build(),
         ToolCallingAdvisor.builder()
             .toolCallingManager(toolCallingManager)
             .toolExecutionEligibilityChecker(policy.eligibilityChecker())

@@ -27,7 +27,7 @@ how the main types fit together.
 | Module | Artifact | Description |
 |--------|----------|-------------|
 | **Session Management** | `spring-ai-session` | Core SPI: `Session`, `SessionEvent`, `SessionService`, `SessionRepository`, compaction framework, recall tools; no dependency on `ChatClient` |
-| **Session ChatClient** | `spring-ai-session-chatclient` | The `ChatClient` integration: `SessionMemoryAdvisor`, `ToolConfirmationAdvisor`, `BudgetAdvisor`, and the summarizing compaction strategy |
+| **Session ChatClient** | `spring-ai-session-chatclient` | The `ChatClient` integration: `SessionMemoryAdvisor`, `SessionTurnAdvisor`, `ToolConfirmationAdvisor`, `BudgetAdvisor`, and the summarizing compaction strategy |
 | **Session Agent** | `spring-ai-session-agent` | The spring-ai-agent integration: `SessionFeature`, a `Checkpointer` over the log, `BudgetFeature`, `ToolConfirmationFeature` |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
@@ -81,11 +81,12 @@ repository and `SessionService` (schema auto-initialised with an embedded databa
 ```java
 @Bean
 ChatClient chatClient(ChatModel chatModel, SessionService sessionService) {
-    SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
+    SessionTurnAdvisor turn = SessionTurnAdvisor.builder(sessionService)
         .compactionTrigger(new TurnCountTrigger(20))
         .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
         .build();
-    return ChatClient.builder(chatModel).defaultAdvisors(advisor).build();
+    SessionMemoryAdvisor memory = SessionMemoryAdvisor.builder(sessionService).build();
+    return ChatClient.builder(chatModel).defaultAdvisors(turn, memory).build();
 }
 
 // Every call automatically loads history, appends messages, and compacts when needed

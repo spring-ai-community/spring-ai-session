@@ -86,9 +86,9 @@ import org.springframework.util.Assert;
  * user message; new text goes in the next turn.</li>
  * </ol>
  * The advisor sits between the tool-calling advisor and the memory advisor (order
- * {@link #DEFAULT_ORDER}) and needs the memory advisor's turn tracking
- * ({@link SessionMemoryAdvisor.Builder#trackStatus(boolean)}, the default). Whatever the
- * loop's position, it must stay <em>outside</em> the memory advisor (a lower order value):
+ * {@link #DEFAULT_ORDER}) and needs the {@link SessionTurnAdvisor}, which starts the turn
+ * it parks and ends the turn it resumes. Whatever the loop's position, it must stay
+ * <em>outside</em> the memory advisor (a lower order value):
  * it parks after the reply is stored and resumes before the history is loaded. A confirmed
  * tool marked {@code returnDirect} is a known limitation: its result goes to the model
  * like any other, since a resumption cannot short-circuit the chain.
@@ -149,7 +149,7 @@ public final class ToolConfirmationAdvisor implements BaseAdvisor {
 		if (confirmations.isEmpty()) {
 			return request;
 		}
-		String sessionId = getSessionId(request.context());
+		String sessionId = SessionContexts.sessionId(request.context());
 		List<Message> messages = request.prompt().getInstructions();
 		// The tool-calling loop gives every round a copy of the request's context, so the
 		// decisions are seen again on the rounds that follow the resumption. Those rounds
@@ -176,6 +176,11 @@ public final class ToolConfirmationAdvisor implements BaseAdvisor {
 		// request with the same decisions fails instead of running the tool twice), and
 		// records the decisions as the answer to the question the turn parked on
 		this.sessionService.resume(sessionId, null, ToolConfirmation.asAnswer(decisions.values()));
+		// The turn advisor ends the turn the resumption started
+		SessionTurn turn = SessionTurn.of(request.context());
+		if (turn != null) {
+			turn.hold();
+		}
 		ToolResponseMessage results;
 		try {
 			results = answer(pending, decisions, allowed, request.prompt().getOptions());
@@ -196,7 +201,7 @@ public final class ToolConfirmationAdvisor implements BaseAdvisor {
 		if (chatResponse == null || !chatResponse.hasToolCalls() || !this.policy.requiresConfirmation(chatResponse)) {
 			return response;
 		}
-		String sessionId = getSessionId(response.context());
+		String sessionId = SessionContexts.sessionId(response.context());
 		List<String> eventIds = new ArrayList<>();
 		SessionEvent newest = newestConversationEvent(sessionId);
 		if (newest != null && newest.hasToolCalls()) {
@@ -229,8 +234,8 @@ public final class ToolConfirmationAdvisor implements BaseAdvisor {
 				return response;
 			}
 			throw new IllegalStateException("Could not park the turn of session '" + sessionId
-					+ "' for a tool confirmation: " + ex.getMessage() + ". The gate needs the memory advisor's "
-					+ "turn tracking (SessionMemoryAdvisor.Builder.trackStatus)", ex);
+					+ "' for a tool confirmation: " + ex.getMessage() + ". The gate needs the SessionTurnAdvisor "
+					+ "to run the turn", ex);
 		}
 		return response;
 	}
@@ -358,15 +363,6 @@ public final class ToolConfirmationAdvisor implements BaseAdvisor {
 		}
 		throw new IllegalArgumentException("Advisor context value for '" + TOOL_CONFIRMATION_CONTEXT_KEY
 				+ "' must be a ToolConfirmation or a collection of them but was " + value.getClass().getName());
-	}
-
-	private static String getSessionId(Map<String, @Nullable Object> context) {
-		Object value = context.get(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY);
-		if (value instanceof String s && !s.isBlank()) {
-			return s;
-		}
-		throw new IllegalStateException("No session ID found in advisor context. Set SESSION_ID_CONTEXT_KEY on "
-				+ "every request: .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))");
 	}
 
 	public static final class Builder {

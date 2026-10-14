@@ -19,7 +19,6 @@ package org.springframework.ai.session.advisor;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,7 +36,6 @@ import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
-import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.MemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -50,25 +48,20 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.content.MediaContent;
 import org.springframework.ai.session.AgentSnapshot;
-import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.MessageFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
-import org.springframework.ai.session.SessionStatus;
-import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.TokenUsage;
 import org.springframework.ai.session.UsageEvents;
-import org.springframework.ai.session.compaction.CompactionStrategy;
-import org.springframework.ai.session.compaction.CompactionTrigger;
 import org.springframework.core.Ordered;
 import org.springframework.util.Assert;
 
 /**
  * A {@link BaseAdvisor} that manages conversation history using the
- * {@link SessionService}, with optional context compaction.
+ * {@link SessionService}.
  *
  * <p>
  * On each interaction:
@@ -82,13 +75,6 @@ import org.springframework.util.Assert;
  * <li>After the model responds, appends the assistant message(s) to the session; messages
  * rejected by the configured {@link MessageFilter} are skipped. By default, empty
  * assistant messages (blank text, no tool calls, and no media) are filtered out.</li>
- * <li>Optionally triggers context compaction if the configured trigger fires, once the
- * turn is complete (not after a reply that requests tool calls).</li>
- * <li>Records the turn in the session's status: {@link SessionService#startTurn} before
- * the model call and {@link SessionService#endTurn} once the turn is complete, with
- * {@link StopReason#ERROR} when the call fails. The start is a compare-and-set, so a
- * second concurrent turn on the same session is rejected; see
- * {@link Builder#trackStatus(boolean)}.</li>
  * <li>Records every model call's token usage as a
  * {@link org.springframework.ai.session.EventType#USAGE} event; see
  * {@link Builder#recordUsage(boolean)}.</li>
@@ -98,17 +84,14 @@ import org.springframework.util.Assert;
  * </ol>
  *
  * <p>
+ * The turn around those model calls (its status, and compaction once it has ended) is the
+ * {@link SessionTurnAdvisor}'s: register both. On its own this advisor keeps the history
+ * and leaves the status alone.
+ *
+ * <p>
  * The session is identified by the {@link #SESSION_ID_CONTEXT_KEY} value in the advisor
  * context. The key must be present on every request; omitting it throws
  * {@link IllegalStateException} to prevent accidental cross-user session sharing.
- *
- * <p>
- * <strong>Concurrent compaction safety:</strong> If two requests for the same session
- * complete concurrently, both {@code after()} calls may reach the compaction step
- * simultaneously. Compaction is recorded with an optimistic compare-and-swap append via
- * {@link org.springframework.ai.session.SessionRepository#appendEvents(String, java.util.List, long)},
- * so only the first writer's boundary lands; the second detects the version mismatch and
- * skips silently. The log is never changed, so nothing is lost or corrupted.
  *
  * <p>
  * <strong>Tool-call integrity:</strong> a prompt in which an assistant tool call is not
@@ -209,33 +192,20 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	private final SessionEventResponseIdGenerator responseEventIdGenerator;
 
-	@Nullable private final CompactionTrigger compactionTrigger;
-
-	@Nullable private final CompactionStrategy compactionStrategy;
-
-	private final boolean trackStatus;
-
 	private final boolean recordUsage;
 
 	@Nullable private final AgentSnapshot agent;
 
-	private SessionMemoryAdvisor(SessionService sessionService, int order, Scheduler scheduler,
-			EventFilter eventFilter, MessageFilter messageFilter, SessionEventRequestIdGenerator requestEventIdGenerator,
-			SessionEventResponseIdGenerator responseEventIdGenerator, @Nullable CompactionTrigger compactionTrigger,
-			@Nullable CompactionStrategy compactionStrategy, boolean trackStatus, boolean recordUsage,
-			@Nullable AgentSnapshot agent) {
-		this.trackStatus = trackStatus;
-		this.recordUsage = recordUsage;
-		this.agent = agent;
-		this.sessionService = sessionService;
-		this.order = order;
-		this.scheduler = scheduler;
-		this.eventFilter = eventFilter;
-		this.messageFilter = messageFilter;
-		this.requestEventIdGenerator = requestEventIdGenerator;
-		this.responseEventIdGenerator = responseEventIdGenerator;
-		this.compactionTrigger = compactionTrigger;
-		this.compactionStrategy = compactionStrategy;
+	private SessionMemoryAdvisor(Builder builder) {
+		this.sessionService = builder.sessionService;
+		this.order = builder.order;
+		this.scheduler = builder.scheduler;
+		this.eventFilter = builder.eventFilter;
+		this.messageFilter = builder.messageFilter;
+		this.requestEventIdGenerator = builder.requestEventIdGenerator;
+		this.responseEventIdGenerator = builder.responseEventIdGenerator;
+		this.recordUsage = builder.recordUsage;
+		this.agent = builder.agent;
 	}
 
 	@Override
@@ -251,37 +221,12 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	@Override
 	public ChatClientRequest before(ChatClientRequest request, AdvisorChain advisorChain) {
 
-		// 0. Resolve the session ID — must be present in the request context.
-		String sessionId = getSessionId(request.context());
-
-		// 1. Find or create the session.
-		Session session = this.sessionService.findById(sessionId);
-		if (session == null) {
-			session = createSession(sessionId, request.context());
-		}
-
-		// Whether the caller may use this session is not decided here: an authorizing
+		// 1. Resolve the session id (it must be in the context) and find or create the
+		// session. Whether the caller may use it is not decided here: an authorizing
 		// SessionService (see the security module) checks every read and append.
+		String sessionId = SessionContexts.sessionId(request.context());
+		SessionContexts.findOrCreate(this.sessionService, sessionId, request.context(), this.agent);
 
-		// 1.1. Start the turn, unless this is a later round of a tool loop (the prompt ends
-		// with the tool results of the previous round), in which case the turn is already
-		// running. The service's compare-and-set rejects a second concurrent turn. Once the
-		// turn is ours, anything that fails below ends it, so the session never stays running
-		// because of a bad filter value, a rejected message or a store that is down.
-		if (this.trackStatus && !(request.prompt().getLastUserOrToolResponseMessage() instanceof ToolResponseMessage)) {
-			this.sessionService.startTurn(sessionId);
-		}
-		try {
-			return assemblePrompt(request, sessionId);
-		}
-		catch (RuntimeException ex) {
-			failTurn(request.context(), ex);
-			throw ex;
-		}
-	}
-
-	/** Steps 2 to 4 of {@link #before}: load the history, build the prompt, persist the user message. */
-	private ChatClientRequest assemblePrompt(ChatClientRequest request, String sessionId) {
 		// 2. Retrieve history applying the configured filter (default: all events)
 
 		// Always read the active view: the events a compaction covered live on only for
@@ -379,7 +324,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	@Override
 	public ChatClientResponse after(ChatClientResponse response, AdvisorChain advisorChain) {
-		String sessionId = getSessionId(response.context());
+		String sessionId = SessionContexts.sessionId(response.context());
 
 		// 1. Append the assistant message(s) produced by the model, subject to the
 		// configured message filter. By default excludes messages that carry no
@@ -406,75 +351,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			recordUsage(response, response.chatResponse(), sessionId);
 		}
 
-		// 2. Compact synchronously if configured, once the turn is complete. Inside a
-		// tool-calling loop this advisor's after() runs once per round; a reply that
-		// still requests tool calls means the turn is in progress. Compacting then could
-		// insert a summary the looping advisor's next prompt doesn't carry, so the next
-		// round's before() would re-send the whole history. Compaction is best-effort:
-		// the model's reply is already produced and persisted, so a compaction failure
-		// (e.g. the summarization LLM call failing) must not fail the user's request. The
-		// log is left untouched and compaction is retried after the next turn.
-		if (this.compactionTrigger != null && this.compactionStrategy != null && !requestsToolCalls(response)) {
-			try {
-				this.sessionService.compact(sessionId, this.compactionTrigger, this.compactionStrategy);
-			}
-			catch (RuntimeException ex) {
-				logger.warn("Compaction failed for session [{}]; the event log is unchanged and compaction will be "
-						+ "retried after the next turn", sessionId, ex);
-			}
-		}
-
-		// 3. End the turn once it is complete: a reply that requests tool calls keeps the
-		// session running until the loop's final reply (or until a ToolConfirmationAdvisor
-		// parks it). A turn someone ended by hand in the meantime (an interrupt) must not
-		// fail the reply that was already produced.
-		if (this.trackStatus && !requestsToolCalls(response)) {
-			try {
-				this.sessionService.endTurn(sessionId, StopReason.END_TURN);
-			}
-			catch (IllegalStateException ex) {
-				logger.warn("The turn of session [{}] was already ended: {}", sessionId, ex.getMessage());
-			}
-		}
-
 		return named;
-	}
-
-	@Override
-	public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
-		Assert.notNull(request, "request must not be null");
-		Assert.notNull(chain, "chain must not be null");
-		ChatClientRequest processed = before(request, chain);
-		ChatClientResponse response;
-		try {
-			response = chain.nextCall(processed);
-		}
-		catch (RuntimeException ex) {
-			failTurn(processed.context(), ex);
-			throw ex;
-		}
-		return after(response, chain);
-	}
-
-	/**
-	 * Ends the turn with {@link StopReason#ERROR} when the chain fails after
-	 * {@code before()} started it, so the session does not stay running. Inside a tool
-	 * loop the innermost round ends it; the outer rounds then find it idle and do nothing.
-	 */
-	private void failTurn(Map<String, @Nullable Object> context, Throwable cause) {
-		if (!this.trackStatus) {
-			return;
-		}
-		try {
-			String sessionId = getSessionId(context);
-			Session session = this.sessionService.findById(sessionId);
-			if (session != null && session.status() == SessionStatus.RUNNING) {
-				this.sessionService.endTurn(sessionId, StopReason.ERROR);
-			}
-		}
-		catch (RuntimeException ex) {
-			logger.warn("Could not end the failed turn; the session may stay running until endTurn is called", ex);
-		}
 	}
 
 	/**
@@ -637,39 +514,18 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		return false;
 	}
 
-	/**
-	 * Returns {@code true} if the model's reply asks for tool calls, i.e. the turn is
-	 * still in progress inside a tool-calling loop.
-	 */
-	private static boolean requestsToolCalls(ChatClientResponse response) {
-		return response.chatResponse() != null && response.chatResponse()
-			.getResults()
-			.stream()
-			.anyMatch(generation -> generation.getOutput() != null && generation.getOutput().hasToolCalls());
-	}
-
 	@Override
 	public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
 		return Mono.just(request)
 			.publishOn(this.scheduler)
 			.map(r -> this.before(r, chain))
-			.flatMapMany(r -> chain.nextStream(r).doOnError(ex -> failTurn(r.context(), ex)))
+			.flatMapMany(chain::nextStream)
 			// Re-pin to the scheduler so that the after() callback (which performs
-			// synchronous session writes and optional compaction) always runs on the
-			// configured scheduler rather than the LLM streaming thread.
+			// synchronous session writes) always runs on the configured scheduler rather
+			// than the LLM streaming thread.
 			.publishOn(this.scheduler)
 			.transform(flux -> new ChatClientMessageAggregator().aggregateChatClientResponse(flux,
 					r -> this.after(r, chain)));
-	}
-
-	private String getSessionId(Map<String, @Nullable Object> context) {
-		Object value = context.get(SESSION_ID_CONTEXT_KEY);
-		if (value instanceof String s && !s.isBlank()) {
-			return s;
-		}
-		throw new IllegalStateException(
-				"No session ID found in advisor context. " + "Set SESSION_ID_CONTEXT_KEY on every request: "
-						+ ".advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))");
 	}
 
 	/**
@@ -687,49 +543,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 					+ "' must be an EventFilter but was " + requestFilterValue.getClass().getName());
 		}
 		return this.eventFilter.merge(requestEventFilter);
-	}
-
-	/**
-	 * Creates the session on first use. {@code SessionService.create} inserts atomically,
-	 * so if a concurrent request for the same new session ID created it first, this
-	 * request's create is rejected and the <em>stored</em> session is re-read instead.
-	 */
-	private Session createSession(String sessionId, Map<String, @Nullable Object> context) {
-		try {
-			Map<String, Object> metadata = sessionMetadata(context);
-			CreateSessionRequest.Builder request = CreateSessionRequest.builder().id(sessionId);
-			// The request's metadata may name another agent on purpose: then it is that
-			// agent's snapshot as a whole, not the advisor's with a name swapped in
-			if (this.agent != null && !metadata.containsKey(SessionAttributes.AGENT_NAME)) {
-				request.agent(this.agent);
-			}
-			return this.sessionService.create(request.metadata(metadata).build());
-		}
-		catch (IllegalStateException ex) {
-			Session existing = this.sessionService.findById(sessionId);
-			if (existing == null) {
-				throw ex;
-			}
-			return existing;
-		}
-	}
-
-	private static Map<String, Object> sessionMetadata(Map<String, @Nullable Object> context) {
-		Object value = context.get(SESSION_METADATA_CONTEXT_KEY);
-		if (value == null) {
-			return Map.of();
-		}
-		if (!(value instanceof Map<?, ?> map)) {
-			throw new IllegalArgumentException("Advisor context value for '" + SESSION_METADATA_CONTEXT_KEY
-					+ "' must be a Map but was " + value.getClass().getName());
-		}
-		Map<String, Object> metadata = new HashMap<>();
-		map.forEach((k, v) -> {
-			if (k != null && v != null) {
-				metadata.put(String.valueOf(k), v);
-			}
-		});
-		return metadata;
 	}
 
 	/**
@@ -823,12 +636,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		private SessionEventResponseIdGenerator responseEventIdGenerator = SessionEventResponseIdGenerator.random();
 
-		@Nullable private CompactionTrigger compactionTrigger;
-
-		@Nullable private CompactionStrategy compactionStrategy;
-
-		private boolean trackStatus = true;
-
 		private boolean recordUsage = true;
 
 		@Nullable private AgentSnapshot agent;
@@ -880,16 +687,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			return this;
 		}
 
-		public Builder compactionTrigger(CompactionTrigger trigger) {
-			this.compactionTrigger = trigger;
-			return this;
-		}
-
-		public Builder compactionStrategy(CompactionStrategy strategy) {
-			this.compactionStrategy = strategy;
-			return this;
-		}
-
 		/**
 		 * Overrides how the id is derived for the session event persisted in
 		 * {@code before()} (the current user/tool-response message). Defaults to
@@ -911,18 +708,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		public Builder responseEventIdGenerator(SessionEventResponseIdGenerator responseEventIdGenerator) {
 			Assert.notNull(responseEventIdGenerator, "responseEventIdGenerator must not be null");
 			this.responseEventIdGenerator = responseEventIdGenerator;
-			return this;
-		}
-
-		/**
-		 * Whether the advisor records the session's turn status: {@code true} (the default)
-		 * starts a turn in {@code before()} ({@link SessionService#startTurn}, which rejects
-		 * a second concurrent turn on the same session), ends it in {@code after()} once the
-		 * reply no longer requests tool calls, and ends it with {@link StopReason#ERROR}
-		 * when the call fails. {@code false} leaves the status alone.
-		 */
-		public Builder trackStatus(boolean trackStatus) {
-			this.trackStatus = trackStatus;
 			return this;
 		}
 
@@ -949,13 +734,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		}
 
 		public SessionMemoryAdvisor build() {
-			if ((this.compactionTrigger == null) != (this.compactionStrategy == null)) {
-				throw new IllegalArgumentException(
-						"compactionTrigger and compactionStrategy must be set together — set both or neither");
-			}
-			return new SessionMemoryAdvisor(this.sessionService, this.order, this.scheduler,
-					this.eventFilter, this.messageFilter, this.requestEventIdGenerator, this.responseEventIdGenerator,
-					this.compactionTrigger, this.compactionStrategy, this.trackStatus, this.recordUsage, this.agent);
+			return new SessionMemoryAdvisor(this);
 		}
 
 	}

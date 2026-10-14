@@ -16,9 +16,6 @@
 
 package org.springframework.ai.session.advisor;
 
-import java.util.Map;
-
-import org.jspecify.annotations.Nullable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -44,8 +41,8 @@ import org.springframework.util.Assert;
  * <p>
  * The usage comes from the {@link org.springframework.ai.session.EventType#USAGE} events
  * the {@link SessionMemoryAdvisor} records, so the advisor sits <em>inside</em> the memory
- * advisor (order {@link #DEFAULT_ORDER}), where the turn is running and every round of a
- * tool loop passes through it.
+ * advisor (order {@link #DEFAULT_ORDER}), where every round of a tool loop passes through
+ * it; the turn it ends is the one the {@link SessionTurnAdvisor} runs.
  *
  * @author Christian Tzolov
  * @since 0.11.0
@@ -75,7 +72,7 @@ public final class BudgetAdvisor implements BaseAdvisor {
 
 	@Override
 	public ChatClientRequest before(ChatClientRequest request, AdvisorChain advisorChain) {
-		this.guard.check(getSessionId(request.context()));
+		this.guard.check(SessionContexts.sessionId(request.context()));
 		return request;
 	}
 
@@ -88,15 +85,6 @@ public final class BudgetAdvisor implements BaseAdvisor {
 	@Override
 	public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
 		return Mono.just(request).publishOn(getScheduler()).map(r -> before(r, chain)).flatMapMany(chain::nextStream);
-	}
-
-	private static String getSessionId(Map<String, @Nullable Object> context) {
-		Object value = context.get(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY);
-		if (value instanceof String s && !s.isBlank()) {
-			return s;
-		}
-		throw new IllegalStateException("No session ID found in advisor context. Set SESSION_ID_CONTEXT_KEY on "
-				+ "every request: .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))");
 	}
 
 	public static final class Builder {
