@@ -22,7 +22,7 @@ Enable it on the top-level agent. It implements the runtime's `RunListener`,
 
 ```java
 SessionFeature feature = SessionFeature.builder(sessionService)
-    .agent(AgentSnapshot.of("planner", "3", "claude-sonnet-5-5"))
+    .sessionMetadata(Map.of(SessionAttributes.AGENT_NAME, "planner", SessionAttributes.AGENT_MODEL, "claude-sonnet-5-5"))
     .compaction(new TurnCountTrigger(20), SlidingWindowCompactionStrategy.builder().maxEvents(40).build())
     .build();
 
@@ -37,7 +37,7 @@ agent.output("Which city did I mention?", new RunIdentification("trip-1", "run-2
 
 | The runtime's | Becomes in the session |
 | --- | --- |
-| `RunIdentification.sessionId()` | The root session, created on first use with the feature's agent snapshot, restored from its active view on every later run |
+| `RunIdentification.sessionId()` | The root session, created on first use with the feature's session metadata, restored from its active view on every later run |
 | A run | A turn: `startTurn(id, runId)` when the run starts, `endTurn` with `END_TURN`, `ERROR` or `REQUIRES_ACTION` when it ends; both status events carry the run id |
 | The main `Conversation` | `MESSAGE` events of the root session, appended from the conversation interceptor; compaction after each update when configured |
 | A nested context (`Nodes.agent`, `AgentTools`) | A child session, `rootId/path`, created on the first event from that path, with the nested agent's node name as its agent and `inheritedMessages` in its metadata; `SHARED` contexts write to their parent's session |
@@ -137,8 +137,8 @@ objects, which were never stored.
 - A nested conversation seeded by a custom propagation is stored from its first event on,
   seed included; messages a node contributes to a nested conversation after its last event
   are stored by the next event from that path, or not at all if none follows.
-- A child's agent snapshot is its node's name; the runtime does not expose the nested
-  agent's definition to a feature.
+- A child's agent name is its node's name; the runtime does not expose the nested agent's
+  definition to a feature.
 - The question of an interrupt is stored as JSON; a value read back from a store is a map or
   a scalar, and the resume type is not recorded because the runtime's event does not carry it.
 - Streamed model chunks are not stored; subscribe to the run for them and to the session

@@ -26,9 +26,11 @@ import org.jspecify.annotations.Nullable;
  * A session has no owner field. Who it belongs to is the {@link #PRINCIPAL_NAME} attribute,
  * in the shape of Spring Session's principal-name index: the store indexes it
  * ({@link SessionRepository#findByIndex}), a {@link SessionScopeResolver} fills it, and an
- * authorization layer decides what the caller may see. The {@link #AGENT_NAME} names the
- * agent a child runs. The links of a session tree are fields of {@link Session}
- * ({@link Session#parentSessionId()}, {@link Session#rootSessionId()}), not attributes.
+ * authorization layer decides what the caller may see. {@link #AGENT_NAME},
+ * {@link #AGENT_VERSION} and {@link #AGENT_MODEL} label the agent a session runs, set at
+ * creation from the request's metadata, for listings, session trees and a UI. The links
+ * of a session tree are fields of {@link Session} ({@link Session#parentSessionId()},
+ * {@link Session#rootSessionId()}), not attributes.
  *
  * @author Christian Tzolov
  * @since 0.11.0
@@ -66,14 +68,14 @@ public final class SessionAttributes {
 		return text(session, AGENT_NAME);
 	}
 
-	/**
-	 * The agent snapshot a session was created with, or {@code null} when it has no agent
-	 * name.
-	 */
-	public static @Nullable AgentSnapshot agent(Session session) {
-		String name = text(session, AGENT_NAME);
-		return (name != null) ? new AgentSnapshot(name, text(session, AGENT_VERSION), text(session, AGENT_MODEL))
-				: null;
+	/** The version of the agent definition a session runs, or {@code null} when none was set. */
+	public static @Nullable String agentVersion(Session session) {
+		return text(session, AGENT_VERSION);
+	}
+
+	/** The model of the agent a session runs, or {@code null} when none was set. */
+	public static @Nullable String agentModel(Session session) {
+		return text(session, AGENT_MODEL);
 	}
 
 	private static @Nullable String text(Session session, String key) {

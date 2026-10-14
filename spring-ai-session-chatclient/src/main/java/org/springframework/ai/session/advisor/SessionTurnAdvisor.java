@@ -56,13 +56,11 @@ import org.springframework.ai.model.tool.ToolCallDecisions;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
-import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Interaction;
 import org.springframework.ai.session.InteractionEvents;
 import org.springframework.ai.session.Session;
-import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;
@@ -83,8 +81,8 @@ import org.springframework.util.Assert;
  * first round and the turn's final response after the last one, however the loop ended.
  * <ol>
  * <li>Finds the session or creates it on first use, with the metadata from
- * {@link SessionMemoryAdvisor#SESSION_METADATA_CONTEXT_KEY} and the {@link Builder#agent
- * agent}.</li>
+ * {@link SessionMemoryAdvisor#SESSION_METADATA_CONTEXT_KEY}, such as the agent
+ * attributes.</li>
  * <li>Starts the turn ({@link SessionService#startTurn}). The start is a compare-and-set,
  * so a second concurrent turn on the same session is rejected.</li>
  * <li>Ends the turn with {@link StopReason#END_TURN} once the call returns, or with
@@ -172,8 +170,6 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 
 	@Nullable private final CompactionStrategy compactionStrategy;
 
-	@Nullable private final AgentSnapshot agent;
-
 	private final boolean asyncCompaction;
 
 	/** The sessions an asynchronous compaction of this advisor runs on, so it runs once each. */
@@ -186,7 +182,6 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 		this.scheduler = builder.scheduler;
 		this.compactionTrigger = builder.compactionTrigger;
 		this.compactionStrategy = builder.compactionStrategy;
-		this.agent = builder.agent;
 		this.asyncCompaction = builder.asyncCompaction;
 	}
 
@@ -257,7 +252,7 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 	 */
 	private Start begin(ChatClientRequest request, String sessionId) {
 		List<ToolCallDecision> decisions = decisions(request.context());
-		SessionContexts.findOrCreate(this.sessionService, sessionId, request.context(), this.agent);
+		SessionContexts.findOrCreate(this.sessionService, sessionId, request.context());
 		if (decisions.isEmpty()) {
 			this.sessionService.startTurn(sessionId, runId(request.context()));
 			return new Start(inTurn(request, "start"), null);
@@ -691,8 +686,6 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 
 		@Nullable private CompactionStrategy compactionStrategy;
 
-		@Nullable private AgentSnapshot agent;
-
 		private boolean asyncCompaction;
 
 		private Builder(SessionService sessionService) {
@@ -750,17 +743,6 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 		 */
 		public Builder asyncCompaction(boolean asyncCompaction) {
 			this.asyncCompaction = asyncCompaction;
-			return this;
-		}
-
-		/**
-		 * The agent this {@code ChatClient} runs: a session the advisor creates on first use
-		 * is stamped with it ({@link SessionAttributes#agent(Session)}). Metadata given with
-		 * {@link SessionMemoryAdvisor#SESSION_METADATA_CONTEXT_KEY} that names an agent
-		 * replaces the snapshot as a whole; an existing session is never changed.
-		 */
-		public Builder agent(@Nullable AgentSnapshot agent) {
-			this.agent = agent;
 			return this;
 		}
 

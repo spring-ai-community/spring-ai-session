@@ -21,7 +21,6 @@ import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
-import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
@@ -55,26 +54,19 @@ final class SessionContexts {
 
 	/**
 	 * Returns the session, creating it on first use with the metadata from
-	 * {@link SessionMemoryAdvisor#SESSION_METADATA_CONTEXT_KEY} and stamped with the given
-	 * agent. {@code SessionService.create} inserts atomically, so if a concurrent request
+	 * {@link SessionMemoryAdvisor#SESSION_METADATA_CONTEXT_KEY}, such as the agent attributes
+	 * ({@link SessionAttributes#AGENT_NAME}). {@code SessionService.create} inserts atomically, so if a concurrent request
 	 * for the same new session id created it first, this request's create is rejected and
 	 * the <em>stored</em> session is re-read instead.
 	 */
-	static Session findOrCreate(SessionService sessionService, String sessionId, Map<String, @Nullable Object> context,
-			@Nullable AgentSnapshot agent) {
+	static Session findOrCreate(SessionService sessionService, String sessionId, Map<String, @Nullable Object> context) {
 		Session session = sessionService.findById(sessionId);
 		if (session != null) {
 			return session;
 		}
 		try {
-			Map<String, Object> metadata = sessionMetadata(context);
-			CreateSessionRequest.Builder request = CreateSessionRequest.builder().id(sessionId);
-			// The request's metadata may name another agent on purpose: then it is that
-			// agent's snapshot as a whole, not the advisor's with a name swapped in
-			if (agent != null && !metadata.containsKey(SessionAttributes.AGENT_NAME)) {
-				request.agent(agent);
-			}
-			return sessionService.create(request.metadata(metadata).build());
+			return sessionService
+				.create(CreateSessionRequest.builder().id(sessionId).metadata(sessionMetadata(context)).build());
 		}
 		catch (IllegalStateException ex) {
 			Session existing = sessionService.findById(sessionId);

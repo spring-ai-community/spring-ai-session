@@ -104,14 +104,16 @@ public final class SessionTreeEvents {
 			.sessionId(parentSessionId)
 			.type(type)
 			.payload(PAYLOAD_SESSION_ID, child.id());
-		AgentSnapshot agent = SessionAttributes.agent(child);
-		if (agent != null) {
-			event.payload(PAYLOAD_AGENT_NAME, agent.name());
-			if (agent.version() != null) {
-				event.payload(PAYLOAD_AGENT_VERSION, agent.version());
+		String agentName = SessionAttributes.agentName(child);
+		if (agentName != null) {
+			event.payload(PAYLOAD_AGENT_NAME, agentName);
+			String version = SessionAttributes.agentVersion(child);
+			if (version != null) {
+				event.payload(PAYLOAD_AGENT_VERSION, version);
 			}
-			if (agent.model() != null) {
-				event.payload(PAYLOAD_AGENT_MODEL, agent.model());
+			String model = SessionAttributes.agentModel(child);
+			if (model != null) {
+				event.payload(PAYLOAD_AGENT_MODEL, model);
 			}
 		}
 		if (message != null) {

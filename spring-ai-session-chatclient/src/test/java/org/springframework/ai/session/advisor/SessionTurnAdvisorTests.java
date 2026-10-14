@@ -44,7 +44,6 @@ import org.springframework.ai.model.tool.ToolCallDecisions;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
-import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
@@ -453,14 +452,18 @@ class SessionTurnAdvisorTests {
 	}
 
 	@Test
-	void theTurnAdvisorStampsItsAgentOnTheSessionsItCreates() {
-		SessionTurnAdvisor turn = SessionTurnAdvisor.builder(this.sessionService)
-			.agent(AgentSnapshot.of("support", "2", "claude-sonnet-5-5"))
+	void chatClientDefaultMetadataLabelsSessionsTurnAdvisorCreates() {
+		ChatClient client = ChatClient.builder(this.model)
+			.defaultAdvisors(SessionTurnAdvisor.builder(this.sessionService).build(),
+					SessionMemoryAdvisor.builder(this.sessionService).build())
+			.defaultAdvisors(a -> a.param(SessionMemoryAdvisor.SESSION_METADATA_CONTEXT_KEY,
+					Map.of(SessionAttributes.AGENT_NAME, "support", SessionAttributes.AGENT_VERSION, "2")))
 			.build();
 
-		say(client(weather(), turn, ToolCallingAdvisor.builder().build()), "Hello", "Hi!");
+		say(client, "Hello", "Hi!");
 
-		assertThat(SessionAttributes.agent(session())).isEqualTo(AgentSnapshot.of("support", "2", "claude-sonnet-5-5"));
+		assertThat(SessionAttributes.agentName(session())).isEqualTo("support");
+		assertThat(SessionAttributes.agentVersion(session())).isEqualTo("2");
 	}
 
 	// --- Tool calls that need confirmation ---

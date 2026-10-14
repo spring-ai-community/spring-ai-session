@@ -17,6 +17,7 @@
 package org.springframework.ai.session.agent;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -40,7 +41,6 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.graph.Graph;
 import org.springframework.ai.graph.Node;
-import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
@@ -79,7 +79,10 @@ class SessionFeatureTests {
 			.reply("You mentioned Paris, in October")
 			.reply("You did not mention any city");
 		Agent<String, String> agent = ModelAwareGraphAgent.builder(Graphs.toolCallLoop(), chatModel)
-			.enable(SessionFeature.builder(this.sessions).agent(AgentSnapshot.of("planner", "1", "scripted")).build())
+			.enable(SessionFeature.builder(this.sessions)
+				.sessionMetadata(Map.of(SessionAttributes.AGENT_NAME, "planner", SessionAttributes.AGENT_VERSION, "1",
+						SessionAttributes.AGENT_MODEL, "scripted"))
+				.build())
 			.build();
 
 		agent.output("I am planning a trip to Paris in October.", new RunIdentification("trip-1", "r1"));
@@ -90,7 +93,9 @@ class SessionFeatureTests {
 				"I am planning a trip to Paris in October.", "Paris is lovely in October",
 				"Which city and month did I mention?");
 		Session session = this.sessions.findById("trip-1");
-		assertThat(SessionAttributes.agent(session)).isEqualTo(AgentSnapshot.of("planner", "1", "scripted"));
+		assertThat(SessionAttributes.agentName(session)).isEqualTo("planner");
+		assertThat(SessionAttributes.agentVersion(session)).isEqualTo("1");
+		assertThat(SessionAttributes.agentModel(session)).isEqualTo("scripted");
 		assertThat(session.status()).isEqualTo(SessionStatus.IDLE);
 		assertThat(session.stopReason()).isEqualTo(StopReason.END_TURN);
 		assertThat(texts(this.sessions.getActiveMessages("trip-1"))).containsExactly(
@@ -220,7 +225,9 @@ class SessionFeatureTests {
 				.transformingEdge(pack, ask, text -> "In one sentence, where am I going?")
 				.edge(ask, g.end));
 		Agent<String, String> parent = GraphAgent.builder(graph)
-			.enable(SessionFeature.builder(this.sessions).agent(AgentSnapshot.of("planner")).build())
+			.enable(SessionFeature.builder(this.sessions)
+				.sessionMetadata(Map.of(SessionAttributes.AGENT_NAME, "planner"))
+				.build())
 			.build();
 
 		assertThat(parent.output("Paris, one week in October, hiking on the weekend.", "plan-1")).isEqualTo("I have no idea");

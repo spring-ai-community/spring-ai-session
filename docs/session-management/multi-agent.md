@@ -24,13 +24,13 @@ engineering advice to give every sub-agent the minimum context it needs.
 A sub-agent's session is a **child** of the orchestrator's session: a session of its own,
 with its own log and compaction, that belongs to the parent's tree. A child session is
 what Claude Managed Agents calls a thread.
-`SessionService.createChild(parentId, agentName)`, or `createChild(parentId, AgentSnapshot)`
-for an agent with a version and a model, creates it and enforces the rules that keep the
+`SessionService.createChild(parentId, agentName)`, or `createChild(parentId, request)` with
+the agent's version and model as metadata, creates it and enforces the rules that keep the
 tree sound:
 
 - the child names its parent (`Session.parentSessionId()`) and the tree's root
   (`Session.rootSessionId()`, the root's own id on a root session), and carries its
-  [agent snapshot](concepts.md#agent-snapshot) when given;
+  [agent attributes](concepts.md#agent-attributes) when given;
 - it **inherits** the parent's principal (and any other attribute the service is told to
   pass down, `DefaultSessionService.builder().inheritedAttributes(...)`) and the parent's
   expiry, and may not diverge from them;
@@ -84,7 +84,8 @@ public class ResearcherTool {
             try {
                 this.sessionService.createChild(parentId, CreateSessionRequest.builder()
                     .id(childId)
-                    .agent(AgentSnapshot.of("researcher", "2", "claude-sonnet-5-5"))
+                    .metadata(SessionAttributes.AGENT_NAME, "researcher")
+                    .metadata(SessionAttributes.AGENT_MODEL, "claude-sonnet-5-5")
                     .build());
             }
             catch (IllegalStateException alreadyCreated) {
@@ -121,7 +122,7 @@ To find a conversation's children:
 ```java
 List<Session> children = sessionService.findChildren(parentId);   // direct children, oldest first
 List<Session> tree = sessionService.findTree(rootId);           // the root and every child of its tree
-AgentSnapshot agent = SessionAttributes.agent(children.get(0));   // name, version, model
+String agentName = SessionAttributes.agentName(children.get(0)); // also agentVersion, agentModel
 ```
 
 The links are columns of the JDBC repository's `AI_SESSION` table, each with its own

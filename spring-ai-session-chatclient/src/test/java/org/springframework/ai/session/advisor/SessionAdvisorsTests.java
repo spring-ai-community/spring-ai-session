@@ -27,14 +27,12 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallDecision;
-import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.Budget;
 import org.springframework.ai.session.BudgetPolicy;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.InMemorySessionRepository;
-import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
@@ -76,9 +74,7 @@ class SessionAdvisorsTests {
 
 	@Test
 	void aCallRunsATurnWithTheHistory() {
-		ChatClient client = client(SessionAdvisors.builder(this.sessionService)
-			.agent(AgentSnapshot.of("support", "1", "model"))
-			.build());
+		ChatClient client = client(SessionAdvisors.builder(this.sessionService).build());
 		this.model.thenAnswer("Hi!").thenAnswer("Fine.");
 
 		say(client, "Hello");
@@ -87,8 +83,6 @@ class SessionAdvisorsTests {
 		assertThat(this.sessionService.findById(this.sessionId).stopReason()).isEqualTo(StopReason.END_TURN);
 		assertThat(ScriptedChatModel.describe(this.model.prompts().get(1))).containsExactly("Hello", "Hi!",
 				"How are you?");
-		assertThat(SessionAttributes.agent(this.sessionService.findById(this.sessionId)))
-			.isEqualTo(AgentSnapshot.of("support", "1", "model"));
 	}
 
 	@Test

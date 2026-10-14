@@ -16,6 +16,7 @@
 
 package org.springframework.ai.session.agent;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -50,13 +51,13 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.model.tool.ToolCallDecision;
 import org.springframework.ai.model.tool.ToolCallDecisions;
-import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Interaction;
 import org.springframework.ai.session.InterruptEvents;
 import org.springframework.ai.session.Session;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;
@@ -104,7 +105,7 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 
 	private final SessionService sessions;
 
-	@Nullable private final AgentSnapshot agent;
+	private final Map<String, Object> sessionMetadata;
 
 	@Nullable private final CompactionTrigger trigger;
 
@@ -116,10 +117,10 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 
 	final Map<String, RunState> runs = new ConcurrentHashMap<>();
 
-	private SessionFeature(SessionService sessions, @Nullable AgentSnapshot agent, @Nullable CompactionTrigger trigger,
-			@Nullable CompactionStrategy strategy) {
+	private SessionFeature(SessionService sessions, Map<String, Object> sessionMetadata,
+			@Nullable CompactionTrigger trigger, @Nullable CompactionStrategy strategy) {
 		this.sessions = sessions;
-		this.agent = agent;
+		this.sessionMetadata = Map.copyOf(sessionMetadata);
 		this.trigger = trigger;
 		this.strategy = strategy;
 	}
@@ -154,11 +155,8 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 			state.rootConversation = context.getConversation();
 			Session session = this.sessions.findById(sessionId);
 			if (session == null) {
-				CreateSessionRequest.Builder request = CreateSessionRequest.builder().id(sessionId);
-				if (this.agent != null) {
-					request.agent(this.agent);
-				}
-				this.sessions.create(request.build());
+				this.sessions
+					.create(CreateSessionRequest.builder().id(sessionId).metadata(this.sessionMetadata).build());
 				state.stored.put("", 0);
 			}
 			else {
@@ -408,7 +406,7 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 		try {
 			this.sessions.createChild(parentId, CreateSessionRequest.builder()
 				.id(childId)
-				.agent(AgentSnapshot.of(segment))
+				.metadata(SessionAttributes.AGENT_NAME, segment)
 				.metadata(INHERITED_MESSAGES, inheritedMessages)
 				.build());
 			state.inherited.put(path, inheritedMessages);
@@ -501,7 +499,7 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 
 		private final SessionService sessions;
 
-		@Nullable private AgentSnapshot agent;
+		private final Map<String, Object> sessionMetadata = new LinkedHashMap<>();
 
 		@Nullable private CompactionTrigger trigger;
 
@@ -512,9 +510,14 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 			this.sessions = sessions;
 		}
 
-		/** The agent the top-level runs belong to, stamped on the sessions the feature creates. */
-		public Builder agent(@Nullable AgentSnapshot agent) {
-			this.agent = agent;
+		/**
+		 * Metadata for the root sessions the feature creates, such as the agent attributes
+		 * ({@link SessionAttributes#AGENT_NAME}) that label the agent the runs belong to. A
+		 * nested agent's child session is labeled with its own name.
+		 */
+		public Builder sessionMetadata(Map<String, Object> sessionMetadata) {
+			Assert.notNull(sessionMetadata, "sessionMetadata must not be null");
+			this.sessionMetadata.putAll(sessionMetadata);
 			return this;
 		}
 
@@ -528,7 +531,7 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 		}
 
 		public SessionFeature build() {
-			return new SessionFeature(this.sessions, this.agent, this.trigger, this.strategy);
+			return new SessionFeature(this.sessions, this.sessionMetadata, this.trigger, this.strategy);
 		}
 
 	}

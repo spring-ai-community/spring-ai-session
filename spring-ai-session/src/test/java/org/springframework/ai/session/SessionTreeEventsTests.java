@@ -140,13 +140,14 @@ class SessionTreeEventsTests {
 	}
 
 	@Test
-	void aMarkerCarriesTheChildsAgentSnapshot() {
+	void markerCarriesChildsAgentAttributes() {
 		Session root = Session.builder().id("root").build();
 		Session child = Session.builder()
 			.id("child")
 			.parentSessionId(root.id())
 			.rootSessionId(root.id())
-			.metadata(AgentSnapshot.of("worker", "3", "m-small").toAttributes())
+			.metadata(java.util.Map.of(SessionAttributes.AGENT_NAME, "worker", SessionAttributes.AGENT_VERSION, "3",
+					SessionAttributes.AGENT_MODEL, "m-small"))
 			.build();
 
 		assertThat(SessionTreeEvents.childCreated(child).getPayload())

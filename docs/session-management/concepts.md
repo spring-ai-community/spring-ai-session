@@ -641,19 +641,18 @@ sequenceDiagram
     Turn->>Log: STATUS IDLE with stop reason END_TURN
 ```
 
-### Agent snapshot
+### Agent attributes
 
-A session records the agent it was created with: an `AgentSnapshot` of the agent's name
-and, when known, the version of its definition and its model, stored as the
-`SessionAttributes.AGENT_NAME`, `AGENT_VERSION` and `AGENT_MODEL` attributes and read back
-with `SessionAttributes.agent(session)`. It is set at creation and never updated, the way
-an agent runtime snapshots the agent a session runs so that a later change to the agent
-never changes a running session. Set it with `CreateSessionRequest.builder().agent(...)`,
-`createChild(parentId, agentSnapshot)`, or the `agent(...)` of the `SessionTurnAdvisor` or
-`SessionMemoryAdvisor` builder, which stamps it on the sessions the advisor creates on first use, unless the request's
-metadata names an agent itself. A child's agent is its
-own, never inherited. Index `agentName` (see the JDBC page) to find every session an agent
-runs.
+Three well-known attributes label the agent a session runs, for listings, session trees
+and a UI: `SessionAttributes.AGENT_NAME`, `AGENT_VERSION` (the version of its definition)
+and `AGENT_MODEL`. They are plain session metadata, set at creation and read back with
+`SessionAttributes.agentName(session)`, `agentVersion(session)` and `agentModel(session)`.
+They label the agent; they do not store its definition. Set them with the create
+request's metadata, `createChild(parentId, agentName)` for a child named after its agent,
+or, for the sessions a `ChatClient` creates on first use, `SESSION_METADATA_CONTEXT_KEY`
+as a default advisor parameter (see [ChatClient Integration](../chat-client/chat-client.md)).
+A child's agent is its own, never inherited. Index `agentName` (see the JDBC page) to find
+every session an agent runs.
 
 ### Live events
 

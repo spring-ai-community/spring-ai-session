@@ -43,7 +43,6 @@ import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.MessageFilter;
@@ -129,8 +128,12 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	 * Context key for the metadata of a session the advisor creates on first use. The
 	 * value must be a {@code Map<String, Object>}; it is ignored for an existing session.
 	 * Scope attributes such as the principal name are normally not passed this way but
-	 * resolved by the service's {@code SessionScopeResolver}. Set via:
-	 * {@code .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_METADATA_CONTEXT_KEY, Map.of("agent", "support")))}
+	 * resolved by the service's {@code SessionScopeResolver}. The agent attributes
+	 * ({@link SessionAttributes#AGENT_NAME}) label the agent a session runs; set them once
+	 * for every call of a {@code ChatClient} with
+	 * {@code .defaultAdvisors(a -> a.param(SessionMemoryAdvisor.SESSION_METADATA_CONTEXT_KEY, Map.of(SessionAttributes.AGENT_NAME, "support")))}.
+	 * A request that passes its own value replaces that default as a whole, so it includes
+	 * the agent attributes too.
 	 */
 	public static final String SESSION_METADATA_CONTEXT_KEY = "chat_memory_session_metadata";
 
@@ -175,8 +178,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	private final boolean recordUsage;
 
-	@Nullable private final AgentSnapshot agent;
-
 	private SessionMemoryAdvisor(Builder builder) {
 		this.sessionService = builder.sessionService;
 		this.order = builder.order;
@@ -186,7 +187,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		this.requestEventIdGenerator = builder.requestEventIdGenerator;
 		this.responseEventIdGenerator = builder.responseEventIdGenerator;
 		this.recordUsage = builder.recordUsage;
-		this.agent = builder.agent;
 	}
 
 	@Override
@@ -206,8 +206,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// session. Whether the caller may use it is not decided here: an authorizing
 		// SessionService (see the security module) checks every read and append.
 		String sessionId = SessionContexts.sessionId(request.context());
-		Session session = SessionContexts.findOrCreate(this.sessionService, sessionId, request.context(),
-				this.agent);
+		Session session = SessionContexts.findOrCreate(this.sessionService, sessionId, request.context());
 		// Each call of before() is a round of the turn: the run-scoped event ids count them
 		SessionTurnAdvisor.nextRound(request.context());
 
@@ -464,8 +463,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		private boolean recordUsage = true;
 
-		@Nullable private AgentSnapshot agent;
-
 		private Builder(SessionService sessionService) {
 			Assert.notNull(sessionService, "sessionService must not be null");
 			this.sessionService = sessionService;
@@ -552,18 +549,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		 */
 		public Builder recordUsage(boolean recordUsage) {
 			this.recordUsage = recordUsage;
-			return this;
-		}
-
-		/**
-		 * The agent this advisor's {@code ChatClient} runs: a session the advisor creates on
-		 * first use is stamped with it ({@link SessionAttributes#agent(Session)}), the way
-		 * an agent runtime snapshots the agent a session was created with. Metadata given
-		 * with {@link #SESSION_METADATA_CONTEXT_KEY} that names an agent replaces the
-		 * snapshot as a whole; an existing session is never changed.
-		 */
-		public Builder agent(@Nullable AgentSnapshot agent) {
-			this.agent = agent;
 			return this;
 		}
 

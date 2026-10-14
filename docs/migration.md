@@ -408,13 +408,15 @@ types the advisors and the agent features share. Update the imports.
 - `SessionTreeEvents.childCreated` and the message markers carry the child's agent version
   and model next to its name when the child has them.
 
-### New: agent snapshot
+### New: agent attributes
 
-`AgentSnapshot` (name, version, model) records the agent a session was created with, as
-the `SessionAttributes.AGENT_NAME`, `AGENT_VERSION` and `AGENT_MODEL` attributes;
-`SessionAttributes.agent(session)` reads it back. `CreateSessionRequest.builder().agent(...)`,
-`SessionService.createChild(parentId, AgentSnapshot)` and
-the `agent(...)` of the `SessionTurnAdvisor` and `SessionMemoryAdvisor` builders set it; nothing changes without them.
+The `SessionAttributes.AGENT_NAME`, `AGENT_VERSION` and `AGENT_MODEL` attributes label the
+agent a session runs; `SessionAttributes.agentName(session)`, `agentVersion(session)` and
+`agentModel(session)` read them back. Set them with the create request's metadata,
+`SessionService.createChild(parentId, agentName)`, or, for the sessions a `ChatClient`
+creates, `SESSION_METADATA_CONTEXT_KEY`; nothing changes without them. (The 0.11.0
+snapshots had an `AgentSnapshot` type and `agent(...)` builder options for the same three
+attributes; they are gone.)
 
 ### New: usage and budget
 

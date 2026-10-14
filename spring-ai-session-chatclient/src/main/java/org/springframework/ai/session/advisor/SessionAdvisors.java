@@ -29,7 +29,6 @@ import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
 import org.springframework.ai.model.tool.ToolCallDecision;
 import org.springframework.ai.model.tool.ToolCallDecisions;
 import org.springframework.ai.model.tool.ToolCallingManager;
-import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.BudgetPolicy;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -106,8 +105,6 @@ public final class SessionAdvisors {
 
 		@Nullable private ToolCallingManager toolCallingManager;
 
-		@Nullable private AgentSnapshot agent;
-
 		@Nullable private Scheduler scheduler;
 
 		@Nullable private CompactionTrigger compactionTrigger;
@@ -136,12 +133,6 @@ public final class SessionAdvisors {
 		public Builder toolCallingManager(ToolCallingManager toolCallingManager) {
 			Assert.notNull(toolCallingManager, "toolCallingManager must not be null");
 			this.toolCallingManager = toolCallingManager;
-			return this;
-		}
-
-		/** The agent the sessions the advisors create on first use are stamped with. */
-		public Builder agent(@Nullable AgentSnapshot agent) {
-			this.agent = agent;
 			return this;
 		}
 
@@ -193,7 +184,6 @@ public final class SessionAdvisors {
 			Scheduler scheduler = (this.scheduler != null) ? this.scheduler : BaseAdvisor.DEFAULT_SCHEDULER;
 
 			SessionTurnAdvisor.Builder turn = SessionTurnAdvisor.builder(this.sessionService)
-				.agent(this.agent)
 				.scheduler(scheduler)
 				.asyncCompaction(this.asyncCompaction);
 			if (this.toolCallingManager != null) {
@@ -204,7 +194,6 @@ public final class SessionAdvisors {
 			}
 
 			SessionMemoryAdvisor.Builder memory = SessionMemoryAdvisor.builder(this.sessionService)
-				.agent(this.agent)
 				.scheduler(scheduler);
 			this.memory.accept(memory);
 

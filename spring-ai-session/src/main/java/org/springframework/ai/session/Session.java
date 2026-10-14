@@ -154,7 +154,7 @@ public final class Session {
 
 	/**
 	 * Arbitrary metadata: the scope and agent attributes ({@link SessionAttributes}, read
-	 * back with {@link SessionAttributes#agent(Session)}), tags, and whatever the
+	 * back with {@link SessionAttributes#agentName(Session)}), tags, and whatever the
 	 * application adds.
 	 */
 	public Map<String, Object> metadata() {

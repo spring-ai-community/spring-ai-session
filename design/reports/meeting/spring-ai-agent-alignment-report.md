@@ -217,7 +217,7 @@ Source<SessionEvent> source = SourceAdapter.toSource(sessionService.subscribe(se
 
 ```java
 SessionFeature feature = SessionFeature.builder(sessionService)
-    .agent(AgentSnapshot.of("planner", "3", "claude-sonnet-5-5"))
+    .sessionMetadata(Map.of(SessionAttributes.AGENT_NAME, "planner", SessionAttributes.AGENT_MODEL, "claude-sonnet-5-5"))
     .compaction(new TurnCountTrigger(20), SlidingWindowCompactionStrategy.builder().maxEvents(40).build())
     .build();
 

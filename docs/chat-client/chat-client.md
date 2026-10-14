@@ -28,8 +28,12 @@ On every model call the memory advisor:
 1. Resolves the session ID from `SESSION_ID_CONTEXT_KEY`, which **must** be present on
    every request, creating the session if it does not exist and checking ownership if it
    does (see [Passing a session ID per request](#passing-a-session-id-per-request)). A
-   session the advisor creates is stamped with the advisor's `agent(AgentSnapshot)` when
-   one is configured (see [Agent snapshot](../session-management/concepts.md#agent-snapshot)).
+   session the advisor creates gets the metadata of `SESSION_METADATA_CONTEXT_KEY`, such as
+   the [agent attributes](../session-management/concepts.md#agent-attributes); set them
+   for every call with `.defaultAdvisors(a -> a.param(SESSION_METADATA_CONTEXT_KEY,
+   Map.of(SessionAttributes.AGENT_NAME, "support")))`. A request that passes its own
+   `SESSION_METADATA_CONTEXT_KEY` replaces that default map as a whole, so include the agent
+   attributes in it too.
 2. Loads the session's history with the configured `eventFilter` (default
    `EventFilter.all()`), merged with any per-request `EVENT_FILTER_CONTEXT_KEY` filter, and
    **prepends** it to the prompt. `EventFilter.active()` is always merged in on top, so
@@ -58,8 +62,7 @@ On every model call the memory advisor:
 
 On every `ChatClient` call the turn advisor:
 
-1. Finds the session or creates it, like the memory advisor, stamped with its own
-   `agent(AgentSnapshot)`.
+1. Finds the session or creates it, like the memory advisor.
 2. Starts the turn (`startTurn`), which rejects a second concurrent turn on the same
    session. A request that decides on tool calls resumes the parked turn instead (see
    [Tool confirmation](#tool-confirmation)).

@@ -37,7 +37,7 @@ Contents:
   parent's log records what it delegated and what came back. That covers both a conversation and the
   sub-agent threads under it.
 - **Session state lives in the log.** Turns with a status and a stop reason, token usage with a budget,
-  a parked turn waiting for a person, interrupts, the agent snapshot, cursor reads and a live stream.
+  a parked turn waiting for a person, interrupts, the agent attributes, cursor reads and a live stream.
 - **Additional events are optional.** The event type is open. spring-ai-agent records its own runtime
   events; the core needs none of them, and the ChatClient path writes none.
 - **Three modules.** The core depends on `spring-ai-model` only. The ChatClient advisors
@@ -352,8 +352,8 @@ its next step: the memory advisor checks every round, and answers the tool calls
 them. A `BudgetPolicy` gives a tree its token budget, checked before every model call; once it's
 reached the turn ends with `BUDGET_REACHED` and further calls are refused until the budget is raised.
 
-**The agent snapshot.** A session stores the agent's name, version and model when it's created
-(`AgentSnapshot`), and they never change, so a later change to the agent doesn't rewrite history.
+**The agent attributes.** A session can carry the agent's name, version and model as attributes,
+set when it's created: labels for listings, session trees and a UI, not a stored definition.
 
 **Reading and following.** `getEvents(id, filter)` reads by type, with a cursor ("after this event")
 and an order. `subscribe(id)` is a live `Flux` of the events appended from now on. A client that
@@ -459,7 +459,7 @@ this works in detail.
 
 | Managed Agents concept | In Spring AI |
 | --- | --- |
-| Agent (model, system prompt, tools, MCP, skills) | A `ChatClient` and its defaults; `AgentSnapshot` on the session |
+| Agent (model, system prompt, tools, MCP, skills) | A `ChatClient` and its defaults; the agent attributes on the session |
 | Environment / sandbox | `Workspace` + `ExecBackend` in agent-utils (not a session concern) |
 | Session | The root `Session` of a tree |
 | Thread | A child `Session` |

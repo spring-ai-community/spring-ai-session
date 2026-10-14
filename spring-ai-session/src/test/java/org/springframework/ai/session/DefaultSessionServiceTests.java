@@ -908,14 +908,24 @@ class DefaultSessionServiceTests {
 	}
 
 	@Test
-	void aChildCreatedWithASnapshotCarriesItUnchanged() {
-		Session root = this.service.create(CreateSessionRequest.builder().agent(AgentSnapshot.of("coordinator", "1", "m-big")).build());
-		Session child = this.service.createChild(root.id(), AgentSnapshot.of("worker", "7", "m-small"));
+	void childCarriesItsOwnAgentAttributes() {
+		Session root = this.service.create(CreateSessionRequest.builder()
+			.metadata(SessionAttributes.AGENT_NAME, "coordinator")
+			.metadata(SessionAttributes.AGENT_MODEL, "m-big")
+			.build());
+		Session child = this.service.createChild(root.id(), CreateSessionRequest.builder()
+			.metadata(SessionAttributes.AGENT_NAME, "worker")
+			.metadata(SessionAttributes.AGENT_VERSION, "7")
+			.metadata(SessionAttributes.AGENT_MODEL, "m-small")
+			.build());
 
-		assertThat(SessionAttributes.agent(root)).isEqualTo(AgentSnapshot.of("coordinator", "1", "m-big"));
-		assertThat(SessionAttributes.agent(child)).isEqualTo(AgentSnapshot.of("worker", "7", "m-small"));
+		assertThat(SessionAttributes.agentName(root)).isEqualTo("coordinator");
+		assertThat(SessionAttributes.agentVersion(root)).isNull();
+		assertThat(SessionAttributes.agentName(child)).isEqualTo("worker");
+		assertThat(SessionAttributes.agentVersion(child)).isEqualTo("7");
+		assertThat(SessionAttributes.agentModel(child)).isEqualTo("m-small");
 		// The child's agent is its own, not inherited from the root
-		assertThat(SessionAttributes.agent(this.service.createChild(root.id(), CreateSessionRequest.builder().build())))
+		assertThat(SessionAttributes.agentName(this.service.createChild(root.id(), CreateSessionRequest.builder().build())))
 			.isNull();
 		assertThat(this.service.findByIndex(SessionAttributes.AGENT_NAME, "worker")).extracting(Session::id)
 			.containsExactly(child.id());

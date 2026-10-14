@@ -46,7 +46,6 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.content.Media;
-import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.Budget;
 import org.springframework.ai.session.BudgetPolicy;
 import org.springframework.ai.session.BudgetReachedException;
@@ -1090,28 +1089,23 @@ class SessionMemoryAdvisorIT {
 			.isEqualTo(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY);
 	}
 
-	// --- Agent snapshot ---
+	// --- Agent attributes ---
 
 	@Test
-	void theAdvisorStampsItsAgentOnTheSessionsItCreates() {
-		SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(this.sessionService)
-			.agent(AgentSnapshot.of("support", "2", "claude-sonnet-5-5"))
-			.build();
+	void sessionCreatedOnFirstUseCarriesAgentAttributesOfRequestMetadata() {
 		AdvisorChain chain = mock(AdvisorChain.class);
 		String fresh = "fresh-" + UUID.randomUUID();
-		advisor.before(buildRequest(fresh, "Hi"), chain);
-		assertThat(SessionAttributes.agent(this.sessionService.findById(fresh)))
-			.isEqualTo(AgentSnapshot.of("support", "2", "claude-sonnet-5-5"));
-
-		// Request metadata that names an agent replaces the snapshot as a whole, never a
-		// mix of that name with the advisor's version and model; an existing session is left alone
-		String overridden = "override-" + UUID.randomUUID();
-		advisor.before(buildRequestWithMetadata(overridden, "Hi", Map.of(SessionAttributes.AGENT_NAME, "billing")),
+		this.advisor.before(buildRequestWithMetadata(fresh, "Hi",
+				Map.of(SessionAttributes.AGENT_NAME, "support", SessionAttributes.AGENT_MODEL, "claude-sonnet-5-5")),
 				chain);
-		assertThat(SessionAttributes.agent(this.sessionService.findById(overridden)))
-			.isEqualTo(AgentSnapshot.of("billing"));
-		advisor.before(buildRequest(this.sessionId, "Hi"), chain);
-		assertThat(SessionAttributes.agent(this.sessionService.findById(this.sessionId))).isNull();
+
+		Session created = this.sessionService.findById(fresh);
+		assertThat(SessionAttributes.agentName(created)).isEqualTo("support");
+		assertThat(SessionAttributes.agentModel(created)).isEqualTo("claude-sonnet-5-5");
+		// An existing session is left alone
+		this.advisor.before(buildRequestWithMetadata(this.sessionId, "Hi", Map.of(SessionAttributes.AGENT_NAME, "billing")),
+				chain);
+		assertThat(SessionAttributes.agentName(this.sessionService.findById(this.sessionId))).isNull();
 	}
 
 	// --- Event ids on the context (#20) ---

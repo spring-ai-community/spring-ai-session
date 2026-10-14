@@ -86,11 +86,6 @@ public interface SessionService {
 				CreateSessionRequest.builder().metadata(SessionAttributes.AGENT_NAME, agentName).build());
 	}
 
-	/** Creates a child session that runs the given agent, recorded as its snapshot. */
-	default Session createChild(String parentSessionId, AgentSnapshot agent) {
-		return createChild(parentSessionId, CreateSessionRequest.builder().agent(agent).build());
-	}
-
 	/** The children created directly from the given session, oldest first. */
 	List<Session> findChildren(String parentSessionId);
 
