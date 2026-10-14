@@ -19,7 +19,6 @@ package org.springframework.ai.session.agent;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
@@ -52,7 +51,6 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.model.tool.ToolCallDecision;
 import org.springframework.ai.model.tool.ToolCallDecisions;
 import org.springframework.ai.session.CreateSessionRequest;
-import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Interaction;
 import org.springframework.ai.session.InterruptEvents;
@@ -62,7 +60,6 @@ import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;
-import org.springframework.ai.session.SessionStatusEvents;
 import org.springframework.ai.session.SessionTreeEvents;
 import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.TokenUsage;
@@ -184,18 +181,26 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 
 	/** A session left running by a crashed attempt of this run is ended, so the re-attempt can start. */
 	private void endAbandonedAttempt(Session session, RunIdentification runId) {
-		if (session.status() == SessionStatus.RUNNING && ownsTurn(session.id(), runId)) {
+		if (ownsTurn(session.id(), runId)) {
 			logger.info("Run [{}] of session [{}] was left running by an earlier attempt; ending it", runId.runId(),
 					session.id());
-			this.sessions.endTurn(session.id(), StopReason.INTERRUPTED);
+			try {
+				this.sessions.endTurn(session.id(), runId.runId(), StopReason.INTERRUPTED, List.of());
+			}
+			catch (IllegalStateException ex) {
+				logger.debug("The earlier attempt's turn of session [{}] was already ended: {}", session.id(),
+						ex.getMessage());
+			}
 		}
 	}
 
-	/** Whether the newest status event of the session names this run: the turn is this run's to end. */
+	/**
+	 * Whether the session runs this run's turn. Only a hint, for the log and to write nothing
+	 * on another run's turn: the run-scoped end and park make the change itself safe.
+	 */
 	private boolean ownsTurn(String sessionId, RunIdentification runId) {
-		List<SessionEvent> newest = this.sessions.getEvents(sessionId,
-				EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).lastN(1).build());
-		return !newest.isEmpty() && runId.runId().equals(SessionStatusEvents.runId(newest.get(0)));
+		Session session = this.sessions.findById(sessionId);
+		return session != null && session.status() == SessionStatus.RUNNING && runId.runId().equals(session.runId());
 	}
 
 	/** An answer as the log stores it: decisions in the shape every integration writes, anything else as JSON. */
@@ -275,7 +280,7 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 					this.jsonMapper.convertValue(event.payload(), Object.class), null);
 		}
 		try {
-			this.sessions.park(root, question, List.of());
+			this.sessions.park(root, runId.runId(), question, List.of());
 		}
 		catch (IllegalStateException ex) {
 			logger.warn("The turn of session [{}] was already ended: {}", root, ex.getMessage());
@@ -302,7 +307,7 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 			beforeEnding.accept(root);
 		}
 		try {
-			this.sessions.endTurn(root, stopReason, eventIds);
+			this.sessions.endTurn(root, runId.runId(), stopReason, eventIds);
 		}
 		catch (IllegalStateException ex) {
 			logger.warn("The turn of session [{}] was already ended: {}", root, ex.getMessage());

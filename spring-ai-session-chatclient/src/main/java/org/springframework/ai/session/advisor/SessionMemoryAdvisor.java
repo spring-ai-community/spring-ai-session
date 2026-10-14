@@ -51,7 +51,6 @@ import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;
-import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.TokenUsage;
 import org.springframework.ai.session.UsageEvents;
 import org.springframework.core.Ordered;
@@ -240,7 +239,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		}
 		// 5. A turn interrupted since the previous round stops before the next model call,
 		// once the results of the tools that ran are stored
-		if (SessionTurnAdvisor.inTurn(request.context()) && isInterrupted(session)) {
+		if (isTurnOver(session, SessionTurnAdvisor.turnRunId(request.context()))) {
 			throw new TurnInterruptedException(sessionId);
 		}
 
@@ -293,8 +292,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// model learns why. The id derives from the reply's, so a retried after() with a
 		// deterministic generator answers them once.
 		if (response.chatResponse() != null && response.chatResponse().hasToolCalls()
-				&& SessionTurnAdvisor.inTurn(response.context())
-				&& isInterrupted(this.sessionService.findById(sessionId))) {
+				&& SessionTurnAdvisor.turnRunId(response.context()) != null
+				&& isTurnOver(this.sessionService.findById(sessionId), SessionTurnAdvisor.turnRunId(response.context()))) {
 			storedToolCalls.forEach((replyEventId, reply) -> this.sessionService.appendEvent(SessionEvent.builder()
 				.id(replyEventId + "-interrupted")
 				.sessionId(sessionId)
@@ -306,10 +305,14 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		return named;
 	}
 
-	/** Whether the session's turn ended because it was interrupted. */
-	private static boolean isInterrupted(@Nullable Session session) {
-		return session != null && session.status() != SessionStatus.RUNNING
-				&& session.stopReason() == StopReason.INTERRUPTED;
+	/**
+	 * Whether the turn of the run is over: someone ended it (interrupted it, typically),
+	 * whatever turn runs now. {@code false} outside a turn a {@link SessionTurnAdvisor}
+	 * runs.
+	 */
+	private static boolean isTurnOver(@Nullable Session session, @Nullable String turnRunId) {
+		return turnRunId != null && session != null
+				&& (session.status() != SessionStatus.RUNNING || !turnRunId.equals(session.runId()));
 	}
 
 	/** Answers every tool call of the reply with {@link #INTERRUPTED_TOOL_RESULT}. */

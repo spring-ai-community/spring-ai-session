@@ -41,8 +41,9 @@ public interface SessionRepository {
 
 	/**
 	 * Persists session metadata (create or update). If the session already exists its
-	 * event log and its original {@link Session#createdAt()} are preserved; the other
-	 * metadata fields are replaced.
+	 * event log, its original {@link Session#createdAt()} and its run
+	 * ({@link Session#runId()}) are preserved; the other metadata fields are replaced. A
+	 * new session is stored without a run: only {@link #updateStatus} sets one.
 	 * @return the saved session
 	 */
 	Session save(Session session);
@@ -54,7 +55,8 @@ public interface SessionRepository {
 	 * otherwise silently take over the first caller's session).
 	 * <p>
 	 * Implementations must perform the check and the insert atomically (e.g. a
-	 * primary-key-guarded {@code INSERT}, or a compare-and-set put).
+	 * primary-key-guarded {@code INSERT}, or a compare-and-set put). The session is stored
+	 * without a run, as with {@link #save}.
 	 * @return {@code true} if the session was inserted, {@code false} if a session with
 	 * the same id already exists (the existing session is left untouched)
 	 */
@@ -90,20 +92,25 @@ public interface SessionRepository {
 
 	/**
 	 * Changes the session's status atomically, only if its current status is
-	 * {@code expected}: the compare-and-set that keeps two concurrent turns from both
-	 * starting, and an archive from landing on a running session. On success the status,
-	 * the stop reason and the archive time are replaced as given (a {@code null} clears
-	 * the field); nothing else about the session changes.
+	 * {@code expected} and, when {@code expectedRunId} is given, its current run is that
+	 * one: the compare-and-set that keeps two concurrent turns from both starting, a turn
+	 * from ending another run's turn, and an archive from landing on a running session. On
+	 * success the status, the run, the stop reason and the archive time are replaced as
+	 * given (a {@code null} clears the field); nothing else about the session changes.
 	 * @param sessionId the session
 	 * @param expected the status the session must have for the change to apply
+	 * @param expectedRunId the run the session must have, or {@code null} for any
 	 * @param status the new status
+	 * @param runId the run to record ({@link Session#runId()}), or {@code null} to clear it
 	 * @param stopReason the stop reason to record, or {@code null} to clear it
 	 * @param archivedAt the archive time to record, or {@code null} to clear it
 	 * @return {@code true} when the status was changed, {@code false} when the session
-	 * does not exist or its status is not {@code expected}
+	 * does not exist, its status is not {@code expected} or its run is not
+	 * {@code expectedRunId}
 	 */
-	boolean updateStatus(String sessionId, SessionStatus expected, SessionStatus status,
-			@Nullable StopReason stopReason, @Nullable Instant archivedAt);
+	boolean updateStatus(String sessionId, SessionStatus expected, @Nullable String expectedRunId,
+			SessionStatus status, @Nullable String runId, @Nullable StopReason stopReason,
+			@Nullable Instant archivedAt);
 
 	/**
 	 * Deletes the session with the given ID.

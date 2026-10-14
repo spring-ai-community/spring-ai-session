@@ -470,8 +470,10 @@ throws a `TurnInterruptedException`.
 - A streamed call ends with the exception as its error.
 
 The check needs the `SessionTurnAdvisor`, which marks the requests of the turn it runs; the
-memory advisor on its own never stops a call. A turn interrupted and then started again by
-another request before the loop's next step is not told apart from the running one.
+memory advisor on its own never stops a call. Every turn the advisor runs has a run id, the
+caller's `RUN_ID_CONTEXT_KEY` or one made up for the call, which the session records
+(`Session.runId()`). So a loop whose turn was interrupted stops even when another request
+has started a new turn since, and ending the stopped turn never ends the new one.
 
 ```java
 try {

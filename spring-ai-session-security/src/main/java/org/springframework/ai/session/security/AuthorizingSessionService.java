@@ -217,6 +217,12 @@ public class AuthorizingSessionService implements SessionService {
 	}
 
 	@Override
+	public Session endTurn(String sessionId, String runId, StopReason stopReason, List<String> eventIds) {
+		authorized(sessionId);
+		return this.delegate.endTurn(sessionId, runId, stopReason, eventIds);
+	}
+
+	@Override
 	public Session archive(String sessionId) {
 		authorized(sessionId);
 		return this.delegate.archive(sessionId);

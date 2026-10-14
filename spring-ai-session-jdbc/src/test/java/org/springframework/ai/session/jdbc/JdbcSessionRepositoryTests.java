@@ -312,7 +312,7 @@ class JdbcSessionRepositoryTests {
 		assertThat(SessionAttributes.principalName(legacy)).isEqualTo("alice");
 		assertThat(legacy.isRoot()).isTrue();
 		assertThat(legacy.status()).isEqualTo(SessionStatus.IDLE);
-		assertThat(upgraded.updateStatus("old", SessionStatus.IDLE, SessionStatus.RUNNING, null, null)).isTrue();
+		assertThat(upgraded.updateStatus("old", SessionStatus.IDLE, null, SessionStatus.RUNNING, "run-1", null, null)).isTrue();
 		assertThat(upgraded.findByIndex(SessionAttributes.PRINCIPAL_NAME, "alice")).extracting(Session::id)
 			.containsExactly("old");
 		assertThat(upgraded.findByRootSessionId("old")).extracting(Session::id).containsExactly("old");

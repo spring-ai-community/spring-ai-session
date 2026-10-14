@@ -539,9 +539,13 @@ A session records what it is doing. A **turn** is one model call including its t
 `startTurn(id)` puts the session in `RUNNING` and `endTurn(id, stopReason)` back in `IDLE`,
 each appending a `STATUS` event so the log tells when every turn started and how it ended.
 `startTurn(id, runId)` names the run the turn belongs to, an agent runtime's run id, on both
-status events (`SessionStatusEvents.runId(event)`), so the log tells which run produced
-which events and a re-attempt of the same run reads as one.
-`SessionMemoryAdvisor` does both around every `ChatClient` call (see
+status events (`SessionStatusEvents.runId(event)`) and on the session while the turn runs
+(`Session.runId()`), so the log tells which run produced which events and a re-attempt of
+the same run reads as one. `endTurn(id, runId, stopReason, eventIds)` and
+`park(id, runId, question, relatedEventIds)` end only that run's turn: the compare-and-set
+checks the status and the run together, so a run whose turn was interrupted, and another
+run then started, never ends the other run's turn.
+`SessionTurnAdvisor` does both around every `ChatClient` call (see
 [ChatClient Integration](../chat-client/chat-client.md#what-the-advisor-does)). The start is
 a compare-and-set from `IDLE`, so two concurrent calls cannot run turns on one session at
 the same time: the second gets an `IllegalStateException`. A caller interrupts a running

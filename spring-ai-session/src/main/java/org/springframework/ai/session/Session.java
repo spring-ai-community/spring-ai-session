@@ -19,6 +19,7 @@ package org.springframework.ai.session;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
@@ -59,6 +60,8 @@ public final class Session {
 
 	private final SessionStatus status;
 
+	@Nullable private final String runId;
+
 	@Nullable private final StopReason stopReason;
 
 	@Nullable private final Instant archivedAt;
@@ -66,14 +69,15 @@ public final class Session {
 	private final Map<String, Object> metadata;
 
 	private Session(String id, Instant createdAt, @Nullable Instant expiresAt, @Nullable String parentSessionId,
-			String rootSessionId, SessionStatus status, @Nullable StopReason stopReason, @Nullable Instant archivedAt,
-			Map<String, Object> metadata) {
+			String rootSessionId, SessionStatus status, @Nullable String runId, @Nullable StopReason stopReason,
+			@Nullable Instant archivedAt, Map<String, Object> metadata) {
 		this.id = id;
 		this.createdAt = createdAt;
 		this.expiresAt = expiresAt;
 		this.parentSessionId = parentSessionId;
 		this.rootSessionId = rootSessionId;
 		this.status = status;
+		this.runId = runId;
 		this.stopReason = stopReason;
 		this.archivedAt = archivedAt;
 		this.metadata = Map.copyOf(metadata);
@@ -137,6 +141,16 @@ public final class Session {
 		return this.status;
 	}
 
+	/**
+	 * The run of the turn in progress, as {@link SessionService#startTurn(String, String)}
+	 * named it, or {@code null} when no turn runs or the running one has no run id. Ending
+	 * a turn by its run ({@link SessionService#endTurn(String, String, StopReason, List)})
+	 * ends only that turn.
+	 */
+	public @Nullable String runId() {
+		return this.runId;
+	}
+
 	/** Why the last turn ended, or {@code null} while running or before the first turn ended. */
 	public @Nullable StopReason stopReason() {
 		return this.stopReason;
@@ -178,6 +192,8 @@ public final class Session {
 		@Nullable private String rootSessionId;
 
 		private SessionStatus status = SessionStatus.IDLE;
+
+		@Nullable private String runId;
 
 		@Nullable private StopReason stopReason;
 
@@ -230,6 +246,12 @@ public final class Session {
 			return this;
 		}
 
+		/** The run of the turn in progress; {@code null} by default. */
+		public Builder runId(@Nullable String runId) {
+			this.runId = runId;
+			return this;
+		}
+
 		/** Why the last turn ended; {@code null} by default. */
 		public Builder stopReason(@Nullable StopReason stopReason) {
 			this.stopReason = stopReason;
@@ -259,14 +281,14 @@ public final class Session {
 			if (this.parentSessionId == null) {
 				Assert.isTrue(this.rootSessionId == null || this.rootSessionId.equals(this.id),
 						"a root session's rootSessionId must be its own id");
-				return new Session(this.id, this.createdAt, this.expiresAt, null, this.id, this.status,
+				return new Session(this.id, this.createdAt, this.expiresAt, null, this.id, this.status, this.runId,
 						this.stopReason, this.archivedAt, this.metadata);
 			}
 			Assert.isTrue(!this.parentSessionId.equals(this.id), "a session cannot be its own parent");
 			Assert.hasText(this.rootSessionId, "a child must name the root of its tree");
 			Assert.isTrue(!this.rootSessionId.equals(this.id), "a child cannot be its own root");
 			return new Session(this.id, this.createdAt, this.expiresAt, this.parentSessionId, this.rootSessionId,
-					this.status, this.stopReason, this.archivedAt, this.metadata);
+					this.status, this.runId, this.stopReason, this.archivedAt, this.metadata);
 		}
 
 	}

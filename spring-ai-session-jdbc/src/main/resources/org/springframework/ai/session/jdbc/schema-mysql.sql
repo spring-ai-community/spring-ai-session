@@ -14,9 +14,11 @@ CREATE TABLE IF NOT EXISTS AI_SESSION (
     created_at    DATETIME(6)   NOT NULL,
     expires_at    DATETIME(6),
     metadata      LONGTEXT,
-    -- Status (0.11.0): the session's own status, why its last turn ended, and when it was
-    -- archived; a row written before 0.11.0 reads as an idle root
+    -- Status (0.11.0): the session's own status, the run of the turn in progress, why its
+    -- last turn ended, and when it was archived; a row written before 0.11.0 reads as an
+    -- idle root
     status        VARCHAR(16)   NOT NULL DEFAULT 'IDLE',
+    run_id        VARCHAR(255),
     stop_reason   VARCHAR(32),
     archived_at   DATETIME(6),
     event_version BIGINT        NOT NULL DEFAULT 0,

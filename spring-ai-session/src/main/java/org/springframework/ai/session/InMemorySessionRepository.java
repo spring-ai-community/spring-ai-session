@@ -63,7 +63,7 @@ public final class InMemorySessionRepository implements SessionRepository {
 		Assert.notNull(session, "session must not be null");
 		SessionData saved = this.store.compute(session.id(), (id, existing) -> {
 			if (existing == null) {
-				return new SessionData(session, List.of(), 0L);
+				return new SessionData(withoutRun(session), List.of(), 0L);
 			}
 			// Update: keep the original creation time, like the JDBC upsert does.
 			Session updated = Session.builder()
@@ -73,6 +73,7 @@ public final class InMemorySessionRepository implements SessionRepository {
 				.parentSessionId(session.parentSessionId())
 				.rootSessionId(session.rootSessionId())
 				.status(session.status())
+				.runId(existing.session().runId())
 				.stopReason(session.stopReason())
 				.archivedAt(session.archivedAt())
 				.metadata(session.metadata())
@@ -83,15 +84,17 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public boolean updateStatus(String sessionId, SessionStatus expected, SessionStatus status,
-			@Nullable StopReason stopReason, @Nullable Instant archivedAt) {
+	public boolean updateStatus(String sessionId, SessionStatus expected, @Nullable String expectedRunId,
+			SessionStatus status, @Nullable String runId, @Nullable StopReason stopReason,
+			@Nullable Instant archivedAt) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(expected, "expected must not be null");
 		Assert.notNull(status, "status must not be null");
 		boolean[] changed = { false };
 		this.store.computeIfPresent(sessionId, (id, data) -> {
 			Session current = data.session();
-			if (current.status() != expected) {
+			if (current.status() != expected
+					|| (expectedRunId != null && !expectedRunId.equals(current.runId()))) {
 				return data;
 			}
 			changed[0] = true;
@@ -102,6 +105,7 @@ public final class InMemorySessionRepository implements SessionRepository {
 				.parentSessionId(current.parentSessionId())
 				.rootSessionId(current.rootSessionId())
 				.status(status)
+				.runId(runId)
 				.stopReason(stopReason)
 				.archivedAt(archivedAt)
 				.metadata(current.metadata())
@@ -114,7 +118,25 @@ public final class InMemorySessionRepository implements SessionRepository {
 	@Override
 	public boolean saveIfAbsent(Session session) {
 		Assert.notNull(session, "session must not be null");
-		return this.store.putIfAbsent(session.id(), new SessionData(session, List.of(), 0L)) == null;
+		return this.store.putIfAbsent(session.id(), new SessionData(withoutRun(session), List.of(), 0L)) == null;
+	}
+
+	/** The session as a new one is stored: without a run, which only updateStatus sets. */
+	private static Session withoutRun(Session session) {
+		if (session.runId() == null) {
+			return session;
+		}
+		return Session.builder()
+			.id(session.id())
+			.createdAt(session.createdAt())
+			.expiresAt(session.expiresAt())
+			.parentSessionId(session.parentSessionId())
+			.rootSessionId(session.rootSessionId())
+			.status(session.status())
+			.stopReason(session.stopReason())
+			.archivedAt(session.archivedAt())
+			.metadata(session.metadata())
+			.build();
 	}
 
 	@Override

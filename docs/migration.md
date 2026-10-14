@@ -185,8 +185,9 @@ selectors leave it alone.
 from `IDLE` to `RUNNING`; `endTurn(id, stopReason)`; `archive(id)`, which cascades to the
 children, stamps `archivedAt` and makes the session read-only; and `aggregateStatus(rootId)`.
 Each transition appends a `STATUS` event, built and read with `SessionStatusEvents`.
-`SessionRepository` gains `updateStatus(id, expected, status, stopReason, archivedAt)`, the
-compare-and-set behind them. `AuthorizingSessionService` guards the four calls.
+`SessionRepository` gains `updateStatus(id, expected, expectedRunId, status, runId,
+stopReason, archivedAt)`, the compare-and-set behind them; a custom repository checks the
+run only when `expectedRunId` is given, and keeps the run on `save`. `AuthorizingSessionService` guards the four calls.
 
 Behaviour changes:
 
@@ -408,8 +409,13 @@ types the advisors and the agent features share. Update the imports.
 ### New: run ids on turns, interaction events, the agent on the child marker
 
 - `SessionService.startTurn(id, runId)` names the run a turn belongs to; both `STATUS` events
-  of the turn carry it (`SessionStatusEvents.runId(event)`). `startTurn(id)` is now a default
+  of the turn carry it (`SessionStatusEvents.runId(event)`), and so does the session while the
+  turn runs (`Session.runId()`, the JDBC `run_id` column). `startTurn(id)` is now a default
   method.
+- `SessionService.endTurn(id, runId, stopReason, eventIds)` and
+  `park(id, runId, question, relatedEventIds)` end only that run's turn. The
+  `SessionTurnAdvisor` always gives its turn a run, the caller's or a made-up one, and
+  `SessionFeature` uses the agent's run, so neither ever ends a turn another run started.
 - `InteractionEvents` and `Interaction` record a question a turn parks on and its answer
   (`EventType.INTERACTION`), the general form of a tool confirmation.
 - `SessionTreeEvents.childCreated` and the message markers carry the child's agent version
@@ -467,7 +473,7 @@ calls, tool results and signed reasoning now round-trip (this closes #53 and #46
 ### Breaking: the JDBC schema changes once for 0.11.0
 
 `AI_SESSION` gains the session-tree columns `parent_session_id` and `root_session_id` (each
-indexed), the status columns `status`, `stop_reason` and `archived_at`, and the
+indexed), the status columns `status`, `run_id`, `stop_reason` and `archived_at`, and the
 `AI_SESSION_INDEX` table for indexed metadata attributes; `user_id` is kept and still written
 on every save. `AI_SESSION_EVENT` gains `event_type` and `payload`, and allows a
 `NULL` `message_type` (an event that is not a message). `message_data` is no longer written but
@@ -486,6 +492,7 @@ ALTER TABLE AI_SESSION ADD COLUMN parent_session_id VARCHAR(255);
 ALTER TABLE AI_SESSION ADD COLUMN root_session_id VARCHAR(255);
 ALTER TABLE AI_SESSION MODIFY user_id VARCHAR(255) NOT NULL DEFAULT '';
 ALTER TABLE AI_SESSION ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'IDLE';
+ALTER TABLE AI_SESSION ADD COLUMN run_id VARCHAR(255);
 ALTER TABLE AI_SESSION ADD COLUMN stop_reason VARCHAR(32);
 ALTER TABLE AI_SESSION ADD COLUMN archived_at DATETIME(6);
 CREATE INDEX idx_ai_session_parent_session_id ON AI_SESSION (parent_session_id);

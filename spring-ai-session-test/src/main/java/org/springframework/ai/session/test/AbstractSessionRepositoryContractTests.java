@@ -209,21 +209,23 @@ public abstract class AbstractSessionRepositoryContractTests {
 		assertThat(this.repository.findById(session.id()).status()).isEqualTo(SessionStatus.IDLE);
 
 		// A compare-and-set: only one of two concurrent starts wins
-		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, SessionStatus.RUNNING, null, null))
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, null, SessionStatus.RUNNING, null,
+				null, null))
 			.isTrue();
-		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, SessionStatus.RUNNING, null, null))
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, null, SessionStatus.RUNNING, null,
+				null, null))
 			.isFalse();
 		Session running = this.repository.findById(session.id());
 		assertThat(running.status()).isEqualTo(SessionStatus.RUNNING);
 		assertThat(running.stopReason()).isNull();
 
-		assertThat(this.repository.updateStatus(session.id(), SessionStatus.RUNNING, SessionStatus.IDLE,
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.RUNNING, null, SessionStatus.IDLE, null,
 				StopReason.END_TURN, null)).isTrue();
 		assertThat(this.repository.findById(session.id()).stopReason()).isEqualTo(StopReason.END_TURN);
 
 		Instant archivedAt = Instant.parse("2026-03-01T00:00:00Z");
-		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, SessionStatus.TERMINATED, null,
-				archivedAt)).isTrue();
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, null, SessionStatus.TERMINATED, null,
+				null, archivedAt)).isTrue();
 		Session archived = this.repository.findById(session.id());
 		assertThat(archived.status()).isEqualTo(SessionStatus.TERMINATED);
 		assertThat(archived.stopReason()).isNull();
@@ -231,8 +233,8 @@ public abstract class AbstractSessionRepositoryContractTests {
 		assertThat(archived.isArchived()).isTrue();
 		// Nothing else changed, and an unknown session is not updated
 		assertThat(SessionAttributes.principalName(archived)).isEqualTo("user-status");
-		assertThat(this.repository.updateStatus("missing-" + UUID.randomUUID(), SessionStatus.IDLE,
-				SessionStatus.RUNNING, null, null)).isFalse();
+		assertThat(this.repository.updateStatus("missing-" + UUID.randomUUID(), SessionStatus.IDLE, null,
+				SessionStatus.RUNNING, null, null, null)).isFalse();
 
 		// save() carries the status like any other field
 		Session saved = this.repository.save(Session.builder()
@@ -240,6 +242,49 @@ public abstract class AbstractSessionRepositoryContractTests {
 			.status(SessionStatus.RUNNING)
 			.build());
 		assertThat(this.repository.findById(saved.id()).status()).isEqualTo(SessionStatus.RUNNING);
+	}
+
+	@Test
+	void newSessionIsStoredWithoutRun() {
+		Session saved = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.status(SessionStatus.RUNNING)
+			.runId("run-1")
+			.build());
+		assertThat(this.repository.findById(saved.id()).runId()).isNull();
+
+		String inserted = UUID.randomUUID().toString();
+		assertThat(this.repository
+			.saveIfAbsent(Session.builder().id(inserted).status(SessionStatus.RUNNING).runId("run-1").build())).isTrue();
+		assertThat(this.repository.findById(inserted).runId()).isNull();
+	}
+
+	@Test
+	void runOfTurnRoundTripsAndEndsOnlyThatRunsTurn() {
+		Session session = newSession("user-run");
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, null, SessionStatus.RUNNING, "run-1",
+				null, null))
+			.isTrue();
+		assertThat(this.repository.findById(session.id()).runId()).isEqualTo("run-1");
+		// save() keeps the run: only the status compare-and-set changes it
+		this.repository.save(Session.builder()
+			.id(session.id())
+			.status(SessionStatus.RUNNING)
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "user-run")
+			.metadata("note", "updated")
+			.build());
+		assertThat(this.repository.findById(session.id()).runId()).isEqualTo("run-1");
+
+		// Another run's end does not apply; this run's does, and clears the run
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.RUNNING, "run-2", SessionStatus.IDLE, null,
+				StopReason.END_TURN, null))
+			.isFalse();
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.RUNNING, "run-1", SessionStatus.IDLE, null,
+				StopReason.END_TURN, null))
+			.isTrue();
+		Session idle = this.repository.findById(session.id());
+		assertThat(idle.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(idle.runId()).isNull();
 	}
 
 	@Test

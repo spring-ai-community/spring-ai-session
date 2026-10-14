@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -63,7 +64,6 @@ import org.springframework.ai.session.InteractionEvents;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
-import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.ToolConfirmations;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -213,10 +213,10 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 			response = chain.nextCall(start.request());
 		}
 		catch (RuntimeException ex) {
-			end(sessionId, StopReason.ERROR);
+			end(sessionId, start.runId(), StopReason.ERROR);
 			throw ex;
 		}
-		complete(sessionId, response.chatResponse());
+		complete(sessionId, start.runId(), response.chatResponse());
 		return response;
 	}
 
@@ -240,33 +240,37 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 					}
 				})
 				.publishOn(this.scheduler)
-				.doOnError(ex -> end(sessionId, StopReason.ERROR))
-				.doOnComplete(() -> complete(sessionId, paused.get()))
-				.doOnCancel(() -> end(sessionId, StopReason.INTERRUPTED));
+				.doOnError(ex -> end(sessionId, start.runId(), StopReason.ERROR))
+				.doOnComplete(() -> complete(sessionId, start.runId(), paused.get()))
+				.doOnCancel(() -> end(sessionId, start.runId(), StopReason.INTERRUPTED));
 		});
 	}
 
 	/**
 	 * Starts the turn, or resumes the parked one when the request carries decisions. A
 	 * resumption whose results go straight back to the caller has the response already.
+	 * The turn always has a run: the caller's run id, or one made up for this call, so it
+	 * is ended only while it is still this call's.
 	 */
 	private Start begin(ChatClientRequest request, String sessionId) {
 		List<ToolCallDecision> decisions = decisions(request.context());
+		String callerRunId = runId(request.context());
+		String turnRunId = (callerRunId != null) ? callerRunId : UUID.randomUUID().toString();
 		SessionContexts.findOrCreate(this.sessionService, sessionId, request.context());
 		if (decisions.isEmpty()) {
-			this.sessionService.startTurn(sessionId, runId(request.context()));
-			return new Start(inTurn(request, "start"), null);
+			this.sessionService.startTurn(sessionId, turnRunId);
+			return new Start(inTurn(request, turnRunId, "start"), null, turnRunId);
 		}
-		return resume(request, sessionId, decisions);
+		return resume(request, sessionId, turnRunId, decisions);
 	}
 
 	/**
-	 * Marks the request as part of the turn, with a round counter every round of the tool
-	 * loop shares: the loop copies the context of the request into each round.
+	 * Marks the request as part of the turn of the run, with a round counter every round
+	 * of the tool loop shares: the loop copies the context of the request into each round.
 	 */
-	private static ChatClientRequest inTurn(ChatClientRequest request, String phase) {
+	private static ChatClientRequest inTurn(ChatClientRequest request, String turnRunId, String phase) {
 		return request.mutate()
-			.context(TURN_CONTEXT_KEY, Boolean.TRUE)
+			.context(TURN_CONTEXT_KEY, turnRunId)
 			.context(PHASE_CONTEXT_KEY, phase)
 			.context(ROUND_CONTEXT_KEY, new AtomicInteger())
 			.build();
@@ -306,12 +310,16 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 		}
 	}
 
-	/** Whether the request or response belongs to a turn a {@link SessionTurnAdvisor} runs. */
-	static boolean inTurn(Map<String, @Nullable Object> context) {
-		return Boolean.TRUE.equals(context.get(TURN_CONTEXT_KEY));
+	/**
+	 * The run of the turn a {@link SessionTurnAdvisor} runs the request or response in, or
+	 * {@code null} outside one.
+	 */
+	static @Nullable String turnRunId(Map<String, @Nullable Object> context) {
+		return (context.get(TURN_CONTEXT_KEY) instanceof String turnRunId) ? turnRunId : null;
 	}
 
-	private Start resume(ChatClientRequest request, String sessionId, List<ToolCallDecision> given) {
+	private Start resume(ChatClientRequest request, String sessionId, String turnRunId,
+			List<ToolCallDecision> given) {
 		List<Message> messages = request.prompt().getInstructions();
 		if (messages.stream().anyMatch(UserMessage.class::isInstance)) {
 			throw new IllegalArgumentException("A request that decides on tool calls of session '" + sessionId
@@ -326,7 +334,7 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 		requireTools(sessionId, reply, decisions, request.prompt().getOptions());
 
 		// Starts the turn; the compare-and-set makes the resumption exclusive
-		this.sessionService.resume(sessionId, runId(request.context()), ToolConfirmations.asAnswer(decisions));
+		this.sessionService.resume(sessionId, turnRunId, ToolConfirmations.asAnswer(decisions));
 		AtomicInteger ran = new AtomicInteger();
 		try {
 			List<Message> turn = currentTurn(sessionId);
@@ -336,27 +344,26 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 			ToolResponseMessage results = toolResults(result);
 			if (result.returnDirect()) {
 				this.sessionService.appendMessage(sessionId, results);
-				finish(sessionId);
+				finish(sessionId, turnRunId);
 				ChatResponse direct = ChatResponse.builder()
 					.generations(ToolExecutionResult.buildGenerations(result))
 					.build();
 				return new Start(request, ChatClientResponse.builder()
 					.chatResponse(direct)
 					.context(new HashMap<>(request.context()))
-					.build());
+					.build(), turnRunId);
 			}
 			List<Message> withResults = new ArrayList<>(messages.size() + 1);
 			withResults.add(results);
 			withResults.addAll(messages);
 			return new Start(inTurn(request.mutate().prompt(request.prompt().mutate().messages(withResults).build()).build(),
-					"resume-" + asked.getId()),
-					null);
+					turnRunId, "resume-" + asked.getId()), null, turnRunId);
 		}
 		catch (RuntimeException ex) {
 			if (ran.get() > 0) {
 				answerFailed(sessionId, reply, ex);
 			}
-			end(sessionId, StopReason.ERROR);
+			end(sessionId, turnRunId, StopReason.ERROR);
 			throw ex;
 		}
 	}
@@ -464,16 +471,16 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 	}
 
 	/** Parks the turn when the loop paused, or ends it. */
-	private void complete(String sessionId, @Nullable ChatResponse response) {
+	private void complete(String sessionId, String turnRunId, @Nullable ChatResponse response) {
 		if (response != null && ToolCallDecisions.isAwaitingDecision(response)) {
-			park(sessionId, response);
+			park(sessionId, turnRunId, response);
 		}
 		else {
-			finish(sessionId);
+			finish(sessionId, turnRunId);
 		}
 	}
 
-	private void park(String sessionId, ChatResponse response) {
+	private void park(String sessionId, String turnRunId, ChatResponse response) {
 		AssistantMessage reply = response.getResults()
 			.stream()
 			.map(Generation::getOutput)
@@ -490,7 +497,7 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 					+ "calls is not the newest message in the log; is the memory advisor registered?", sessionId);
 		}
 		try {
-			this.sessionService.park(sessionId,
+			this.sessionService.park(sessionId, turnRunId,
 					ToolConfirmations.question(reply, ToolCallDecisions.awaitingDecision(response)), related);
 		}
 		catch (IllegalStateException ex) {
@@ -500,7 +507,7 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 		}
 		catch (RuntimeException ex) {
 			// The store failed: end the turn, so the session does not stay running
-			end(sessionId, StopReason.ERROR);
+			end(sessionId, turnRunId, StopReason.ERROR);
 			throw ex;
 		}
 	}
@@ -509,8 +516,8 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 	 * Ends the completed turn, then compacts the session if the trigger fires: now, or on
 	 * the scheduler when compaction is asynchronous and none runs on the session yet.
 	 */
-	private void finish(String sessionId) {
-		if (!end(sessionId, StopReason.END_TURN) || this.compactionTrigger == null
+	private void finish(String sessionId, String turnRunId) {
+		if (!end(sessionId, turnRunId, StopReason.END_TURN) || this.compactionTrigger == null
 				|| this.compactionStrategy == null) {
 			return;
 		}
@@ -558,17 +565,18 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 	}
 
 	/**
-	 * Ends the turn while it is still running; returns {@code false} when someone ended it
-	 * already (interrupted, out of budget).
+	 * Ends the run's turn while it is still running; returns {@code false} when someone
+	 * ended it already (interrupted, out of budget), whatever turn runs now.
 	 */
-	private boolean end(String sessionId, StopReason stopReason) {
+	private boolean end(String sessionId, String turnRunId, StopReason stopReason) {
 		try {
-			Session session = this.sessionService.findById(sessionId);
-			if (session == null || session.status() != SessionStatus.RUNNING) {
-				return false;
-			}
-			this.sessionService.endTurn(sessionId, stopReason);
+			this.sessionService.endTurn(sessionId, turnRunId, stopReason, List.of());
 			return true;
+		}
+		catch (IllegalStateException ex) {
+			logger.debug("The turn of run [{}] of session [{}] was already ended: {}", turnRunId, sessionId,
+					ex.getMessage());
+			return false;
 		}
 		catch (RuntimeException ex) {
 			logger.warn("Could not end the turn of session [{}] with {}: {}", sessionId, stopReason, ex.getMessage());
@@ -669,7 +677,7 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 	}
 
 	/** The request to forward, or the response when there is nothing to forward. */
-	private record Start(ChatClientRequest request, @Nullable ChatClientResponse response) {
+	private record Start(ChatClientRequest request, @Nullable ChatClientResponse response, String runId) {
 	}
 
 	public static final class Builder {

@@ -363,7 +363,7 @@ class SessionTurnAdvisorTests {
 	@Test
 	void aFailedParkEndsTheTurnWithAnError() {
 		SessionService failing = spy(this.sessionService);
-		willThrow(new IllegalArgumentException("The store is down")).given(failing).park(any(), any(), any());
+		willThrow(new IllegalArgumentException("The store is down")).given(failing).park(any(), any(), any(), any());
 		ChatClient client = gated(SessionTurnAdvisor.builder(failing).toolCallingManager(this.manager).build(),
 				tool("get_weather", "Sunny in ", confirmed()));
 		this.model.thenCall("c1", "Paris");
@@ -780,6 +780,41 @@ class SessionTurnAdvisorTests {
 		assertThat(session().stopReason()).isEqualTo(StopReason.INTERRUPTED);
 		assertThat(toolResults(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
 			.containsExactly(SessionMemoryAdvisor.INTERRUPTED_TOOL_RESULT);
+	}
+
+	@Test
+	void interruptedTurnNeverEndsTurnThatStartedAfterIt() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", ToolMetadata.builder().build()));
+		this.model.then(prompt -> {
+			// Stopped from elsewhere, and another request starts its turn at once
+			this.sessionService.interrupt(this.sessionId, "Stop");
+			this.sessionService.startTurn(this.sessionId, "next-run");
+			return calls(call("c1", "get_weather", "Paris"));
+		});
+
+		assertThatThrownBy(() -> say(client, "Weather in Paris?")).isInstanceOf(TurnInterruptedException.class);
+
+		// The stopped call ends nothing: the next run's turn still runs
+		assertThat(this.ran).isEmpty();
+		assertThat(session().status()).isEqualTo(SessionStatus.RUNNING);
+		assertThat(session().runId()).isEqualTo("next-run");
+	}
+
+	@Test
+	void turnRunsUnderCallersRunId() {
+		this.model.then(prompt -> {
+			assertThat(session().runId()).isEqualTo("run-7");
+			return answer("Hi!");
+		});
+
+		client().prompt()
+			.user("Hello")
+			.advisors(SessionAdvisors.session(this.sessionId, "run-7"))
+			.call()
+			.content();
+
+		assertThat(session().status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(session().runId()).isNull();
 	}
 
 	@Test

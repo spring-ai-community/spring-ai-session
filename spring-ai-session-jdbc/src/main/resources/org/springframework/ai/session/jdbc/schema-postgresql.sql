@@ -12,9 +12,11 @@ CREATE TABLE IF NOT EXISTS AI_SESSION (
     created_at    TIMESTAMP     NOT NULL,
     expires_at    TIMESTAMP,
     metadata      TEXT,
-    -- Status (0.11.0): the session's own status, why its last turn ended, and when it was
-    -- archived; a row written before 0.11.0 reads as an idle root
+    -- Status (0.11.0): the session's own status, the run of the turn in progress, why its
+    -- last turn ended, and when it was archived; a row written before 0.11.0 reads as an
+    -- idle root
     status        VARCHAR(16)   NOT NULL DEFAULT 'IDLE',
+    run_id        VARCHAR(255),
     stop_reason   VARCHAR(32),
     archived_at   TIMESTAMP,
     event_version BIGINT        NOT NULL DEFAULT 0
@@ -25,6 +27,7 @@ ALTER TABLE AI_SESSION ADD COLUMN IF NOT EXISTS parent_session_id VARCHAR(255);
 ALTER TABLE AI_SESSION ADD COLUMN IF NOT EXISTS root_session_id VARCHAR(255);
 ALTER TABLE AI_SESSION ALTER COLUMN user_id SET DEFAULT '';
 ALTER TABLE AI_SESSION ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'IDLE';
+ALTER TABLE AI_SESSION ADD COLUMN IF NOT EXISTS run_id VARCHAR(255);
 ALTER TABLE AI_SESSION ADD COLUMN IF NOT EXISTS stop_reason VARCHAR(32);
 ALTER TABLE AI_SESSION ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP;
 

@@ -189,7 +189,7 @@ class IdempotentSessionEventIdGeneratorTests {
 	void aRetriedAfterOfAnInterruptedTurnAnswersTheToolCallsOnce() {
 		SessionMemoryAdvisor advisor = advisorWith(new IdempotentSessionEventIdGenerator());
 		AdvisorChain chain = mock(AdvisorChain.class);
-		this.sessionService.startTurn(this.sessionId);
+		this.sessionService.startTurn(this.sessionId, "run-1");
 		this.sessionService.interrupt(this.sessionId, "Stop");
 		AssistantMessage toolCall = AssistantMessage.builder()
 			.content("")
@@ -198,7 +198,7 @@ class IdempotentSessionEventIdGeneratorTests {
 		ChatClientResponse response = ChatClientResponse.builder()
 			.chatResponse(ChatResponse.builder().generations(List.of(new Generation(toolCall))).build())
 			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId,
-					SessionTurnAdvisor.TURN_CONTEXT_KEY, Boolean.TRUE))
+					SessionTurnAdvisor.TURN_CONTEXT_KEY, "run-1"))
 			.build();
 
 		assertThatThrownBy(() -> advisor.after(response, chain)).isInstanceOf(TurnInterruptedException.class);

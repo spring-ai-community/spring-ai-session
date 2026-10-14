@@ -214,7 +214,8 @@ public class DefaultSessionService implements SessionService {
 	@Override
 	public Session startTurn(String sessionId, @Nullable String runId) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
-		if (!this.sessionRepository.updateStatus(sessionId, SessionStatus.IDLE, SessionStatus.RUNNING, null, null)) {
+		if (!this.sessionRepository.updateStatus(sessionId, SessionStatus.IDLE, null, SessionStatus.RUNNING, runId, null,
+				null)) {
 			Session session = requireSession(sessionId);
 			requireNotArchived(session);
 			throw new IllegalStateException("Session '" + sessionId + "' could not start a turn: it is "
@@ -236,12 +237,28 @@ public class DefaultSessionService implements SessionService {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(stopReason, "stopReason must not be null");
 		Assert.notNull(eventIds, "eventIds must not be null");
-		if (!this.sessionRepository.updateStatus(sessionId, SessionStatus.RUNNING, SessionStatus.IDLE, stopReason,
-				null)) {
+		if (!this.sessionRepository.updateStatus(sessionId, SessionStatus.RUNNING, null, SessionStatus.IDLE, null,
+				stopReason, null)) {
 			Session session = requireSession(sessionId);
 			throw new IllegalStateException("Session '" + sessionId + "' is not running a turn; it is " + session.status());
 		}
 		append(SessionStatusEvents.idle(sessionId, stopReason, eventIds, currentRunId(sessionId)));
+		return requireSession(sessionId);
+	}
+
+	@Override
+	public Session endTurn(String sessionId, String runId, StopReason stopReason, List<String> eventIds) {
+		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		Assert.hasText(runId, "runId must not be null or empty");
+		Assert.notNull(stopReason, "stopReason must not be null");
+		Assert.notNull(eventIds, "eventIds must not be null");
+		if (!this.sessionRepository.updateStatus(sessionId, SessionStatus.RUNNING, runId, SessionStatus.IDLE, null,
+				stopReason, null)) {
+			Session session = requireSession(sessionId);
+			throw new IllegalStateException("Session '" + sessionId + "' is not running a turn of run '" + runId
+					+ "'; it is " + session.status() + (session.runId() != null ? " for run '" + session.runId() + "'" : ""));
+		}
+		append(SessionStatusEvents.idle(sessionId, stopReason, eventIds, runId));
 		return requireSession(sessionId);
 	}
 
@@ -305,8 +322,8 @@ public class DefaultSessionService implements SessionService {
 		for (Session child : children) {
 			archive(child.id());
 		}
-		if (this.sessionRepository.updateStatus(sessionId, SessionStatus.IDLE, SessionStatus.TERMINATED, null,
-				Instant.now())) {
+		if (this.sessionRepository.updateStatus(sessionId, SessionStatus.IDLE, null, SessionStatus.TERMINATED, null,
+				null, Instant.now())) {
 			append(SessionStatusEvents.terminated(sessionId));
 			return requireSession(sessionId);
 		}

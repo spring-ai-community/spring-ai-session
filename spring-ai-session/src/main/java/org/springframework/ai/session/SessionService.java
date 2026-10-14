@@ -145,6 +145,18 @@ public interface SessionService {
 	Session endTurn(String sessionId, StopReason stopReason, List<String> eventIds);
 
 	/**
+	 * Ends the turn of the given run, and only that turn: the compare-and-set checks the
+	 * session's status and its run ({@link Session#runId()}) together, so a run whose turn
+	 * someone else already ended, and another run then started, never ends that other run's
+	 * turn. Otherwise like {@link #endTurn(String, StopReason, List)}.
+	 * @param runId the run that started the turn ({@link #startTurn(String, String)})
+	 * @return the session, idle
+	 * @throws IllegalArgumentException if the session does not exist
+	 * @throws IllegalStateException if the session is not running a turn of that run
+	 */
+	Session endTurn(String sessionId, String runId, StopReason stopReason, List<String> eventIds);
+
+	/**
 	 * Interrupts the running turn, as a caller would: an {@link EventType#INTERRUPT} event
 	 * records it ({@link InterruptEvents}) and the turn ends with
 	 * {@link StopReason#INTERRUPTED}. The run that holds the turn is not stopped by this;
@@ -196,20 +208,47 @@ public interface SessionService {
 	 * written then
 	 */
 	default SessionEvent park(String sessionId, Interaction question, List<String> relatedEventIds) {
+		return park(sessionId, null, question, relatedEventIds);
+	}
+
+	/**
+	 * Parks the turn of the given run on a question, and only that turn: like
+	 * {@link #park(String, Interaction, List)}, ending the turn with
+	 * {@link #endTurn(String, String, StopReason, List)}.
+	 * @param runId the run that started the turn, or {@code null} for whatever turn runs
+	 * @throws IllegalStateException if the session is not running a turn (of that run);
+	 * nothing is written then
+	 */
+	default SessionEvent park(String sessionId, @Nullable String runId, Interaction question,
+			List<String> relatedEventIds) {
 		Assert.notNull(question, "question must not be null");
 		Assert.notNull(relatedEventIds, "relatedEventIds must not be null");
 		Session session = findById(sessionId);
 		if (session == null) {
 			throw new IllegalArgumentException("Session not found: " + sessionId);
 		}
-		if (session.status() != SessionStatus.RUNNING) {
-			throw new IllegalStateException("Session '" + sessionId + "' is not running a turn; it is " + session.status());
+		if (session.status() != SessionStatus.RUNNING || (runId != null && !runId.equals(session.runId()))) {
+			throw new IllegalStateException("Session '" + sessionId + "' is not running a turn"
+					+ (runId != null ? " of run '" + runId + "'" : "") + "; it is " + session.status());
 		}
 		SessionEvent required = InteractionEvents.required(sessionId, question);
 		appendEvent(required);
 		List<String> eventIds = new ArrayList<>(relatedEventIds);
 		eventIds.add(required.getId());
-		endTurn(sessionId, StopReason.REQUIRES_ACTION, eventIds);
+		try {
+			if (runId != null) {
+				endTurn(sessionId, runId, StopReason.REQUIRES_ACTION, eventIds);
+			}
+			else {
+				endTurn(sessionId, StopReason.REQUIRES_ACTION, eventIds);
+			}
+		}
+		catch (IllegalStateException ex) {
+			// The turn ended between the check and the end: the question was never asked,
+			// so it is answered at once and never counts as pending
+			appendEvent(InteractionEvents.answered(sessionId, required.getId(), null));
+			throw ex;
+		}
 		return required;
 	}
 

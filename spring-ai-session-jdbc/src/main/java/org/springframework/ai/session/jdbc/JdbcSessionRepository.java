@@ -170,12 +170,15 @@ public final class JdbcSessionRepository implements SessionRepository {
 	// @formatter:off
 
 	private static final String SELECT_SESSION_COLUMNS =
-		"SELECT s.id, s.user_id, s.parent_session_id, s.root_session_id, s.status, s.stop_reason, s.archived_at,"
+		"SELECT s.id, s.user_id, s.parent_session_id, s.root_session_id, s.status, s.run_id, s.stop_reason, s.archived_at,"
 		+ " s.created_at, s.expires_at, s.metadata, s.event_version FROM AI_SESSION s";
 
-	// The status compare-and-set: one turn at a time, no archive of a running session
+	// The status compare-and-set: one turn at a time, no archive of a running session, and
+	// a turn ended by its run only while it is that run's
 	private static final String UPDATE_SESSION_STATUS =
-		"UPDATE AI_SESSION SET status = ?, stop_reason = ?, archived_at = ? WHERE id = ? AND status = ?";
+		"UPDATE AI_SESSION SET status = ?, run_id = ?, stop_reason = ?, archived_at = ? WHERE id = ? AND status = ?";
+
+	private static final String UPDATE_SESSION_STATUS_OF_RUN = UPDATE_SESSION_STATUS + " AND run_id = ?";
 
 	private static final String SELECT_SESSION_BY_ID =
 		SELECT_SESSION_COLUMNS + " WHERE s.id = ?";
@@ -368,13 +371,18 @@ public final class JdbcSessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public boolean updateStatus(String sessionId, SessionStatus expected, SessionStatus status,
-			@Nullable StopReason stopReason, @Nullable Instant archivedAt) {
+	public boolean updateStatus(String sessionId, SessionStatus expected, @Nullable String expectedRunId,
+			SessionStatus status, @Nullable String runId, @Nullable StopReason stopReason,
+			@Nullable Instant archivedAt) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
 		Assert.notNull(expected, "expected must not be null");
 		Assert.notNull(status, "status must not be null");
-		return this.jdbcTemplate.update(UPDATE_SESSION_STATUS, status.name(), name(stopReason), toUtc(archivedAt),
-				sessionId, expected.name()) == 1;
+		if (expectedRunId == null) {
+			return this.jdbcTemplate.update(UPDATE_SESSION_STATUS, status.name(), runId, name(stopReason),
+					toUtc(archivedAt), sessionId, expected.name()) == 1;
+		}
+		return this.jdbcTemplate.update(UPDATE_SESSION_STATUS_OF_RUN, status.name(), runId, name(stopReason),
+				toUtc(archivedAt), sessionId, expected.name(), expectedRunId) == 1;
 	}
 
 	@Nullable private static String name(@Nullable Enum<?> value) {
@@ -835,6 +843,7 @@ public final class JdbcSessionRepository implements SessionRepository {
 				.parentSessionId(rs.getString("parent_session_id"))
 				.rootSessionId(rs.getString("root_session_id"))
 				.status(status != null ? SessionStatus.valueOf(status) : SessionStatus.IDLE)
+				.runId(rs.getString("run_id"))
 				.stopReason(stopReason != null ? StopReason.valueOf(stopReason) : null)
 				.archivedAt(fromUtc(rs, "archived_at"))
 				.metadata(metadata);

@@ -49,6 +49,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.BDDMockito.willAnswer;
+import static org.mockito.Mockito.spy;
 
 /**
  * Tests for {@link DefaultSessionService}.
@@ -942,6 +946,57 @@ class DefaultSessionServiceTests {
 			.isNull();
 		assertThat(this.service.findByIndex(SessionAttributes.AGENT_NAME, "worker")).extracting(Session::id)
 			.containsExactly(child.id());
+	}
+
+	@Test
+	void runEndsOnlyItsOwnTurn() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		this.service.startTurn(session.id(), "run-1");
+		assertThat(this.service.findById(session.id()).runId()).isEqualTo("run-1");
+
+		// Interrupted, and another run starts: the first run can no longer end anything
+		this.service.interrupt(session.id(), "Stop");
+		this.service.startTurn(session.id(), "run-2");
+		assertThatIllegalStateException()
+			.isThrownBy(() -> this.service.endTurn(session.id(), "run-1", StopReason.ERROR, List.of()))
+			.withMessageContaining("run 'run-2'");
+		assertThat(this.service.findById(session.id()).status()).isEqualTo(SessionStatus.RUNNING);
+
+		Session ended = this.service.endTurn(session.id(), "run-2", StopReason.END_TURN, List.of());
+		assertThat(ended.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(ended.runId()).isNull();
+	}
+
+	@Test
+	void runParksOnlyItsOwnTurn() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		this.service.startTurn(session.id(), "run-2");
+		Interaction question = new Interaction(Interaction.KIND_INTERRUPT, "", "Proceed?", null);
+
+		assertThatIllegalStateException().isThrownBy(() -> this.service.park(session.id(), "run-1", question, List.of()));
+		assertThat(this.service.pendingInteraction(session.id())).isNull();
+
+		this.service.park(session.id(), "run-2", question, List.of());
+		assertThat(this.service.findById(session.id()).stopReason()).isEqualTo(StopReason.REQUIRES_ACTION);
+		assertThat(this.service.pendingInteraction(session.id())).isNotNull();
+	}
+
+	@Test
+	void parkWhoseTurnEndsMeanwhileLeavesNoPendingQuestion() {
+		Session session = this.service.create(CreateSessionRequest.builder().build());
+		this.service.startTurn(session.id(), "run-1");
+		// The turn is interrupted between the run check and the end
+		SessionService racing = spy(this.service);
+		willAnswer(invocation -> {
+			this.service.interrupt(session.id(), "Stop");
+			return invocation.callRealMethod();
+		}).given(racing).endTurn(eq(session.id()), eq("run-1"), any(), any());
+
+		assertThatIllegalStateException().isThrownBy(() -> racing.park(session.id(), "run-1",
+				new Interaction(Interaction.KIND_INTERRUPT, "", "Proceed?", null), List.of()));
+
+		assertThat(this.service.pendingInteraction(session.id())).isNull();
+		assertThat(this.service.findById(session.id()).stopReason()).isEqualTo(StopReason.INTERRUPTED);
 	}
 
 	@Test
