@@ -17,12 +17,9 @@
 package org.springframework.ai.session.advisor;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
@@ -43,12 +40,9 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
-import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.content.MediaContent;
 import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
@@ -105,43 +99,13 @@ import org.springframework.util.Assert;
  * {@link IllegalStateException} to prevent accidental cross-user session sharing.
  *
  * <p>
- * <strong>Tool-call integrity:</strong> a prompt in which an assistant tool call is not
- * followed by the tool results answering it is rejected by every provider. The advisor
- * keeps that from happening at both ends. On read, the configured {@link EventFilter}'s
- * {@code lastN} window is extended by the repository to the start of the turn it lands
- * in, and any tool call or tool result that still has no counterpart in the history (a
- * {@code messageTypes} filter hiding {@code TOOL} events, a log written by an earlier
- * version with a {@link MessageFilter} that skipped them, or a turn interrupted mid-loop)
- * is dropped from the prompt with a warning; the log is left untouched. On write, tool
- * calls and tool results are always stored, whatever the {@link MessageFilter} says; to
- * keep them out of the prompt, hide them on read with an {@link EventFilter}'s
- * {@code messageTypes}.
- *
- * <p>
- * <strong>Event id generation:</strong> by default ({@link RunScopedSessionEventIdGenerator})
- * an event's id derives from its position in a run: the session, the run id the caller
- * gives with {@link SessionTurnAdvisor#RUN_ID_CONTEXT_KEY}, the round of the turn and the
- * slot in the round. A replay of the same run then writes nothing twice, via
- * {@code SessionRepository.appendEvent}'s id-based replay contract. Without a run id (or
- * without the {@link SessionTurnAdvisor}) the ids are random, so a retried append is a new
- * event. Configure {@link Builder#requestEventIdGenerator} /
- * {@link Builder#responseEventIdGenerator} for another derivation.
- *
- * <p>
- * <strong>Nesting inside a tool-calling loop:</strong> an advisor such as
- * {@code ToolCallingAdvisor} that implements its own tool-call loop re-enters the rest of
- * the advisor chain once per round, so if this advisor's order places it deeper in the
- * chain than the looping advisor, {@code before()}/{@code after()} run once per round too.
- * From round 2 onward the prompt passed in starts with this turn's messages, which the
- * session history ends with (the previous rounds persisted them), so {@code before()}
- * prepends only the history before that overlap -- avoiding duplicate messages in the
- * prompt sent to the model. System messages are excluded from that check (they are moved to
- * the front of the prompt, so their position says nothing about what was already sent);
- * stored system messages are always included and exact-text duplicates are dropped. Actual
- * persistence is unaffected by nesting depth: only the current turn's trailing
- * user/tool-response message and the model's own reply are ever appended, and with a
- * deterministic {@link IdempotentSessionEventIdGenerator} configured, a re-derived id makes
- * a repeated append of the same message an idempotent no-op rather than a duplicate event.
+ * By default it runs inside the tool-calling loop (order {@code HIGHEST_PRECEDENCE + 1000}),
+ * once per round: from the second round on, the loop's prompt carries the turn so far, and only the
+ * history before it is prepended. A tool call or tool result left without its counterpart
+ * is kept out of the prompt, and tool calls and results are always stored. An event's id
+ * derives from its position in the call's run ({@link RunScopedSessionEventIdGenerator}),
+ * so a replay of the run writes nothing twice. See the ChatClient integration docs for
+ * each of these.
  *
  * @author Christian Tzolov
  * @since 0.1.0
@@ -247,85 +211,25 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// Each call of before() is a round of the turn: the run-scoped event ids count them
 		SessionTurnAdvisor.nextRound(request.context());
 
-		// 2. Retrieve history applying the configured filter (default: all events)
-
-		// Always read the active view: the events a compaction covered live on only for
-		// Recall Storage search. Merging forces the flag on regardless of the configured or
-		// per-request filter.
+		// 2. Read the history: always the active view, whatever the configured or
+		// per-request filter says; the events a compaction covered live on for search only
 		EventFilter eventFilter = resolveEventFilter(request.context()).merge(EventFilter.active());
-
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, eventFilter);
-
-		// Latest wins: of the system messages stored in the session, only the latest one
-		// is the system prompt. Earlier ones are superseded (a later compaction covers them),
-		// so they are not sent. Synthetic events (e.g. legacy SYSTEM summaries) are kept.
-		SessionEvent latestStoredSystem = null;
-		for (int i = events.size() - 1; i >= 0; i--) {
-			SessionEvent event = events.get(i);
-			if (!event.isSynthetic() && event.getMessageType() == MessageType.SYSTEM) {
-				latestStoredSystem = event;
-				break;
-			}
-		}
-		// A window (lastN or a page) may leave the stored system prompt outside the events
-		// read; it is configuration, so look it up on its own.
-		if (latestStoredSystem == null && !(eventFilter.window() instanceof EventFilter.Window.All)) {
-			latestStoredSystem = latestStoredSystemPrompt(sessionId);
-		}
-		SessionEvent sessionSystemPrompt = latestStoredSystem;
-		List<Message> promptMessages = request.prompt().getInstructions();
-		List<Message> historySystem = new ArrayList<>();
-		if (sessionSystemPrompt != null && !events.contains(sessionSystemPrompt)) {
-			historySystem.add(sessionSystemPrompt.getMessage());
-		}
-		events.stream()
-			.filter(e -> e.getMessageType() == MessageType.SYSTEM && (e.isSynthetic() || e == sessionSystemPrompt))
-			.map(SessionEvent::getMessage)
-			.forEach(historySystem::add);
-		List<Message> promptConversation = promptMessages.stream()
-			.filter(m -> !(m instanceof SystemMessage))
-			.toList();
-		// 2.1. Prepend only the history the prompt does not already start with. A looping
-		// advisor such as ToolCallingAdvisor re-enters before() once per round with the
-		// turn so far (its own copy: the user message, then each round's tool calls and
-		// results), which the log ends with, as the previous rounds stored them. System
-		// messages are left out on both sides: step 3 moves them all to the front.
-		List<Message> historyConversation = events.stream()
-			.filter(e -> e.getMessageType() != MessageType.SYSTEM)
-			.map(SessionEvent::getMessage)
-			.toList();
-		List<Message> missing = historyConversation.subList(0,
-				historyConversation.size() - overlap(historyConversation, promptConversation));
-		// A tool call without its results (or the reverse) makes a prompt every provider
-		// rejects; drop the stranded side of what is prepended.
-		List<Message> combined = new ArrayList<>(historySystem);
-		combined.addAll(withoutOrphanToolMessages(missing, promptConversation, sessionId));
-		combined.addAll(promptMessages);
-
-		// 3. Ensure all system messages appear first (preserving their relative order).
-		// A single pass collects every SystemMessage, removes them in place, then
-		// prepends them as a block — so a system message buried in history and a
-		// second one on the current request both end up at the front rather than
-		// leaving the second one stranded mid-list. Exact-text duplicates (e.g. a
-		// system message stored in the session that is also sent on the request) are
-		// kept only once; texts are never merged or rewritten, so the system prompt
-		// stays byte-stable for prompt caching.
-		Set<String> seenSystemTexts = new HashSet<>();
-		List<Message> systemMessages = combined.stream()
-			.filter(SystemMessage.class::isInstance)
-			.filter(m -> seenSystemTexts.add(Objects.requireNonNullElse(m.getText(), "")))
-			.toList();
-		if (!systemMessages.isEmpty()) {
-			combined.removeIf(SystemMessage.class::isInstance);
-			combined.addAll(0, systemMessages);
+		// A lastN window may leave the system prompt, which is configuration, outside the
+		// events read: look it up on its own
+		SessionEvent systemPrompt = PromptHistory.latestStoredSystemPrompt(events);
+		if (systemPrompt == null && !(eventFilter.window() instanceof EventFilter.Window.All)) {
+			systemPrompt = latestStoredSystemPrompt(sessionId);
 		}
 
-		// 4. Append the current user message to the session, subject to the configured
-		// message filter. Skipping only affects persistence — the outgoing prompt is
-		// untouched. A tool response is stored exactly when the tool call it answers was
-		// stored, whatever the filter says: either half alone makes an unusable log. A
+		// 3. The prompt: the history the request does not carry yet, valid for the model
+		List<Message> prompt = PromptHistory.of(events, (systemPrompt != null) ? systemPrompt.getMessage() : null)
+			.prompt(request.prompt().getInstructions(), sessionId);
+
+		// 4. Store the request's trailing user message, subject to the message filter, or
+		// tool results, always. Skipping only affects persistence, not the prompt. A
 		// request without one stores nothing.
-		Message userMessage = lastUserOrToolResponse(request.prompt().getInstructions());
+		Message userMessage = PromptHistory.lastUserOrToolResponse(request.prompt().getInstructions());
 		String requestEventId = null;
 		if (userMessage != null && shouldPersist(userMessage, sessionId)) {
 			requestEventId = this.requestEventIdGenerator.generate(request, userMessage);
@@ -344,7 +248,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// The forwarded request copies the context, so the id reaches the response too. No
 		// null value: the model call advisor copies the context with Map.copyOf
 		ChatClientRequest.Builder forwarded = request.mutate()
-			.prompt(request.prompt().mutate().messages(combined).build());
+			.prompt(request.prompt().mutate().messages(prompt).build());
 		if (requestEventId != null) {
 			forwarded.context(REQUEST_EVENT_ID_CONTEXT_KEY, requestEventId);
 		}
@@ -434,66 +338,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		return found.isEmpty() ? null : found.get(0);
 	}
 
-	/**
-	 * Returns {@code history} without tool messages that have no counterpart: an assistant
-	 * message whose tool calls are not all answered by the tool responses that directly
-	 * follow it (in the history, then in {@code following}, the prompt's own messages), or a
-	 * tool response that does not answer the assistant tool call directly before it. Calls
-	 * and responses are matched by id; one response message may answer several parallel
-	 * calls, and a partially answered call is dropped together with its responses. Prompt
-	 * messages are never dropped.
-	 */
-	private static List<Message> withoutOrphanToolMessages(List<Message> history, List<Message> following,
-			String sessionId) {
-		if (history.stream()
-			.noneMatch(m -> m instanceof ToolResponseMessage
-					|| (m instanceof AssistantMessage assistant && assistant.hasToolCalls()))) {
-			return history;
-		}
-		List<Message> all = new ArrayList<>(history);
-		all.addAll(following);
-		boolean[] keep = new boolean[history.size()];
-		Arrays.fill(keep, true);
-		for (int i = 0; i < history.size(); i++) {
-			Message message = history.get(i);
-			if (message instanceof AssistantMessage assistant && assistant.hasToolCalls()) {
-				Set<String> unanswered = new HashSet<>();
-				assistant.getToolCalls().forEach(call -> unanswered.add(call.id()));
-				for (int j = i + 1; j < all.size() && !unanswered.isEmpty(); j++) {
-					if (!(all.get(j) instanceof ToolResponseMessage responses)) {
-						break;
-					}
-					responses.getResponses().forEach(response -> unanswered.remove(response.id()));
-				}
-				keep[i] = unanswered.isEmpty();
-			}
-			else if (message instanceof ToolResponseMessage responses) {
-				int call = i - 1;
-				while (call >= 0 && history.get(call) instanceof ToolResponseMessage) {
-					call--;
-				}
-				keep[i] = call >= 0 && keep[call] && history.get(call) instanceof AssistantMessage assistant
-						&& assistant.hasToolCalls() && answers(assistant, responses);
-			}
-		}
-		List<Message> kept = new ArrayList<>(history.size());
-		int dropped = 0;
-		for (int i = 0; i < history.size(); i++) {
-			if (keep[i]) {
-				kept.add(history.get(i));
-			}
-			else {
-				dropped++;
-			}
-		}
-		if (dropped > 0) {
-			logger.warn("Dropped {} tool message(s) without their counterpart from the prompt for session [{}]. "
-					+ "A messageTypes filter that hides TOOL events, a MessageFilter that skipped them, or a turn "
-					+ "interrupted mid-loop is the likely cause; the session log is unchanged", dropped, sessionId);
-		}
-		return kept;
-	}
-
 	private void recordUsage(ChatClientResponse response, ChatResponse chatResponse, String sessionId) {
 		TokenUsage usage = TokenUsage.of(chatResponse.getMetadata().getUsage());
 		if (usage.isEmpty() || chatResponse.getResults().isEmpty()) {
@@ -507,24 +351,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			.type(usageEvent.getType())
 			.payload(usageEvent.getPayload())
 			.build());
-	}
-
-	/** The last user or tool response message of the prompt, or {@code null} when it has none. */
-	private static @Nullable Message lastUserOrToolResponse(List<Message> messages) {
-		for (int i = messages.size() - 1; i >= 0; i--) {
-			Message message = messages.get(i);
-			if (message instanceof UserMessage || message instanceof ToolResponseMessage) {
-				return message;
-			}
-		}
-		return null;
-	}
-
-	/** Returns {@code true} if every response answers one of the assistant's tool calls. */
-	private static boolean answers(AssistantMessage assistant, ToolResponseMessage responses) {
-		Set<String> callIds = new HashSet<>();
-		assistant.getToolCalls().forEach(call -> callIds.add(call.id()));
-		return responses.getResponses().stream().allMatch(response -> callIds.contains(response.id()));
 	}
 
 	@Override
@@ -592,56 +418,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	}
 
 	/**
-	 * Returns how many of the last {@code history} messages the prompt starts with: the
-	 * largest {@code k} for which the history's last {@code k} messages are the prompt's
-	 * first {@code k}, compared by {@link #sameContent}.
-	 */
-	private static int overlap(List<Message> history, List<Message> prompt) {
-		for (int k = Math.min(history.size(), prompt.size()); k > 0; k--) {
-			int offset = history.size() - k;
-			int i = 0;
-			while (i < k && sameContent(history.get(offset + i), prompt.get(i))) {
-				i++;
-			}
-			if (i == k) {
-				return k;
-			}
-		}
-		return 0;
-	}
-
-	/**
-	 * Compares two messages by what the model sees rather than by {@code equals}: the
-	 * type, the text, the tool calls and the tool responses. A repository may not
-	 * round-trip everything else (e.g. {@code JdbcSessionRepository} stores neither
-	 * metadata such as the finish reason nor media), so a message reloaded from the
-	 * session would otherwise never equal the one the tool-calling loop re-sends. Media
-	 * is compared only when both messages carry it.
-	 */
-	private static boolean sameContent(Message a, Message b) {
-		if (a == b) {
-			return true;
-		}
-		if (a.getMessageType() != b.getMessageType()
-				|| !Objects.requireNonNullElse(a.getText(), "").equals(Objects.requireNonNullElse(b.getText(), ""))) {
-			return false;
-		}
-		if (a instanceof AssistantMessage assistantA && b instanceof AssistantMessage assistantB
-				&& !assistantA.getToolCalls().equals(assistantB.getToolCalls())) {
-			return false;
-		}
-		if (a instanceof ToolResponseMessage toolA && b instanceof ToolResponseMessage toolB
-				&& !toolA.getResponses().equals(toolB.getResponses())) {
-			return false;
-		}
-		if (a instanceof MediaContent mediaA && b instanceof MediaContent mediaB && !mediaA.getMedia().isEmpty()
-				&& !mediaB.getMedia().isEmpty() && !mediaA.getMedia().equals(mediaB.getMedia())) {
-			return false;
-		}
-		return true;
-	}
-
-	/**
 	 * Whether the message is stored. A tool call and a tool result always are: either half
 	 * alone makes a prompt every provider rejects, and parking, resuming and interrupting a
 	 * turn read them back from the log. The {@link MessageFilter} decides for every other
@@ -672,9 +448,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// (HIGHEST_PRECEDENCE + 300): with ascending order sort, the lower value runs
 		// outer, so this places SessionMemoryAdvisor nested inside a default-configured
 		// ToolCallingAdvisor's tool-call loop rather than wrapping it -- before()/after()
-		// then run once per round, which is what the overlap() check in before() is built
-		// to tolerate (see the class Javadoc "Nesting inside a
-		// tool-calling loop" section).
+		// then run once per round, which PromptHistory's overlap with the loop's own
+		// prompt is built to tolerate.
 		private int order = Ordered.HIGHEST_PRECEDENCE + 1000;
 
 		private Scheduler scheduler = BaseAdvisor.DEFAULT_SCHEDULER;
