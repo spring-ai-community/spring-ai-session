@@ -302,6 +302,17 @@ ChatClient.builder(chatModel)
     .build();
 ```
 
+### Breaking: tool calls and tool results are always stored
+
+`SessionMemoryAdvisor` stores an assistant reply with tool calls and the tool results that
+answer it whatever the `MessageFilter` says; the filter decides for every other message.
+Either half alone makes a prompt every provider rejects, and parking, resuming and
+interrupting a turn read them back from the log. A filter such as
+`MessageFilter.byMessageType(USER, ASSISTANT)` no longer keeps tool traffic out of the
+log; to keep it out of the prompt, hide it on read with an `EventFilter`'s `messageTypes`,
+whose read guard drops the calls left without their results. The warnings about
+overriding the filter for a tool response are gone.
+
 ### New: run ids and run-scoped event ids
 
 `SessionTurnAdvisor.RUN_ID_CONTEXT_KEY` names the run a `ChatClient` call belongs to, its

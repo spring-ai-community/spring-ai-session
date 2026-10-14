@@ -75,10 +75,11 @@ import org.springframework.util.Assert;
  * prompt); all system messages are moved to the front, and exact-text duplicates are sent
  * only once.</li>
  * <li>Appends the current user message to the session, if accepted by the configured
- * {@link MessageFilter}.</li>
+ * {@link MessageFilter}; inside a tool loop, the trailing tool results, always.</li>
  * <li>After the model responds, appends the assistant message(s) to the session; messages
- * rejected by the configured {@link MessageFilter} are skipped. By default, empty
- * assistant messages (blank text, no tool calls, and no media) are filtered out.</li>
+ * rejected by the configured {@link MessageFilter} are skipped, except a reply with tool
+ * calls, which is always stored. By default, empty assistant messages (blank text, no
+ * tool calls, and no media) are filtered out.</li>
  * <li>Records every model call's token usage as a
  * {@link org.springframework.ai.session.EventType#USAGE} event; see
  * {@link Builder#recordUsage(boolean)}.</li>
@@ -108,11 +109,12 @@ import org.springframework.util.Assert;
  * keeps that from happening at both ends. On read, the configured {@link EventFilter}'s
  * {@code lastN} window is extended by the repository to the start of the turn it lands
  * in, and any tool call or tool result that still has no counterpart in the history (a
- * {@code messageTypes} filter hiding {@code TOOL} events, a log written with a
- * {@link MessageFilter} that skipped them, or a turn interrupted mid-loop) is dropped from
- * the prompt with a warning; the log is left untouched. On write, a trailing tool
- * response is stored exactly when the tool call it answers was stored, overriding the
- * {@link MessageFilter} in either direction with a warning.
+ * {@code messageTypes} filter hiding {@code TOOL} events, a log written by an earlier
+ * version with a {@link MessageFilter} that skipped them, or a turn interrupted mid-loop)
+ * is dropped from the prompt with a warning; the log is left untouched. On write, tool
+ * calls and tool results are always stored, whatever the {@link MessageFilter} says; to
+ * keep them out of the prompt, hide them on read with an {@link EventFilter}'s
+ * {@code messageTypes}.
  *
  * <p>
  * <strong>Event id generation:</strong> by default ({@link RunScopedSessionEventIdGenerator})
@@ -323,7 +325,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// request without one stores nothing.
 		Message userMessage = lastUserOrToolResponse(request.prompt().getInstructions());
 		String requestEventId = null;
-		if (userMessage != null && shouldPersistTrailing(userMessage, events, eventFilter, sessionId)) {
+		if (userMessage != null && shouldPersist(userMessage, sessionId)) {
 			requestEventId = this.requestEventIdGenerator.generate(request, userMessage);
 			this.sessionService.appendEvent(SessionEvent.builder()
 				.id(requestEventId)
@@ -523,58 +525,6 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		return responses.getResponses().stream().allMatch(response -> callIds.contains(response.id()));
 	}
 
-	/**
-	 * Decides whether the trailing prompt message is persisted. A user message follows the
-	 * configured {@link MessageFilter}. A tool response is stored exactly when the tool
-	 * call it answers was stored: the filter is overridden, with a warning, when it would
-	 * reject the response of a stored call or accept the response of a call it rejected.
-	 * When the events read cannot show whether the call was stored (a {@code messageTypes}
-	 * filter hiding assistant events, a time range, or a page window), the filter decides.
-	 */
-	private boolean shouldPersistTrailing(Message message, List<SessionEvent> events, EventFilter eventFilter,
-			String sessionId) {
-		if (!(message instanceof ToolResponseMessage response)) {
-			return shouldPersist(message, sessionId);
-		}
-		boolean accepted = this.messageFilter.shouldPersist(message);
-		Boolean callStored = isAnsweringStoredToolCall(response, events, eventFilter);
-		if (callStored == null || callStored == accepted) {
-			return shouldPersist(message, sessionId);
-		}
-		if (callStored) {
-			logger.warn("Storing a tool response the MessageFilter rejected for session [{}]: the tool call it "
-					+ "answers is in the session log and would be unanswerable without it", sessionId);
-			return true;
-		}
-		logger.warn("Skipping a tool response for session [{}]: the tool call it answers was not stored "
-				+ "(rejected by the MessageFilter), so the response alone would be an orphan", sessionId);
-		return false;
-	}
-
-	/**
-	 * Returns whether the newest stored conversation event is the assistant tool call this
-	 * response answers, or {@code null} when the events read cannot tell.
-	 */
-	private static @Nullable Boolean isAnsweringStoredToolCall(ToolResponseMessage response,
-			List<SessionEvent> events, EventFilter eventFilter) {
-		if (eventFilter.window() instanceof EventFilter.Window.Page || eventFilter.from() != null
-				|| eventFilter.to() != null
-				|| (eventFilter.messageTypes() != null && !eventFilter.messageTypes().contains(MessageType.ASSISTANT))) {
-			return null;
-		}
-		for (int i = events.size() - 1; i >= 0; i--) {
-			SessionEvent event = events.get(i);
-			if (event.getMessageType() == MessageType.SYSTEM) {
-				continue;
-			}
-			if (event.getMessageType() == MessageType.TOOL) {
-				continue; // an earlier response of the same parallel call set
-			}
-			return event.hasToolCalls() && answers((AssistantMessage) event.getMessage(), response);
-		}
-		return false;
-	}
-
 	@Override
 	public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
 		return Mono.just(request)
@@ -657,11 +607,16 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	}
 
 	/**
-	 * Returns {@code true} if the message should be persisted to the session, delegating
-	 * to the configured {@link MessageFilter}. Rejected messages are logged and not
-	 * replayed on later requests.
+	 * Whether the message is stored. A tool call and a tool result always are: either half
+	 * alone makes a prompt every provider rejects, and parking, resuming and interrupting a
+	 * turn read them back from the log. The {@link MessageFilter} decides for every other
+	 * message.
 	 */
 	private boolean shouldPersist(Message message, String sessionId) {
+		if (message instanceof ToolResponseMessage
+				|| (message instanceof AssistantMessage assistant && assistant.hasToolCalls())) {
+			return true;
+		}
 		if (!this.messageFilter.shouldPersist(message)) {
 			logger.debug("Skipping [{}] message for session [{}] — rejected by the configured MessageFilter",
 					message.getMessageType(), sessionId);
@@ -728,11 +683,12 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		/**
 		 * Filter applied before appending messages to session memory — both the current
-		 * user (or tool-response) message persisted in {@code before()} and the
-		 * assistant message(s) persisted in {@code after()}. Messages the filter rejects
-		 * are not persisted and therefore never replayed on later requests. The outgoing
-		 * prompt is unaffected. Defaults to
-		 * {@link MessageFilter#skipEmptyMessages()}.
+		 * user message persisted in {@code before()} and the assistant message(s)
+		 * persisted in {@code after()}. Messages the filter rejects are not persisted and
+		 * therefore never replayed on later requests. Tool calls and tool results are
+		 * always stored, whatever the filter says: to keep them out of the prompt, use an
+		 * {@link EventFilter}'s {@code messageTypes} on read. The outgoing prompt is
+		 * unaffected. Defaults to {@link MessageFilter#skipEmptyMessages()}.
 		 * <p>
 		 * Note: replacing the default removes the empty-assistant-message protection
 		 * (see issue #19 — some models reject empty messages replayed as history).

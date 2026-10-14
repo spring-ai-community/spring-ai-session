@@ -45,9 +45,10 @@ On every model call the memory advisor:
 4. Appends the prompt's last user message to the session, if the configured
    `MessageFilter` accepts it. Inside a tool-calling loop this is the trailing
    tool-response message instead (`Prompt.getLastUserOrToolResponseMessage()`); it is
-   stored exactly when the tool call it answers was stored, whatever the filter says.
+   always stored, whatever the filter says.
 5. After the model responds, appends the assistant message(s) through the configured
-   `MessageFilter` (default: `MessageFilter.skipEmptyMessages()`). By default, empty
+   `MessageFilter` (default: `MessageFilter.skipEmptyMessages()`); a reply with tool calls
+   is always stored. By default, empty
    assistant messages (blank text, no tool calls, and no media) are skipped — some
    models (e.g. Bedrock Converse) emit an empty `end_turn` frame after tool use that
    would otherwise be replayed and rejected on the next request.
@@ -301,18 +302,28 @@ prompt is unaffected — filtering applies to persistence only.
 | Applies when | Loading history in `before()` | Appending messages in `before()` / `after()` |
 | Operates on | Stored `SessionEvent`s | `Message`s about to be persisted |
 | Rejected items | Stay in storage, hidden from the prompt | Never written to storage |
-| Tool messages | A tool call or result left without its counterpart is dropped from the prompt | A tool response is stored exactly when its tool call was stored |
+| Tool messages | A tool call or result left without its counterpart is dropped from the prompt | Always stored, whatever the filter says |
 
 Configure it on the builder:
 
 ```java
 SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
-    // Persist only user and assistant messages (e.g. keep verbose tool
-    // responses out of the session log), still skipping empty frames.
+    // Never persist messages containing "confidential", still skipping empty frames
     .messageFilter(
-        MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
+        MessageFilter.containsText("confidential").negate()
             .and(MessageFilter.skipEmptyMessages())
     )
+    .build();
+```
+
+Tool calls and tool results are always stored, whatever the filter says: either half
+alone makes a prompt every provider rejects, and parking, resuming and interrupting a turn
+read them back from the log. To keep verbose tool traffic out of the **prompt**, hide it
+on read instead; the read guard drops the calls left without their results:
+
+```java
+SessionMemoryAdvisor.builder(sessionService)
+    .eventFilter(EventFilter.builder().messageTypes(Set.of(MessageType.USER, MessageType.ASSISTANT)).build())
     .build();
 ```
 
@@ -322,16 +333,16 @@ Built-in factories:
 |---|---|
 | `MessageFilter.all()` | Persists every message (no filtering) |
 | `MessageFilter.skipEmptyMessages()` | Skips assistant messages with blank/null text, no tool calls, and no media (**the default**) |
-| `MessageFilter.byMessageType(types...)` | Persists only the listed `MessageType`s. Leaving out `TOOL` does not strand a stored tool call: its response is stored anyway (see [Tool-call integrity](#tool-call-integrity)) |
+| `MessageFilter.byMessageType(types...)` | Persists only the listed `MessageType`s; tool calls and tool results are stored anyway |
 | `MessageFilter.containsText(keyword)` | Persists only messages whose text contains the keyword (case-insensitive) |
 
 `MessageFilter` is a `@FunctionalInterface`, so a lambda works too, and filters compose
 via `and()`, `or()`, and `negate()`:
 
 ```java
-// Never persist messages containing "confidential"
+// Persist only user messages and assistant text
 .messageFilter(
-    MessageFilter.containsText("confidential").negate()
+    MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
         .and(MessageFilter.skipEmptyMessages())
 )
 ```
@@ -498,13 +509,13 @@ advisor keeps that from happening at both ends, without touching the log:
   prompt itself, as in round 2 of a tool loop) is dropped from the prompt, and so is a tool
   message that answers no preceding call. A partially answered parallel call is dropped
   with its answers. The advisor logs a `WARN` naming the likely causes: a `messageTypes`
-  read filter hiding `TOOL` events, a `MessageFilter` that skipped them, or a turn
-  interrupted between the call and its result.
-- **Write guard.** A trailing tool response is stored exactly when the tool call it
-  answers is the newest stored event: the `MessageFilter` is overridden, with a `WARN`,
-  when it would reject the response of a stored call or accept the response of a call it
-  rejected. When the events read cannot tell (a `messageTypes` filter hiding assistant
-  events, or a page window), the filter decides.
+  read filter hiding `TOOL` events, a log an earlier version wrote with a `MessageFilter`
+  that skipped them, or a turn interrupted between the call and its result.
+- **Write side.** Tool calls and tool results are always stored, whatever the
+  `MessageFilter` says, so the log never holds one half without the other. A replay of a
+  call without a run id writes its tool results again after the first attempt's answer;
+  the read guard drops those from the prompt. With a run id the replay writes nothing
+  (see [Idempotent session-event ids](#idempotent-session-event-ids)).
 ---
 
 ## Concurrent compaction safety

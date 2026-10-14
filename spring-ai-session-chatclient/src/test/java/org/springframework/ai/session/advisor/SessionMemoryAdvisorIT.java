@@ -704,34 +704,48 @@ class SessionMemoryAdvisorIT {
 	}
 
 	@Test
-	void customMessageFilterExcludesToolResponseMessages() {
-		// Store user + assistant turns but keep verbose tool responses out of the
-		// session log.
+	void toolMessagesAreStoredWhateverTheMessageFilterSays() {
+		// A filter that keeps only user and assistant text cannot split a tool call from
+		// its result: both are always stored; the prompt hides them with an EventFilter
 		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
-			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT)
-				.and(MessageFilter.skipEmptyMessages()))
+			.messageFilter(MessageFilter.byMessageType(MessageType.USER)
+				.or(message -> message instanceof AssistantMessage assistant && !assistant.hasToolCalls()))
 			.build();
 		AdvisorChain chain = mock(AdvisorChain.class);
+		UserMessage user = new UserMessage("Weather in Paris?");
+		AssistantMessage call = toolCall("call-1");
+		filteringAdvisor.before(buildRequest(this.sessionId, user.getText()), chain);
+		filteringAdvisor.after(buildResponseFromMessages(this.sessionId, call), chain);
 
-		// Regular user turn is persisted
-		filteringAdvisor.before(buildRequest(this.sessionId, "What is the weather?"), chain);
-		assertThat(this.sessionService.getEvents(this.sessionId)).hasSize(1);
-
-		// A tool-response turn (prompt whose last message is a ToolResponseMessage) is
-		// not persisted
-		ToolResponseMessage toolResponse = ToolResponseMessage.builder()
-			.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "{\"temp\":21}")))
-			.build();
-		Prompt prompt = new Prompt(List.of(new UserMessage("What is the weather?"), toolResponse));
-		ChatClientRequest toolRequest = ChatClientRequest.builder()
-			.prompt(prompt)
+		ChatClientRequest round2 = ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(user, call, toolResponse("call-1"))))
 			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
 			.build();
-		filteringAdvisor.before(toolRequest, chain);
+		filteringAdvisor.before(round2, chain);
 
+		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getMessageType)
+			.containsExactly(MessageType.USER, MessageType.ASSISTANT, MessageType.TOOL);
+	}
+
+	@Test
+	void aReplyWithToolCallsIsStoredWholeEvenWhenTheFilterRejectsItsText() {
+		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.messageFilter(MessageFilter.containsText("confidential").negate())
+			.build();
+		AdvisorChain chain = mock(AdvisorChain.class);
+		AssistantMessage call = AssistantMessage.builder()
+			.content("Checking the confidential report.")
+			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "read_report", "{}")))
+			.build();
+
+		filteringAdvisor.after(buildResponseFromMessages(this.sessionId, call), chain);
+		filteringAdvisor.after(buildResponse(this.sessionId, "The confidential figures are up."), chain);
+
+		// The call is kept whole, so its result can follow; the plain text is filtered
 		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
 		assertThat(events).hasSize(1);
-		assertThat(events.get(0).getMessageType()).isEqualTo(MessageType.USER);
+		assertThat(events.get(0).hasToolCalls()).isTrue();
+		assertThat(events.get(0).getMessage().getText()).isEqualTo("Checking the confidential report.");
 	}
 
 	@Test
@@ -915,50 +929,6 @@ class SessionMemoryAdvisorIT {
 		ChatClientRequest halved = this.advisor.before(buildRequest(partial, "Thanks"), mock(AdvisorChain.class));
 		assertThat(describe(halved.prompt().getInstructions())).containsExactly("Weather and time?", "Sunny.",
 				"Thanks");
-	}
-
-	@Test
-	void aToolResponseWhoseCallWasStoredIsPersistedDespiteTheMessageFilter() {
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
-			.messageFilter(MessageFilter.byMessageType(MessageType.USER, MessageType.ASSISTANT))
-			.build();
-		AdvisorChain chain = mock(AdvisorChain.class);
-		UserMessage user = new UserMessage("Weather in Paris?");
-		AssistantMessage call = toolCall("call-1");
-		filteringAdvisor.before(buildRequest(this.sessionId, user.getText()), chain);
-		filteringAdvisor.after(buildResponseFromMessages(this.sessionId, call), chain);
-
-		ChatClientRequest round2 = ChatClientRequest.builder()
-			.prompt(new Prompt(List.of(user, call, toolResponse("call-1"))))
-			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
-			.build();
-		filteringAdvisor.before(round2, chain);
-
-		// The filter would drop the TOOL message, but its call is in the log
-		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getMessageType)
-			.containsExactly(MessageType.USER, MessageType.ASSISTANT, MessageType.TOOL);
-	}
-
-	@Test
-	void aToolResponseWhoseCallWasNotStoredIsSkippedDespiteTheMessageFilter() {
-		SessionMemoryAdvisor filteringAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
-			.messageFilter(message -> !(message instanceof AssistantMessage assistant && assistant.hasToolCalls()))
-			.build();
-		AdvisorChain chain = mock(AdvisorChain.class);
-		UserMessage user = new UserMessage("Weather in Paris?");
-		AssistantMessage call = toolCall("call-1");
-		filteringAdvisor.before(buildRequest(this.sessionId, user.getText()), chain);
-		filteringAdvisor.after(buildResponseFromMessages(this.sessionId, call), chain);
-
-		ChatClientRequest round2 = ChatClientRequest.builder()
-			.prompt(new Prompt(List.of(user, call, toolResponse("call-1"))))
-			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
-			.build();
-		filteringAdvisor.before(round2, chain);
-
-		// The filter accepts the TOOL message, but the call it answers was never stored
-		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getMessageType)
-			.containsExactly(MessageType.USER);
 	}
 
 	@Test
