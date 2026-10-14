@@ -282,10 +282,10 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			.context(RESPONSE_EVENT_IDS_CONTEXT_KEY, List.copyOf(responseEventIds))
 			.build();
 
-		// 1.1. Record the call's token usage. The id derives from the reply's first
-		// message, so a retried after() with a deterministic generator counts it once.
+		// 1.1. Record the call's token usage. The id derives from the first stored reply's,
+		// so a retried after() with a deterministic generator counts it once.
 		if (this.recordUsage && response.chatResponse() != null) {
-			recordUsage(response, response.chatResponse(), sessionId);
+			recordUsage(response, response.chatResponse(), responseEventIds, sessionId);
 		}
 
 		// 2. A turn interrupted while the model answered: the reply's tool calls do not
@@ -337,15 +337,22 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		return found.isEmpty() ? null : found.get(0);
 	}
 
-	private void recordUsage(ChatClientResponse response, ChatResponse chatResponse, String sessionId) {
+	/**
+	 * Records the call's usage under the id of the reply it belongs to, plus
+	 * {@code -usage}: the first stored reply's, or, when none was stored, the one the
+	 * generator gives the first reply.
+	 */
+	private void recordUsage(ChatClientResponse response, ChatResponse chatResponse, List<String> responseEventIds,
+			String sessionId) {
 		TokenUsage usage = TokenUsage.of(chatResponse.getMetadata().getUsage());
 		if (usage.isEmpty() || chatResponse.getResults().isEmpty()) {
 			return;
 		}
-		Message first = chatResponse.getResults().get(0).getOutput();
+		String replyId = !responseEventIds.isEmpty() ? responseEventIds.get(0)
+				: this.responseEventIdGenerator.generate(response, chatResponse.getResults().get(0).getOutput());
 		SessionEvent usageEvent = UsageEvents.of(sessionId, usage, chatResponse.getMetadata().getModel());
 		this.sessionService.appendEvent(SessionEvent.builder()
-			.id(this.responseEventIdGenerator.generate(response, first) + "-usage")
+			.id(replyId + "-usage")
 			.sessionId(sessionId)
 			.type(usageEvent.getType())
 			.payload(usageEvent.getPayload())

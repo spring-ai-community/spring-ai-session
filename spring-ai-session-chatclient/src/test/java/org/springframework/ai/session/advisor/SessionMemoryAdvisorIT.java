@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -1250,6 +1251,35 @@ class SessionMemoryAdvisorIT {
 		idempotent.after(reply, chain);
 
 		assertThat(this.sessionService.usage(this.sessionId)).isEqualTo(new TokenUsage(100, 10, 110, 0, 0));
+	}
+
+	@Test
+	void usageTakesIdOfStoredReplyWithoutAskingGeneratorAgain() {
+		AtomicInteger calls = new AtomicInteger();
+		SessionMemoryAdvisor memory = SessionMemoryAdvisor.builder(this.sessionService)
+			.responseEventIdGenerator((response, message) -> "reply-" + calls.incrementAndGet())
+			.build();
+
+		memory.after(buildResponseWithUsage(this.sessionId, "Hello", 100, 10), mock(AdvisorChain.class));
+
+		assertThat(calls).hasValue(1);
+		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getId)
+			.containsExactly("reply-1", "reply-1-usage");
+	}
+
+	@Test
+	void usageOfSkippedReplyAsksGeneratorOnce() {
+		AtomicInteger calls = new AtomicInteger();
+		SessionMemoryAdvisor memory = SessionMemoryAdvisor.builder(this.sessionService)
+			.responseEventIdGenerator((response, message) -> "reply-" + calls.incrementAndGet())
+			.build();
+
+		// The default filter skips a blank reply; its usage is recorded all the same
+		memory.after(buildResponseWithUsage(this.sessionId, "   ", 100, 10), mock(AdvisorChain.class));
+
+		assertThat(calls).hasValue(1);
+		assertThat(this.sessionService.getEvents(this.sessionId)).extracting(SessionEvent::getId)
+			.containsExactly("reply-1-usage");
 	}
 
 	@Test
