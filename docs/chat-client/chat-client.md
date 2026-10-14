@@ -69,10 +69,17 @@ On every `ChatClient` call the turn advisor:
    that fails ends it with `ERROR`, a cancelled stream with `INTERRUPTED`. A turn someone
    else ended (interrupted, out of budget) is left as it is. See
    [Status, turns and archive](../session-management/concepts.md#status-turns-and-archive).
-4. If a trigger fires, compacts the session **synchronously** before returning, once per
-   turn. The whole turn is written by then, so compaction never races the message
-   appends. A failed compaction is logged; the reply is returned and the compaction is
-   retried after the next turn.
+4. If a trigger fires, compacts the session once per turn. By default it does so
+   **synchronously**, before returning: the whole turn is written by then, so compaction
+   never races the message appends. With `asyncCompaction(true)` it compacts after the
+   call returns, on the advisor's scheduler, so a summarizing strategy adds no model call
+   to the reply's latency. For a `call()`, it runs with the caller's thread-local context,
+   such as Spring Security's `SecurityContext`, so an authorizing `SessionService` still
+   knows the caller; a `stream()` has no such context yet (see
+   [Streaming calls](../session-management/scope-and-security.md)).
+   The advisor runs one compaction per session at a time; one that a new turn's writes
+   overtake is skipped and retried after that turn. A failed compaction is
+   logged; the reply is returned and the compaction is retried after the next turn.
 
 The diagram below shows the memory advisor's round-trip: the **before** phase loads history and builds the
 expanded prompt, the **after** phase appends the assistant message and compacts on trigger.

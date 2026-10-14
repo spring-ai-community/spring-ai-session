@@ -334,6 +334,15 @@ deprecated: it derives ids from the message's content, so identical messages col
 nothing was stored for a request, `REQUEST_EVENT_ID_CONTEXT_KEY` is now absent instead of
 `null`. See [Idempotent session-event ids](chat-client/chat-client.md#idempotent-session-event-ids).
 
+### New: asynchronous compaction
+
+`SessionTurnAdvisor.builder(...).asyncCompaction(true)`, or `asyncCompaction(true)` on
+`SessionAdvisors`, compacts after the call returns, on the advisor's scheduler, instead of
+before: a summarizing strategy no longer delays the reply. For a `call()` it runs with the
+caller's thread-local context, such as the security context. The advisor runs one compaction per
+session at a time, and one that a new turn's writes overtake is skipped and retried after
+that turn. The default stays synchronous.
+
 ### New: `SessionAdvisors`
 
 `SessionAdvisors.builder(sessionService)...build()` returns the session advisors as a

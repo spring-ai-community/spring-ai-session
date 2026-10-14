@@ -116,6 +116,8 @@ public final class SessionAdvisors {
 
 		@Nullable private BudgetPolicy budgetPolicy;
 
+		private boolean asyncCompaction;
+
 		private Consumer<SessionMemoryAdvisor.Builder> memory = memory -> {
 		};
 
@@ -159,6 +161,15 @@ public final class SessionAdvisors {
 			return this;
 		}
 
+		/**
+		 * Whether compaction runs after the call returns, on the scheduler; see
+		 * {@link SessionTurnAdvisor.Builder#asyncCompaction(boolean)}.
+		 */
+		public Builder asyncCompaction(boolean asyncCompaction) {
+			this.asyncCompaction = asyncCompaction;
+			return this;
+		}
+
 		/** Adds a {@link BudgetAdvisor} that refuses model calls once the budget is reached. */
 		public Builder budgetPolicy(BudgetPolicy budgetPolicy) {
 			Assert.notNull(budgetPolicy, "budgetPolicy must not be null");
@@ -183,7 +194,8 @@ public final class SessionAdvisors {
 
 			SessionTurnAdvisor.Builder turn = SessionTurnAdvisor.builder(this.sessionService)
 				.agent(this.agent)
-				.scheduler(scheduler);
+				.scheduler(scheduler)
+				.asyncCompaction(this.asyncCompaction);
 			if (this.toolCallingManager != null) {
 				turn.toolCallingManager(this.toolCallingManager);
 			}

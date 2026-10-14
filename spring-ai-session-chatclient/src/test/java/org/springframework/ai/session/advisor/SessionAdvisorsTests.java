@@ -18,6 +18,7 @@ package org.springframework.ai.session.advisor;
 
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -139,6 +140,27 @@ class SessionAdvisorsTests {
 			.getEvents(this.sessionId, EventFilter.builder().eventTypes(Set.of(EventType.USAGE)).build())).isEmpty();
 		assertThat(ScriptedChatModel.describe(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
 			.containsExactly("How are you?", "Fine.");
+	}
+
+	@Test
+	void asyncCompactionReachesTurnAdvisor() throws Exception {
+		SessionTurnAdvisorTests.HeldCompaction held = new SessionTurnAdvisorTests.HeldCompaction();
+		List<Advisor> advisors = SessionAdvisors.builder(this.sessionService)
+			.compaction(request -> true, held)
+			.asyncCompaction(true)
+			.build();
+		SessionTurnAdvisor turn = (SessionTurnAdvisor) advisors.get(0);
+		this.model.thenAnswer("Hi!");
+
+		// The reply comes back while the compaction is held
+		say(client(advisors), "Hello");
+		assertThat(held.started.await(5, TimeUnit.SECONDS)).isTrue();
+		assertThat(turn.isCompacting(this.sessionId)).isTrue();
+		held.release.countDown();
+		for (int i = 0; i < 100 && turn.isCompacting(this.sessionId); i++) {
+			Thread.sleep(50);
+		}
+		assertThat(turn.isCompacting(this.sessionId)).isFalse();
 	}
 
 	private ChatClient client(List<Advisor> advisors, ToolCallback... tools) {

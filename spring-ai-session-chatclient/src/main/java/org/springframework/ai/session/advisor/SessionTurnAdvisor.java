@@ -22,9 +22,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import io.micrometer.context.ContextSnapshotFactory;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -90,9 +92,11 @@ import org.springframework.util.Assert;
  * when a stream is cancelled). A turn someone else ended (interrupted, or out of budget)
  * is left as it is.</li>
  * <li>Compacts the session once the turn has ended, if a {@link Builder#compactionTrigger
- * trigger} fires. Compaction is best-effort: a failure is logged and the reply returned,
- * and it is retried after the next turn. It appends a boundary with an optimistic
- * compare-and-swap, so of two concurrent compactions only the first lands.</li>
+ * trigger} fires: before the call returns, or after it on the scheduler with
+ * {@link Builder#asyncCompaction(boolean)}. Compaction is best-effort: a failure is logged
+ * and the reply returned, and it is retried after the next turn. It appends a boundary
+ * with an optimistic compare-and-swap, so of two concurrent compactions only the first
+ * lands, and a compaction that a new turn's writes overtake is skipped and retried.</li>
  * </ol>
  * <p>
  * <b>Tool calls that need confirmation.</b> When the tool-calling loop pauses on calls
@@ -153,6 +157,9 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 
 	private static final Logger logger = LoggerFactory.getLogger(SessionTurnAdvisor.class);
 
+	/** Carries the caller's thread-local context, such as the security context, to an async compaction. */
+	private static final ContextSnapshotFactory CONTEXT_SNAPSHOTS = ContextSnapshotFactory.builder().build();
+
 	private final SessionService sessionService;
 
 	private final ToolCallingManager toolCallingManager;
@@ -167,6 +174,11 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 
 	@Nullable private final AgentSnapshot agent;
 
+	private final boolean asyncCompaction;
+
+	/** The sessions an asynchronous compaction of this advisor runs on, so it runs once each. */
+	private final Set<String> compacting = ConcurrentHashMap.newKeySet();
+
 	private SessionTurnAdvisor(Builder builder) {
 		this.sessionService = builder.sessionService;
 		this.toolCallingManager = builder.toolCallingManager;
@@ -175,6 +187,7 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 		this.compactionTrigger = builder.compactionTrigger;
 		this.compactionStrategy = builder.compactionStrategy;
 		this.agent = builder.agent;
+		this.asyncCompaction = builder.asyncCompaction;
 	}
 
 	public static Builder builder(SessionService sessionService) {
@@ -497,14 +510,51 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 		}
 	}
 
-	/** Ends the completed turn, then compacts the session if the trigger fires. */
+	/**
+	 * Ends the completed turn, then compacts the session if the trigger fires: now, or on
+	 * the scheduler when compaction is asynchronous and none runs on the session yet.
+	 */
 	private void finish(String sessionId) {
 		if (!end(sessionId, StopReason.END_TURN) || this.compactionTrigger == null
 				|| this.compactionStrategy == null) {
 			return;
 		}
+		if (!this.asyncCompaction) {
+			compact(sessionId, this.compactionTrigger, this.compactionStrategy);
+		}
+		else if (this.compacting.add(sessionId)) {
+			CompactionTrigger trigger = this.compactionTrigger;
+			CompactionStrategy strategy = this.compactionStrategy;
+			// The caller's thread-local context goes with it: an authorizing SessionService
+			// takes the caller from the security context, and tracing keeps its parent
+			Runnable task = CONTEXT_SNAPSHOTS.captureAll().wrap(() -> {
+				try {
+					compact(sessionId, trigger, strategy);
+				}
+				finally {
+					this.compacting.remove(sessionId);
+				}
+			});
+			try {
+				this.scheduler.schedule(task);
+			}
+			catch (RuntimeException ex) {
+				this.compacting.remove(sessionId);
+				logger.warn("Could not schedule the compaction of session [{}]; it will be retried after the next "
+						+ "turn", sessionId, ex);
+			}
+		}
+	}
+
+	/** Whether an asynchronous compaction of this advisor runs on the session. */
+	boolean isCompacting(String sessionId) {
+		return this.compacting.contains(sessionId);
+	}
+
+	/** Compacts the session if the trigger fires; a failure is logged, not thrown. */
+	private void compact(String sessionId, CompactionTrigger trigger, CompactionStrategy strategy) {
 		try {
-			this.sessionService.compact(sessionId, this.compactionTrigger, this.compactionStrategy);
+			this.sessionService.compact(sessionId, trigger, strategy);
 		}
 		catch (RuntimeException ex) {
 			logger.warn("Compaction failed for session [{}]; the event log is unchanged and compaction will be "
@@ -643,6 +693,8 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 
 		@Nullable private AgentSnapshot agent;
 
+		private boolean asyncCompaction;
+
 		private Builder(SessionService sessionService) {
 			Assert.notNull(sessionService, "sessionService must not be null");
 			this.sessionService = sessionService;
@@ -682,6 +734,22 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 		/** How to compact; set together with {@link #compactionTrigger}. */
 		public Builder compactionStrategy(CompactionStrategy strategy) {
 			this.compactionStrategy = strategy;
+			return this;
+		}
+
+		/**
+		 * Whether compaction runs after the call returns, on the {@link #scheduler}, rather
+		 * than before it: a summarizing strategy then adds no model call to the reply's
+		 * latency. For a {@code call()} it runs with the caller's thread-local context (the
+		 * security context, the current observation), captured through Micrometer's context
+		 * propagation; a {@code stream()} ends on the scheduler, which has none to carry. This
+		 * advisor runs one compaction per session at a time; across advisors, the
+		 * compare-and-swap keeps only one. A new turn that writes to the session while it
+		 * runs makes it skip, and it is retried after that turn. With an immediate
+		 * scheduler it runs before the call returns after all. Defaults to {@code false}.
+		 */
+		public Builder asyncCompaction(boolean asyncCompaction) {
+			this.asyncCompaction = asyncCompaction;
 			return this;
 		}
 

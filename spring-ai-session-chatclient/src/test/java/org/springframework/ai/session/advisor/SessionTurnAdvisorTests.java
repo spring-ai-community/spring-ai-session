@@ -20,9 +20,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
+import io.micrometer.context.ContextRegistry;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.client.ChatClient;
@@ -30,6 +35,7 @@ import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
@@ -54,6 +60,9 @@ import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.SessionStatusEvents;
 import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.ToolConfirmations;
+import org.springframework.ai.session.compaction.CompactionRequest;
+import org.springframework.ai.session.compaction.CompactionResult;
+import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
@@ -259,6 +268,90 @@ class SessionTurnAdvisorTests {
 			.isEqualTo("Hi!");
 		assertThat(session().stopReason()).isEqualTo(StopReason.END_TURN);
 		assertThat(this.sessionService.getActiveMessages(this.sessionId)).hasSize(2);
+	}
+
+	@Test
+	void asyncCompactionRunsAfterCallReturns() throws Exception {
+		HeldCompaction held = new HeldCompaction();
+		SessionTurnAdvisor turn = SessionTurnAdvisor.builder(this.sessionService)
+			.compactionTrigger(request -> true)
+			.compactionStrategy(held)
+			.asyncCompaction(true)
+			.build();
+		ChatClient client = client(weather(), turn, ToolCallingAdvisor.builder().build());
+
+		// The reply comes back while the compaction is still held
+		assertThat(say(client, "Hello", "Hi!")).isEqualTo("Hi!");
+		assertThat(held.started.await(5, TimeUnit.SECONDS)).isTrue();
+		assertThat(turn.isCompacting(this.sessionId)).isTrue();
+		held.release.countDown();
+		await(() -> !turn.isCompacting(this.sessionId));
+
+		// The next turn's compaction keeps it, the newest turn
+		say(client, "Still there?", "Yes.");
+		await(() -> describe(new Prompt(this.sessionService.getActiveMessages(this.sessionId)))
+			.equals(List.of("Still there?", "Yes.")));
+	}
+
+	@Test
+	void asyncCompactionThatNewTurnOvertakesRunsAgainAfterIt() throws Exception {
+		this.sessionService.create(CreateSessionRequest.builder().id(this.sessionId).build());
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("Earlier question"));
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("Earlier answer"));
+		HeldCompaction held = new HeldCompaction();
+		SessionTurnAdvisor turn = SessionTurnAdvisor.builder(this.sessionService)
+			.compactionTrigger(request -> true)
+			.compactionStrategy(held)
+			.asyncCompaction(true)
+			.build();
+		ChatClient client = client(weather(), turn, ToolCallingAdvisor.builder().build());
+		say(client, "Hello", "Hi!");
+		assertThat(held.started.await(5, TimeUnit.SECONDS)).isTrue();
+
+		// A second turn writes while the first compaction runs: no second compaction
+		// starts, and the running one, overtaken, writes nothing
+		say(client, "Still there?", "Yes.");
+		held.release.countDown();
+		await(() -> !turn.isCompacting(this.sessionId));
+		assertThat(held.calls).hasValue(1);
+		assertThat(this.sessionService.getActiveMessages(this.sessionId)).hasSize(6);
+
+		// The next turn's compaction lands
+		say(client, "Bye", "Bye!");
+		await(() -> describe(new Prompt(this.sessionService.getActiveMessages(this.sessionId)))
+			.equals(List.of("Bye", "Bye!")));
+		assertThat(held.calls).hasValue(2);
+	}
+
+	@Test
+	void asyncCompactionRunsWithCallersContext() throws Exception {
+		// Stands in for Spring Security's SecurityContext, which registers the same way
+		ThreadLocal<String> caller = new ThreadLocal<>();
+		ContextRegistry.getInstance()
+			.registerThreadLocalAccessor("test.caller", caller::get, caller::set, caller::remove);
+		AtomicReference<String> seen = new AtomicReference<>();
+		CountDownLatch compacted = new CountDownLatch(1);
+		CompactionStrategy recording = request -> {
+			seen.set(caller.get());
+			compacted.countDown();
+			return CompactionResult.unchanged();
+		};
+		ChatClient client = client(weather(), SessionTurnAdvisor.builder(this.sessionService)
+			.compactionTrigger(request -> true)
+			.compactionStrategy(recording)
+			.asyncCompaction(true)
+			.build(), ToolCallingAdvisor.builder().build());
+		try {
+			caller.set("alice");
+			say(client, "Hello", "Hi!");
+
+			assertThat(compacted.await(5, TimeUnit.SECONDS)).isTrue();
+			assertThat(seen).hasValue("alice");
+		}
+		finally {
+			caller.remove();
+			ContextRegistry.getInstance().removeThreadLocalAccessor("test.caller");
+		}
 	}
 
 	@Test
@@ -816,6 +909,38 @@ class SessionTurnAdvisorTests {
 			.stream()
 			.map(SessionStatusEvents::status)
 			.toList();
+	}
+
+	/** Keeps the newest turn, once released. */
+	static final class HeldCompaction implements CompactionStrategy {
+
+		final CountDownLatch started = new CountDownLatch(1);
+
+		final CountDownLatch release = new CountDownLatch(1);
+
+		final AtomicInteger calls = new AtomicInteger();
+
+		@Override
+		public CompactionResult compact(CompactionRequest request) {
+			this.calls.incrementAndGet();
+			this.started.countDown();
+			try {
+				this.release.await(5, TimeUnit.SECONDS);
+				return SlidingWindowCompactionStrategy.builder().maxEvents(2).build().compact(request);
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException(ex);
+			}
+		}
+
+	}
+
+	private static void await(BooleanSupplier condition) throws InterruptedException {
+		for (int i = 0; i < 100 && !condition.getAsBoolean(); i++) {
+			Thread.sleep(50);
+		}
+		assertThat(condition.getAsBoolean()).isTrue();
 	}
 
 	record City(String city) {
