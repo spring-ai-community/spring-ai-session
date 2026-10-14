@@ -48,6 +48,8 @@ import org.springframework.ai.agent.serialization.MessageModule;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.model.tool.ToolCallDecision;
+import org.springframework.ai.model.tool.ToolCallDecisions;
 import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
@@ -62,7 +64,7 @@ import org.springframework.ai.session.SessionStatusEvents;
 import org.springframework.ai.session.SessionTreeEvents;
 import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.TokenUsage;
-import org.springframework.ai.session.ToolConfirmation;
+import org.springframework.ai.session.ToolConfirmations;
 import org.springframework.ai.session.UsageEvents;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -199,12 +201,16 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 
 	/** An answer as the log stores it: decisions in the shape every integration writes, anything else as JSON. */
 	private Object encodeAnswer(Object answer) {
-		if (answer instanceof ToolConfirmation decision) {
-			return ToolConfirmation.asAnswer(List.of(decision));
+		if (answer instanceof ToolCallDecision decision) {
+			return ToolConfirmations.asAnswer(ToolCallDecisions.of(decision));
 		}
-		if (answer instanceof java.util.Collection<?> decisions
-				&& decisions.stream().allMatch(ToolConfirmation.class::isInstance)) {
-			return ToolConfirmation.asAnswer(decisions.stream().map(ToolConfirmation.class::cast).toList());
+		if (answer instanceof ToolCallDecisions decisions) {
+			return ToolConfirmations.asAnswer(decisions);
+		}
+		if (answer instanceof java.util.Collection<?> decisions && !decisions.isEmpty()
+				&& decisions.stream().allMatch(ToolCallDecision.class::isInstance)) {
+			return ToolConfirmations
+				.asAnswer(new ToolCallDecisions(decisions.stream().map(ToolCallDecision.class::cast).toList()));
 		}
 		return this.jsonMapper.convertValue(answer, Object.class);
 	}
@@ -253,10 +259,22 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 			logger.warn("Run [{}] does not hold the turn of session [{}]; leaving it as it is", runId.runId(), root);
 			return;
 		}
-		String kind = (event.payload() instanceof ToolConfirmationFeature.PendingToolCall)
-				? Interaction.KIND_TOOL_CONFIRMATION : Interaction.KIND_INTERRUPT;
-		Interaction question = new Interaction(kind, event.path(),
-				this.jsonMapper.convertValue(event.payload(), Object.class), null);
+		Interaction question;
+		if (event.payload() instanceof ToolConfirmationFeature.PendingToolCall pending) {
+			// The same question as a paused tool-calling loop parks on; the gate names the
+			// call by its tool
+			AssistantMessage reply = AssistantMessage.builder()
+				.content("")
+				.toolCalls(List.of(
+						new AssistantMessage.ToolCall(pending.name(), "function", pending.name(), pending.arguments())))
+				.build();
+			Interaction asked = ToolConfirmations.question(reply, List.of(pending.name()));
+			question = new Interaction(asked.kind(), event.path(), asked.payload(), ToolCallDecision.class.getName());
+		}
+		else {
+			question = new Interaction(Interaction.KIND_INTERRUPT, event.path(),
+					this.jsonMapper.convertValue(event.payload(), Object.class), null);
+		}
 		try {
 			this.sessions.park(root, question, List.of());
 		}

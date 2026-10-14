@@ -369,7 +369,7 @@ flowchart TB
     core["spring-ai-session<br/>model · service · repositories · compaction · recall tools<br/>deps: spring-ai-model, Reactor"]
     jdbc["spring-ai-session-jdbc"]
     sec["spring-ai-session-security"]
-    cc["spring-ai-session-chatclient<br/>SessionMemoryAdvisor · ToolConfirmationAdvisor · BudgetAdvisor"]
+    cc["spring-ai-session-chatclient<br/>SessionTurnAdvisor · SessionMemoryAdvisor · BudgetAdvisor"]
     ag["spring-ai-session-agent<br/>SessionFeature · SessionCheckpointer · budget and tool features"]
     au["spring-ai-agent-utils<br/>TaskTool · ClaudeSubagentExecutor"]
     saa["spring-ai-agent"]
@@ -389,27 +389,28 @@ the Boot auto-configuration and a JDBC starter.
 This stays the primary way to use the library. A typical setup with a tool that needs approval:
 
 ```java
-ToolConfirmationPolicy policy = ToolConfirmationPolicy.forTools("bookFlight");
+ToolCallingManager manager = ToolCallingManager.builder().build();   // bookFlight is @Tool(requiresConfirmation = true)
 
 ChatClient chatClient = ChatClient.builder(chatModel)
     .defaultAdvisors(
-        ToolCallingAdvisor.builder()                               // +300   the tool loop
-            .toolExecutionEligibilityChecker(policy.eligibilityChecker())
-            .conversationHistoryEnabled(false)                     //        the session owns the history
-            .build(),
-        ToolConfirmationAdvisor.builder(sessionService).policy(policy).build(),   // +900   park / resume
-        SessionMemoryAdvisor.builder(sessionService).build(),                     // +1000  history, events
-        BudgetAdvisor.builder(sessionService).policy(budgetPolicy).build())       // +1100  budget
+        SessionTurnAdvisor.builder(sessionService).toolCallingManager(manager).build(), // +200   turn, park / resume
+        ToolCallingAdvisor.builder().toolCallingManager(manager).build(),               // +300   the tool loop
+        SessionMemoryAdvisor.builder(sessionService).build(),                           // +1000  history, events
+        BudgetAdvisor.builder(sessionService).policy(budgetPolicy).build())             // +1100  budget
     .defaultTools(travelTools)
     .build();
 ```
 
+- The turn advisor runs outside the tool loop, once per call. It brackets the turn with `STATUS`
+  events, whatever way the loop ends, and compacts once the turn has ended.
 - The memory advisor runs inside the tool loop, once per round. It loads the history, stores every
-  message, brackets the turn with `STATUS` events and records `USAGE`.
-- When the model asks for `bookFlight`, the loop doesn't run it; the gate parks the turn. The reply
-  comes back to the application with the tool call in it.
-- The next request carries the decision (`ToolConfirmation.allow(callId)` or `deny(callId, reason)`) and
-  no new text. The gate resumes the turn, runs the allowed call and the loop goes on.
+  message and records `USAGE`.
+- When the model asks for `bookFlight`, Spring AI's tool calling pauses before running it
+  ([spring-ai#7157](https://github.com/spring-projects/spring-ai/pull/7157)), and the turn advisor
+  parks the turn. The reply comes back to the application with the tool call in it.
+- The next request carries the decision (`ToolCallDecision.allow(callId)` or `deny(callId, reason)`)
+  and no new text. The turn advisor resumes the turn, runs the paused call from the log and the loop
+  goes on.
 
 ### 4.3 agent-utils: sub-agents on child sessions
 
@@ -463,7 +464,7 @@ this works in detail.
 | Thread | A child `Session` |
 | Turn, `running` → `idle` + stop reason | `startTurn` / `endTurn`, `STATUS` events |
 | Event log, content blocks | `SessionEvent`s; messages stored as `MessagePart`s |
-| Tool confirmation (`requires_action`) | `ToolConfirmationAdvisor`, `park` / `resume`, `INTERACTION` |
+| Tool confirmation (`requires_action`) | `@Tool(requiresConfirmation)` in Spring AI; `SessionTurnAdvisor`, `park` / `resume`, `INTERACTION` |
 | Interrupt | `SessionService.interrupt` |
 | Usage and budget | `USAGE` events, `BudgetPolicy`, `BudgetAdvisor` |
 | Thread created, message sent / received | `CHILD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED` |
@@ -506,11 +507,9 @@ Things I'd like to discuss:
 - **Four small asks of spring-ai-agent,** each removing a workaround: the agent's identity on its
   context, the resume type on an interruption, a non-consuming read of the resume value, and a unique
   path for an agent called as a tool.
-- **Release order.** 0.11.0 needs Spring AI 2.1. agent-utils 0.14.0 needs 0.11.0. The agent module needs
-  a published spring-ai-agent.
-- **A known bug.** With the tool loop's own history on (the default), the memory advisor sends part of
-  the history twice in a tool loop, from the second turn of a session on. `conversationHistoryEnabled(false)` avoids it,
-  as in 4.2; the fix belongs in the advisor.
+- **Release order.** 0.11.0 needs Spring AI 2.1 with tool call confirmation
+  ([spring-ai#7157](https://github.com/spring-projects/spring-ai/pull/7157)). agent-utils 0.14.0 needs
+  0.11.0. The agent module needs a published spring-ai-agent.
 - **Stopping a running ChatClient loop.** `interrupt` records the stop, but nothing ends a tool loop
   that is already running. A small per-round check advisor does it. It should move into the
   ChatClient module.

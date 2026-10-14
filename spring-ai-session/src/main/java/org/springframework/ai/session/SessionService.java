@@ -140,7 +140,7 @@ public interface SessionService {
 	/**
 	 * Ends the running turn and names the events it waits on: for
 	 * {@link StopReason#REQUIRES_ACTION}, the assistant message whose tool calls need a
-	 * {@link ToolConfirmation}. The ids go into the {@link EventType#STATUS} event's
+	 * person's decision ({@link ToolConfirmations}). The ids go into the {@link EventType#STATUS} event's
 	 * payload ({@link SessionStatusEvents#PAYLOAD_EVENT_IDS}).
 	 * @param eventIds the events the turn waits on; empty for any other stop reason
 	 * @return the session, idle

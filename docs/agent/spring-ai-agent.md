@@ -97,7 +97,7 @@ agent = ModelAwareGraphAgent.builder(Graphs.toolCallLoop(), chatModel)
     .enable(feature)
     .enable(new CheckpointerFeature(feature.checkpointer()))
     .enable(new BudgetFeature(sessionService, BudgetPolicy.fixed(Budget.ofTotalTokens(200_000))))
-    .enable(new ToolConfirmationFeature(ToolConfirmationPolicy.forTools("bash")))
+    .enable(new ToolConfirmationFeature(ToolCallConfirmationPolicy.forTools("bash")))
     .build();
 ```
 
@@ -105,11 +105,15 @@ agent = ModelAwareGraphAgent.builder(Graphs.toolCallLoop(), chatModel)
   usage against the budget the policy gives the root, ends the turn with `BUDGET_REACHED` and
   refuses the call with a `BudgetReachedException` once the budget is reached. The same
   `Budget` and `BudgetPolicy` the `ChatClient` module's `BudgetAdvisor` uses.
-- `ToolConfirmationFeature` is a `ToolCallInterceptor`: a call the `ToolConfirmationPolicy`
-  gates interrupts the run with a `PendingToolCall` as the question. Resume with a
-  `ToolConfirmation`: an allowed call runs through the agent's own tools, a denied one
-  answers the model with its message; the `SessionFeature` records the decision as the
-  answer to the question the run parked on.
+- `ToolConfirmationFeature` is a `ToolCallInterceptor`: a call Spring AI's
+  `ToolCallConfirmationPolicy` gates interrupts the run with a `PendingToolCall` as the
+  question. Give it the agent's tools as well (`new ToolConfirmationFeature(policy, tools)`)
+  and the policy sees their metadata, so `@Tool(requiresConfirmation = true)` works with
+  `ToolCallConfirmationPolicy.fromToolMetadata()`. Resume with a `ToolCallDecision`, or
+  `ToolCallDecisions` with one that names the call by its tool: an allowed call runs through the agent's own
+  tools, a denied one answers the model with its message; the `SessionFeature` records the
+  decision as the answer to the question the run parked on, in the same shape as a paused
+  `ChatClient` loop (`ToolConfirmations`).
 
 ---
 

@@ -6,7 +6,8 @@
 
 0.11.0 builds against Spring AI 2.1.0-SNAPSHOT and Spring Boot 4.1.1 (previously 2.0.1 / 4.1.1).
 Spring AI 2.1 is where messages carry their content as ordered `MessagePart`s, which the
-0.11.0 event log stores. Until Spring AI 2.1.0 is released, add the Spring snapshot
+0.11.0 event log stores, and where tool calling pauses on calls that need a person's
+confirmation, which the session parks and resumes. Until Spring AI 2.1.0 is released, add the Spring snapshot
 repository to your build (see [Maven Repositories](getting-started.md#maven-repositories))
 and align your application's Spring AI BOM version accordingly.
 
@@ -200,17 +201,33 @@ before reads as an idle root (see the schema section below).
 
 ### New: tool confirmation
 
-`ToolConfirmationPolicy` names the tools a person must confirm before they run. Its
-`eligibilityChecker()` goes on the `ToolCallingAdvisor`, and a new `ToolConfirmationAdvisor`
-between the tool-calling advisor and `SessionMemoryAdvisor` parks a turn whose reply asks
-for such a call (`endTurn(id, REQUIRES_ACTION, eventIds)` naming the assistant event) and
-resumes it on the next request, whose `TOOL_CONFIRMATION_CONTEXT_KEY` carries a
-`ToolConfirmation` per pending call: the decisions are recorded as the answer to the parked
-question, the allowed calls run with the request's tools, the denied ones get their message,
-and the model continues.
+Spring AI's tool calling pauses on tool calls that need a person's confirmation: a tool
+marked `@Tool(requiresConfirmation = true)`, or one a `ToolCallConfirmationPolicy` on the
+`ToolCallingManager` names. The `SessionTurnAdvisor` makes the pause durable. It parks the
+turn on the paused reply (`endTurn(id, REQUIRES_ACTION, eventIds)` naming the assistant
+event and the question) and resumes it on the next request, whose
+`TOOL_CALL_DECISIONS_CONTEXT_KEY` carries a `ToolCallDecision` per call that waits. The
+decisions are recorded as the answer to the parked question, the paused calls run from the
+log through the loop's `ToolCallingManager` (allowed calls with the request's tools, denied
+ones answered with their message), and the model continues.
 `SessionService.endTurn(id, stopReason, eventIds)` and `SessionStatusEvents.eventIds(event)`
 are new; `endTurn(id, stopReason)` is now a default method. Nothing changes without the
 advisor. See [Tool confirmation](chat-client/chat-client.md#tool-confirmation).
+
+If you used the 0.11.0 snapshots, the session's own gate is gone; Spring AI's tool calling
+decides which calls wait, and the turn advisor parks and resumes:
+
+| Before | Now |
+|---|---|
+| `ToolConfirmationPolicy` and its `eligibilityChecker()` on the `ToolCallingAdvisor` | `@Tool(requiresConfirmation = true)`, or a `ToolCallConfirmationPolicy` on the `ToolCallingManager` |
+| `ToolConfirmationAdvisor` | `SessionTurnAdvisor` with `toolCallingManager(...)`, the loop's own manager |
+| `ToolConfirmation.allow` / `deny` | `ToolCallDecision.allow` / `deny` |
+| `ToolConfirmationAdvisor.TOOL_CONFIRMATION_CONTEXT_KEY` (`"tool_confirmations"`) | `SessionTurnAdvisor.TOOL_CALL_DECISIONS_CONTEXT_KEY` (`"tool_call_decisions"`) |
+| `ToolConfirmation.asAnswer` / `fromAnswer` | `ToolConfirmations.asAnswer` / `fromAnswer` |
+
+The question now holds every call of the paused reply and the ids that wait
+(`{toolCalls, awaiting}`), and a decision's message is stored under `message`, not
+`denyMessage`.
 
 One small behaviour change: a request without a user or tool message no longer stores the
 empty user message `Prompt.getLastUserOrToolResponseMessage()` fabricates.
@@ -246,7 +263,7 @@ ids of the events it stored for the request's message and the reply (#20).
 ### Breaking: the `ChatClient` integration is its own module
 
 `spring-ai-session` no longer depends on `spring-ai-client-chat`. `SessionMemoryAdvisor`,
-`ToolConfirmationAdvisor`, `BudgetAdvisor`, the event id generators and
+`BudgetAdvisor`, the event id generators and
 `RecursiveSummarizationCompactionStrategy` moved to the new `spring-ai-session-chatclient`
 module, in the BOM and in the JDBC starter; packages are unchanged, so a `ChatClient`
 application adds that dependency and changes no import. The core keeps the model, the
@@ -272,7 +289,7 @@ process is ended with `endTurn(id, StopReason.INTERRUPTED)`.
 - `compactionTrigger` and `compactionStrategy` move from the `SessionMemoryAdvisor` builder
   to the `SessionTurnAdvisor` builder; `trackStatus` goes. Without the turn advisor the
   memory advisor keeps the history and leaves the status alone, as in 0.10.
-- The `ToolConfirmationAdvisor` and the `BudgetAdvisor` need the turn advisor.
+- Tool confirmation and the `BudgetAdvisor` need the turn advisor.
 
 ```java
 ChatClient.builder(chatModel)
@@ -285,6 +302,16 @@ ChatClient.builder(chatModel)
     .build();
 ```
 
+### New: `SessionAdvisors`
+
+`SessionAdvisors.builder(sessionService)...build()` returns the session advisors as a
+`List<Advisor>` for `defaultAdvisors(...)`: the `SessionTurnAdvisor`, the
+`SessionMemoryAdvisor` and, with a `budgetPolicy`, the `BudgetAdvisor`, each at its default
+order. Shared settings (`agent`, `scheduler`, `compaction`, `toolCallingManager`) go on the
+builder, and `memory(b -> ...)` customizes the memory advisor. `SessionAdvisors.session(id)`
+and `SessionAdvisors.decide(id, decisions)` fill a request's advisor context. See
+[Setup](chat-client/chat-client.md#setup).
+
 ### New: `interrupt`, and the gate as an interaction
 
 `SessionService.interrupt(id, reason)` records an `INTERRUPT` event (`InterruptEvents`) and
@@ -292,7 +319,7 @@ ends the running turn with `INTERRUPTED`; it is the first-class form of the manu
 `endTurn(id, INTERRUPTED)`. The parked turn is a service protocol: `park(id, interaction,
 relatedEventIds)` records the question and ends the turn with `REQUIRES_ACTION` naming the
 related events and the question, `pendingInteraction(id)` finds it, and `resume(id, runId,
-answer)` starts the turn and records the answer. The tool-confirmation gate, the agent
+answer)` starts the turn and records the answer. Tool confirmation, the agent
 runtime's interrupts and the agent's tool gate all go through them. `Interaction` has a
 `kind` (`toolConfirmation`, `interrupt`, or your own). `BudgetGuard` is the budget check both
 `BudgetAdvisor` and `BudgetFeature` run.
@@ -301,10 +328,11 @@ runtime's interrupts and the agent's tool gate all go through them. `Interaction
 
 `EventType.TOOL_CONFIRMATION` and `ToolConfirmationEvents` are gone: a tool confirmation is an
 `INTERACTION` question of kind `toolConfirmation` whose answer is the decisions, written and
-read with `ToolConfirmation.asAnswer` and `fromAnswer`. In an agent run, a completed model
+read with `ToolConfirmations.asAnswer` and `fromAnswer`. In an agent run, a completed model
 call is one `USAGE` event carrying the model, the path and the message count; `MODEL_CALL`
-events record the `started` and `failed` phases only. `ToolConfirmationFeature` takes the
-policy alone.
+events record the `started` and `failed` phases only. `ToolConfirmationFeature` takes Spring AI's
+`ToolCallConfirmationPolicy`, and optionally the agent's tools so the policy sees their
+metadata.
 
 ### New: `spring-ai-session-agent`
 
@@ -314,7 +342,7 @@ agent's events as typed log events, an interruption as a parked turn), `SessionC
 (the log as the checkpoint store), `BudgetFeature` and `ToolConfirmationFeature`. It depends
 on `spring-ai-agent` 2.1.0-SNAPSHOT. See [spring-ai-agent Integration](agent/spring-ai-agent.md).
 
-### Breaking: `EventType` is a class, and four value types moved to the core package
+### Breaking: `EventType` is a class, and three value types moved to the core package
 
 `EventType` is no longer an enum. It is a final class whose well-known types are the same
 constants (`EventType.MESSAGE`, `STATUS`, …), compared by name, so every caller that uses the
@@ -324,7 +352,7 @@ constants becomes `if`/`else` or a map. The JDBC `event_type` column already sto
 so nothing migrates. New well-known types: `INTERACTION`, `MODEL_CALL`, `TOOL_CALL`, `NODE`,
 `CHECKPOINT`.
 
-`Budget`, `BudgetPolicy`, `BudgetReachedException` and `ToolConfirmationPolicy` moved from
+`Budget`, `BudgetPolicy` and `BudgetReachedException` moved from
 `org.springframework.ai.session.advisor` to `org.springframework.ai.session`: they are value
 types the advisors and the agent features share. Update the imports.
 

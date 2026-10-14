@@ -17,7 +17,10 @@
 package org.springframework.ai.session.advisor;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -30,27 +33,37 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.ToolCallDecision;
+import org.springframework.ai.model.tool.ToolCallDecisions;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
+import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.Interaction;
+import org.springframework.ai.session.InteractionEvents;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
+import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.SessionStatusEvents;
 import org.springframework.ai.session.StopReason;
-import org.springframework.ai.session.ToolConfirmation;
-import org.springframework.ai.session.ToolConfirmationPolicy;
+import org.springframework.ai.session.ToolConfirmations;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.ai.tool.metadata.ToolMetadata;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.spy;
 import static org.springframework.ai.session.advisor.ScriptedChatModel.describe;
 
 /**
@@ -69,6 +82,10 @@ class SessionTurnAdvisorTests {
 		.build();
 
 	private final String sessionId = "s1";
+
+	private final ToolCallingManager manager = ToolCallingManager.builder().build();
+
+	private final List<String> ran = new CopyOnWriteArrayList<>();
 
 	@Test
 	void aCallRunsATurnAndRecordsItInTheStatusAndTheLog() {
@@ -251,39 +268,94 @@ class SessionTurnAdvisorTests {
 	}
 
 	@Test
-	void aGatedCallParksTheTurnAndTheConfirmationResumesAndEndsIt() {
-		ToolConfirmationPolicy policy = ToolConfirmationPolicy.forTools("get_weather");
-		ChatClient client = gated(policy);
-		this.model.thenCall("c1", "Paris").thenAnswer("Sunny in Paris.");
+	void aFailedParkEndsTheTurnWithAnError() {
+		SessionService failing = spy(this.sessionService);
+		willThrow(new IllegalArgumentException("The store is down")).given(failing).park(any(), any(), any());
+		ChatClient client = gated(SessionTurnAdvisor.builder(failing).toolCallingManager(this.manager).build(),
+				tool("get_weather", "Sunny in ", confirmed()));
+		this.model.thenCall("c1", "Paris");
 
-		say(client, "Weather in Paris?");
+		assertThatThrownBy(() -> say(client, "Weather in Paris?")).hasMessageContaining("The store is down");
 
 		assertThat(session().status()).isEqualTo(SessionStatus.IDLE);
-		assertThat(session().stopReason()).isEqualTo(StopReason.REQUIRES_ACTION);
-
-		String answer = confirm(client, ToolConfirmation.allow("c1"));
-
-		assertThat(answer).isEqualTo("Sunny in Paris.");
-		assertThat(session().stopReason()).isEqualTo(StopReason.END_TURN);
-		assertThat(statuses()).containsExactly(SessionStatus.RUNNING, SessionStatus.IDLE, SessionStatus.RUNNING,
-				SessionStatus.IDLE);
-		assertThat(describe(this.model.prompts().get(1))).containsExactly("Weather in Paris?", "call:c1", "result:c1");
-		assertThat(this.model.prompts().get(1).getInstructions().get(2)).isInstanceOf(ToolResponseMessage.class);
+		assertThat(session().stopReason()).isEqualTo(StopReason.ERROR);
 	}
 
 	@Test
-	void aRejectedResumptionLeavesTheTurnThatRunsAlone() {
-		ToolConfirmationPolicy policy = ToolConfirmationPolicy.forTools("get_weather");
-		ChatClient client = gated(policy);
+	void aResumptionThatFailedAfterACallRanAnswersTheCalls() {
+		ToolCallingManager failsAfterRunning = new ToolCallingManager() {
+
+			@Override
+			public List<ToolDefinition> resolveToolDefinitions(ToolCallingChatOptions chatOptions) {
+				return SessionTurnAdvisorTests.this.manager.resolveToolDefinitions(chatOptions);
+			}
+
+			@Override
+			public ToolExecutionResult executeToolCalls(Prompt prompt, ChatResponse chatResponse) {
+				return SessionTurnAdvisorTests.this.manager.executeToolCalls(prompt, chatResponse);
+			}
+
+			@Override
+			public ToolExecutionResult executeToolCalls(Prompt prompt, ChatResponse chatResponse,
+					ToolCallDecisions decisions) {
+				SessionTurnAdvisorTests.this.manager.executeToolCalls(prompt, chatResponse, decisions);
+				throw new IllegalStateException("The second tool is down");
+			}
+
+		};
+		ChatClient client = gated(
+				SessionTurnAdvisor.builder(this.sessionService).toolCallingManager(failsAfterRunning).build(),
+				tool("get_weather", "Sunny in ", confirmed()));
 		this.model.thenCall("c1", "Paris");
 		say(client, "Weather in Paris?");
-		// Another node resumed the turn first
-		this.sessionService.startTurn(this.sessionId);
 
-		assertThatThrownBy(() -> confirm(client, ToolConfirmation.allow("c1"))).isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("RUNNING");
+		assertThatThrownBy(() -> decide(client, ToolCallDecision.allow("c1"))).isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("The second tool is down");
 
-		assertThat(status()).isEqualTo(SessionStatus.RUNNING);
+		assertThat(this.ran).containsExactly("get_weather");
+		assertThat(session().stopReason()).isEqualTo(StopReason.ERROR);
+		// The call is answered with the failure, so deciding again cannot run it twice
+		assertThatThrownBy(() -> decide(client, ToolCallDecision.allow("c1")))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("not waiting");
+		assertThat(describe(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
+			.containsExactly("Weather in Paris?", "call:c1", "result:c1");
+		assertThat(toolResults(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
+			.singleElement()
+			.asString()
+			.contains("The second tool is down");
+		// The next turn goes on with a valid history
+		assertThat(say(client, "And now?", "Sunny.")).isEqualTo("Sunny.");
+		assertThat(this.ran).hasSize(1);
+	}
+
+	@Test
+	void aStreamedResumptionOfAReturnDirectToolReturnsItsResult() {
+		ChatClient client = gated(
+				tool("get_weather", "Sunny in ", ToolMetadata.builder().requiresConfirmation(true).returnDirect(true).build()));
+		this.model.thenCall("c1", "Paris");
+		say(client, "Weather in Paris?");
+
+		String answer = String.join("", client.prompt()
+			.advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId)
+				.param(SessionTurnAdvisor.TOOL_CALL_DECISIONS_CONTEXT_KEY, ToolCallDecision.allow("c1")))
+			.stream()
+			.content()
+			.collectList()
+			.block());
+
+		assertThat(answer).contains("Sunny in Paris");
+		assertThat(this.model.prompts()).hasSize(1);
+		assertThat(session().stopReason()).isEqualTo(StopReason.END_TURN);
+	}
+
+	@Test
+	void aBadDecisionsValueCreatesNoSession() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", confirmed()));
+
+		assertThatThrownBy(() -> decide(client, "yes please")).isInstanceOf(IllegalArgumentException.class);
+
+		assertThat(session()).isNull();
 	}
 
 	@Test
@@ -295,6 +367,262 @@ class SessionTurnAdvisorTests {
 		say(client(weather(), turn, ToolCallingAdvisor.builder().build()), "Hello", "Hi!");
 
 		assertThat(SessionAttributes.agent(session())).isEqualTo(AgentSnapshot.of("support", "2", "claude-sonnet-5-5"));
+	}
+
+	// --- Tool calls that need confirmation ---
+
+	@Test
+	void aGatedCallParksTheTurnAndTheDecisionResumesAndEndsIt() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", confirmed()));
+		this.model.thenCall("c1", "Paris").thenAnswer("Sunny in Paris.");
+
+		say(client, "Weather in Paris?");
+
+		assertThat(session().status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(session().stopReason()).isEqualTo(StopReason.REQUIRES_ACTION);
+		assertThat(this.ran).isEmpty();
+		// The turn names the reply with the calls and the question it parks on
+		List<SessionEvent> log = this.sessionService.getEvents(this.sessionId);
+		SessionEvent assistant = log.stream().filter(SessionEvent::hasToolCalls).findFirst().orElseThrow();
+		SessionEvent question = log.stream().filter(InteractionEvents::isRequired).findFirst().orElseThrow();
+		assertThat(SessionStatusEvents.eventIds(log.get(log.size() - 1))).containsExactly(assistant.getId(),
+				question.getId());
+		Interaction asked = InteractionEvents.interaction(question);
+		assertThat(asked.kind()).isEqualTo(Interaction.KIND_TOOL_CONFIRMATION);
+		assertThat(asked.payload()).isEqualTo(Map.of("toolCalls",
+				List.of(Map.of("id", "c1", "name", "get_weather", "arguments", "{\"city\":\"Paris\"}")), "awaiting",
+				List.of("c1")));
+		assertThat(asked.resumeType()).isEqualTo(ToolCallDecisions.class.getName());
+
+		String answer = decide(client, ToolCallDecision.allow("c1"));
+
+		assertThat(answer).isEqualTo("Sunny in Paris.");
+		assertThat(this.ran).containsExactly("get_weather");
+		assertThat(session().stopReason()).isEqualTo(StopReason.END_TURN);
+		assertThat(statuses()).containsExactly(SessionStatus.RUNNING, SessionStatus.IDLE, SessionStatus.RUNNING,
+				SessionStatus.IDLE);
+		assertThat(describe(this.model.prompts().get(1))).containsExactly("Weather in Paris?", "call:c1", "result:c1");
+		// The decisions answer the question the turn parked on
+		assertThat(this.sessionService.pendingInteraction(this.sessionId)).isNull();
+		assertThat(ToolConfirmations.fromAnswer(InteractionEvents.answer(answered().get(0))))
+			.isEqualTo(ToolCallDecisions.of(ToolCallDecision.allow("c1")));
+		assertThat(describe(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
+			.containsExactly("Weather in Paris?", "call:c1", "result:c1", "Sunny in Paris.");
+	}
+
+	@Test
+	void aDeniedCallAnswersTheModelWithItsMessageWithoutRunningTheTool() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", confirmed()));
+		this.model.thenCall("c1", "Paris").thenAnswer("No weather then.");
+		say(client, "Weather in Paris?");
+
+		String answer = decide(client, ToolCallDecisions.of(ToolCallDecision.deny("c1", "No weather today.")));
+
+		assertThat(answer).isEqualTo("No weather then.");
+		assertThat(this.ran).isEmpty();
+		assertThat(toolResults(this.model.prompts().get(1))).containsExactly("No weather today.");
+	}
+
+	@Test
+	void aCallThatDoesNotWaitRunsWithoutADecision() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", confirmed()),
+				tool("get_time", "Noon in ", ToolMetadata.builder().build()));
+		this.model.then(prompt -> calls(call("c1", "get_weather", "Paris"), call("c2", "get_time", "Paris")))
+			.thenAnswer("It is noon.");
+		say(client, "Weather and time in Paris?");
+		assertThat(ToolConfirmations.awaiting(question())).containsExactly("c1");
+
+		// The gated call still needs its decision
+		assertThatThrownBy(() -> decide(client, ToolCallDecision.allow("c2"))).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("missing: [c1]");
+
+		decide(client, List.of(ToolCallDecision.deny("c1", "No.")));
+
+		assertThat(this.ran).containsExactly("get_time");
+		assertThat(toolResults(this.model.prompts().get(1))).containsExactly("No.", "\"Noon in Paris\"");
+		// Both decisions are in the log, the implicit one as an allow
+		assertThat(ToolConfirmations.fromAnswer(InteractionEvents.answer(answered().get(0))).decisions())
+			.containsExactly(ToolCallDecision.deny("c1", "No."), ToolCallDecision.allow("c2"));
+	}
+
+	@Test
+	void decisionsAreCheckedBeforeAnythingIsRecorded() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", confirmed()));
+
+		// Nothing waits
+		assertThatThrownBy(() -> decide(client, ToolCallDecision.allow("c1")))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("not waiting");
+
+		this.model.thenCall("c1", "Paris");
+		say(client, "Weather in Paris?");
+		// The wrong call
+		assertThatThrownBy(() -> decide(client, List.of(ToolCallDecision.allow("c1"), ToolCallDecision.allow("c9"))))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("c9");
+		// A bad context value
+		assertThatThrownBy(() -> decide(client, "yes please")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining(SessionTurnAdvisor.TOOL_CALL_DECISIONS_CONTEXT_KEY);
+		// New user text goes in the next turn
+		assertThatThrownBy(() -> client.prompt()
+			.user("And Rome?")
+			.advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId)
+				.param(SessionTurnAdvisor.TOOL_CALL_DECISIONS_CONTEXT_KEY, ToolCallDecision.allow("c1")))
+			.call()
+			.content()).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("no new user message");
+		// An allowed call needs its tool on the request
+		assertThatThrownBy(() -> decide(gated(), ToolCallDecision.allow("c1")))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("must carry the tool 'get_weather'");
+
+		// None of that touched the session: still parked, nothing recorded
+		assertThat(session().stopReason()).isEqualTo(StopReason.REQUIRES_ACTION);
+		assertThat(answered()).isEmpty();
+		assertThat(this.ran).isEmpty();
+	}
+
+	@Test
+	void aSecondResumptionIsRejectedBeforeTheToolRuns() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", confirmed()));
+		this.model.thenCall("c1", "Paris").thenAnswer("Sunny in Paris.");
+		say(client, "Weather in Paris?");
+		// Another node resumed the turn first
+		this.sessionService.startTurn(this.sessionId);
+
+		assertThatThrownBy(() -> decide(client, ToolCallDecision.allow("c1"))).isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("RUNNING");
+
+		assertThat(status()).isEqualTo(SessionStatus.RUNNING);
+		assertThat(this.ran).isEmpty();
+		assertThat(answered()).isEmpty();
+
+		// Once the calls are answered, nothing waits any more
+		this.sessionService.endTurn(this.sessionId, StopReason.END_TURN);
+		decide(client, ToolCallDecision.allow("c1"));
+		assertThatThrownBy(() -> decide(client, ToolCallDecision.allow("c1")))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("not waiting");
+		assertThat(this.ran).containsExactly("get_weather");
+	}
+
+	@Test
+	void aResumptionThatFailedCanBeDecidedAgain() {
+		AtomicBoolean fail = new AtomicBoolean(true);
+		ToolCallingManager flaky = new ToolCallingManager() {
+
+			@Override
+			public List<ToolDefinition> resolveToolDefinitions(ToolCallingChatOptions chatOptions) {
+				return SessionTurnAdvisorTests.this.manager.resolveToolDefinitions(chatOptions);
+			}
+
+			@Override
+			public ToolExecutionResult executeToolCalls(Prompt prompt, ChatResponse chatResponse) {
+				return SessionTurnAdvisorTests.this.manager.executeToolCalls(prompt, chatResponse);
+			}
+
+			@Override
+			public ToolExecutionResult executeToolCalls(Prompt prompt, ChatResponse chatResponse,
+					ToolCallDecisions decisions) {
+				if (fail.getAndSet(false)) {
+					throw new IllegalStateException("The tools are down");
+				}
+				return SessionTurnAdvisorTests.this.manager.executeToolCalls(prompt, chatResponse, decisions);
+			}
+
+		};
+		ChatClient client = gated(SessionTurnAdvisor.builder(this.sessionService).toolCallingManager(flaky).build(),
+				tool("get_weather", "Sunny in ", confirmed()));
+		this.model.thenCall("c1", "Paris").thenAnswer("Sunny in Paris.");
+		say(client, "Weather in Paris?");
+
+		assertThatThrownBy(() -> decide(client, ToolCallDecision.allow("c1"))).isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("The tools are down");
+		assertThat(session().stopReason()).isEqualTo(StopReason.ERROR);
+
+		// The calls are still unanswered in the log
+		assertThat(decide(client, ToolCallDecision.allow("c1"))).isEqualTo("Sunny in Paris.");
+		assertThat(session().stopReason()).isEqualTo(StopReason.END_TURN);
+		assertThat(answered()).hasSize(1);
+	}
+
+	@Test
+	void aModelWithoutToolCallIdsPausesResumesAndKeepsTheLogPaired() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", confirmed()));
+		this.model.then(prompt -> calls(call("", "get_weather", "Paris"))).thenAnswer("Sunny in Paris.");
+		say(client, "Weather in Paris?");
+		// The decision names the id the loop made up for the call
+		String id = ToolConfirmations.awaiting(question()).get(0);
+		assertThat(id).isNotBlank();
+
+		assertThat(decide(client, ToolCallDecision.allow(id))).isEqualTo("Sunny in Paris.");
+
+		// The results answer the stored call under its own id
+		assertThat(describe(this.model.prompts().get(1))).containsExactly("Weather in Paris?", "call:", "result:");
+		assertThat(describe(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
+			.containsExactly("Weather in Paris?", "call:", "result:", "Sunny in Paris.");
+	}
+
+	@Test
+	void aStreamedPauseParksTheTurn() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", confirmed()));
+		this.model.thenCall("c1", "Paris").thenAnswer("Sunny in Paris.");
+
+		client.prompt()
+			.user("Weather in Paris?")
+			.advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.stream()
+			.content()
+			.blockLast();
+
+		assertThat(session().stopReason()).isEqualTo(StopReason.REQUIRES_ACTION);
+		assertThat(ToolConfirmations.awaiting(question())).containsExactly("c1");
+		String answer = String.join("", client.prompt()
+			.advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId)
+				.param(SessionTurnAdvisor.TOOL_CALL_DECISIONS_CONTEXT_KEY, ToolCallDecision.allow("c1")))
+			.stream()
+			.content()
+			.collectList()
+			.block());
+		assertThat(answer).isEqualTo("Sunny in Paris.");
+		assertThat(session().stopReason()).isEqualTo(StopReason.END_TURN);
+	}
+
+	@Test
+	void aReturnDirectToolReturnsItsResultWithoutTheModelOnResumption() {
+		ChatClient client = gated(
+				tool("get_weather", "Sunny in ", ToolMetadata.builder().requiresConfirmation(true).returnDirect(true).build()));
+		this.model.thenCall("c1", "Paris");
+		say(client, "Weather in Paris?");
+
+		assertThat(decide(client, ToolCallDecision.allow("c1"))).contains("Sunny in Paris");
+
+		assertThat(this.model.prompts()).hasSize(1);
+		assertThat(session().stopReason()).isEqualTo(StopReason.END_TURN);
+		assertThat(describe(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
+			.containsExactly("Weather in Paris?", "call:c1", "result:c1");
+		// The next turn sends a valid history
+		assertThat(say(client, "Thanks", "You are welcome.")).isEqualTo("You are welcome.");
+		assertThat(describe(this.model.prompts().get(1))).containsExactly("Weather in Paris?", "call:c1", "result:c1",
+				"Thanks");
+	}
+
+	@Test
+	void aTurnInterruptedBeforeItCouldParkKeepsTheReply() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", confirmed()));
+		this.model.then(prompt -> {
+			this.sessionService.interrupt(this.sessionId, "Stop");
+			return calls(call("c1", "get_weather", "Paris"));
+		});
+
+		say(client, "Weather in Paris?");
+
+		assertThat(session().stopReason()).isEqualTo(StopReason.INTERRUPTED);
+		assertThatThrownBy(() -> decide(client, ToolCallDecision.allow("c1")))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("not waiting");
+		// The next turn goes on without the unanswered call
+		assertThat(say(client, "Never mind", "OK.")).isEqualTo("OK.");
+		assertThat(this.ran).isEmpty();
 	}
 
 	private ChatClient client() {
@@ -313,10 +641,17 @@ class SessionTurnAdvisorTests {
 			.build();
 	}
 
-	private ChatClient gated(ToolConfirmationPolicy policy) {
-		return client(weather(), SessionTurnAdvisor.builder(this.sessionService).build(),
-				ToolCallingAdvisor.builder().toolExecutionEligibilityChecker(policy.eligibilityChecker()).build(),
-				ToolConfirmationAdvisor.builder(this.sessionService).policy(policy).build());
+	private ChatClient gated(ToolCallback... tools) {
+		return gated(SessionTurnAdvisor.builder(this.sessionService).toolCallingManager(this.manager).build(), tools);
+	}
+
+	/** The turn advisor and the loop share the manager that decides which calls wait. */
+	private ChatClient gated(SessionTurnAdvisor turn, ToolCallback... tools) {
+		return ChatClient.builder(this.model)
+			.defaultAdvisors(turn, ToolCallingAdvisor.builder().toolCallingManager(this.manager).build(),
+					SessionMemoryAdvisor.builder(this.sessionService).build())
+			.defaultToolCallbacks(tools)
+			.build();
 	}
 
 	private String say(ChatClient client, String text) {
@@ -332,12 +667,55 @@ class SessionTurnAdvisorTests {
 		return say(client, text);
 	}
 
-	private String confirm(ChatClient client, ToolConfirmation decision) {
+	private String decide(ChatClient client, Object decisions) {
 		return client.prompt()
 			.advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId)
-				.param(ToolConfirmationAdvisor.TOOL_CONFIRMATION_CONTEXT_KEY, decision))
+				.param(SessionTurnAdvisor.TOOL_CALL_DECISIONS_CONTEXT_KEY, decisions))
 			.call()
 			.content();
+	}
+
+	private ToolCallback tool(String name, String result, ToolMetadata metadata) {
+		return FunctionToolCallback.builder(name, (City city) -> {
+			this.ran.add(name);
+			return result + city.city();
+		}).description("A tool about a city").inputType(City.class).toolMetadata(metadata).build();
+	}
+
+	private static ToolMetadata confirmed() {
+		return ToolMetadata.builder().requiresConfirmation(true).build();
+	}
+
+	private static AssistantMessage.ToolCall call(String id, String tool, String city) {
+		return new AssistantMessage.ToolCall(id, "function", tool, "{\"city\":\"" + city + "\"}");
+	}
+
+	private static ChatResponse calls(AssistantMessage.ToolCall... calls) {
+		return new ChatResponse(
+				List.of(new Generation(AssistantMessage.builder().content("").toolCalls(List.of(calls)).build())));
+	}
+
+	private Interaction question() {
+		SessionEvent pending = this.sessionService.pendingInteraction(this.sessionId);
+		assertThat(pending).isNotNull();
+		return InteractionEvents.interaction(pending);
+	}
+
+	private List<SessionEvent> answered() {
+		return this.sessionService.getEvents(this.sessionId)
+			.stream()
+			.filter(InteractionEvents::isAnswered)
+			.toList();
+	}
+
+	private static List<String> toolResults(Prompt prompt) {
+		return prompt.getInstructions()
+			.stream()
+			.filter(ToolResponseMessage.class::isInstance)
+			.map(ToolResponseMessage.class::cast)
+			.flatMap(results -> results.getResponses().stream())
+			.map(ToolResponseMessage.ToolResponse::responseData)
+			.toList();
 	}
 
 	private static ToolCallback weather() {

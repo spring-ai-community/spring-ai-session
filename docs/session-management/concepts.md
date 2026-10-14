@@ -578,60 +578,65 @@ any member runs a turn, otherwise the root's own status.
 
 ### Interactions: a parked turn, in general
 
-The tool-confirmation gate below is one kind of **interaction**: a question the turn parks
+Tool confirmation below is one kind of **interaction**: a question the turn parks
 on, answered later, possibly on another node. `park(id, interaction, relatedEventIds)` records
 the question (its kind, where in the run it was asked, the question as JSON, the type of the
 answer) and ends the turn with `REQUIRES_ACTION` naming the related events and the question;
 `pendingInteraction(id)` finds the question a session waits on; `resume(id, runId, answer)`
 starts the turn, its compare-and-set making the resumption exclusive, and records the answer.
-The tool-confirmation gate and the agent runtime's interrupts both go through these two calls,
+Tool confirmation and the agent runtime's interrupts both go through these two calls,
 so every parked turn reads the same way in the log whichever integration parked it: for a tool
-confirmation the question's kind is `toolConfirmation`, its payload the gated calls, and the
-answer the decisions (`ToolConfirmation.asAnswer` and `fromAnswer`).
+confirmation the question's kind is `toolConfirmation`, its payload the paused calls and the
+ids that wait, and the answer the decisions (`ToolConfirmations` writes and reads both).
 
 ### Tool confirmation
 
-Some tools should not run until a person has seen the call. A `ToolConfirmationPolicy`
-names them (`ToolConfirmationPolicy.forTools("bash", "delete_file")`, or any predicate on
-the `ToolCall`). When the model asks for such a call, the turn is **parked** instead of
-run: the assistant message with the call is stored, the session goes `IDLE` with
+Some tools should not run until a person has seen the call. Spring AI's tool calling names
+them: a tool marked `@Tool(requiresConfirmation = true)`, or a `ToolCallConfirmationPolicy`
+on the `ToolCallingManager` (`ToolCallConfirmationPolicy.forTools("bash", "delete_file")`, or
+any predicate on the call). When the model asks for such a call, the tool-calling loop
+pauses before any call of the reply runs, and the session **parks** the turn: the assistant
+message with the calls is stored, the session goes `IDLE` with
 `stopReason = REQUIRES_ACTION`, and the `STATUS` event names the event the caller has to
 answer (`SessionStatusEvents.eventIds(event)`). The session stays idle for as long as it
-takes, can be archived meanwhile, and the decision can arrive in a later request or on
+takes, can be archived meanwhile, and the decisions can arrive in a later request or on
 another node, because everything needed is in the log.
 
-The decision is a `ToolConfirmation`: `ToolConfirmation.allow(toolCallId)` or
-`ToolConfirmation.deny(toolCallId, "why")`. The next request on the session carries one per
-pending call and no new user text. `ToolConfirmationAdvisor` resumes the turn, records the
-decisions as the answer, runs the allowed calls with the tools the request
-carries, answers the denied ones with their deny message (or
-`ToolConfirmation.DEFAULT_DENY_MESSAGE`) and puts the tool results in front of the prompt;
-`SessionMemoryAdvisor` stores them like any tool result, and the model continues where the
-turn was parked. A call that fails to run leaves the decision in the log and ends the turn
-with `ERROR`; confirming it again retries. See
+A decision is Spring AI's `ToolCallDecision`: `ToolCallDecision.allow(toolCallId)` or
+`ToolCallDecision.deny(toolCallId, "why")`. The next request on the session carries one per
+call that waits and no new user text. The `SessionTurnAdvisor` resumes the turn, records the
+decisions as the answer, runs the paused calls from the log with them through the
+`ToolCallingManager` (an allowed call runs with the tools the request carries, a denied one
+answers the model with its message), and sends the tool results on; `SessionMemoryAdvisor`
+stores them like any tool result, and the model continues where the turn was parked. A
+resumption that fails ends the turn with `ERROR`; when no call had run, deciding again
+retries, and once one had, the calls are answered with the failure so none runs twice. See
 [ChatClient Integration](../chat-client/chat-client.md#tool-confirmation) for the wiring.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant App
-    participant Gate as ToolConfirmationAdvisor
+    participant Turn as SessionTurnAdvisor
+    participant Loop as ToolCallingAdvisor
     participant SMA as SessionMemoryAdvisor
     participant Log as Session log
-    App->>SMA: "run echo hello"
-    SMA->>Log: STATUS RUNNING, user message
-    SMA-->>Gate: assistant: tool call bash (the loop left it unexecuted)
-    SMA->>Log: assistant message
-    Gate->>Log: STATUS IDLE with stop reason REQUIRES_ACTION [assistant event id]
-    Gate-->>App: reply with the pending tool call
+    App->>Turn: "book VX205"
+    Turn->>Log: STATUS RUNNING
+    Turn->>Loop: request
+    Loop->>SMA: round 1
+    SMA->>Log: user message, assistant message with the tool call
+    Loop-->>Turn: paused reply, ids that wait
+    Turn->>Log: INTERACTION question, STATUS IDLE with stop reason REQUIRES_ACTION
+    Turn-->>App: reply with the paused tool call
     Note over App: shows the call, waits for a person
-    App->>Gate: ToolConfirmation.allow(callId)
-    Gate->>Log: STATUS RUNNING, INTERACTION answered
-    Gate->>Gate: runs bash with the request's tools
-    Gate->>SMA: prompt: [tool result]
-    SMA->>Log: tool result
-    SMA-->>Gate: assistant: "hello"
-    SMA->>Log: assistant message, STATUS IDLE with stop reason END_TURN
+    App->>Turn: ToolCallDecision.allow(callId)
+    Turn->>Log: STATUS RUNNING, INTERACTION answered
+    Turn->>Turn: runs the paused call with the request's tools
+    Turn->>Loop: request: [tool results]
+    Loop->>SMA: round 1
+    SMA->>Log: tool results, assistant: "Booked."
+    Turn->>Log: STATUS IDLE with stop reason END_TURN
 ```
 
 ### Agent snapshot

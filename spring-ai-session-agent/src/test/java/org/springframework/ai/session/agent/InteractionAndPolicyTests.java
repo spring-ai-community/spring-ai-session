@@ -32,8 +32,11 @@ import org.springframework.ai.agent.graph.GraphAgent;
 import org.springframework.ai.agent.graph.ModelAwareGraphAgent;
 import org.springframework.ai.agent.graph.builtins.Graphs;
 import org.springframework.ai.agent.graph.builtins.Nodes;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.graph.Graph;
 import org.springframework.ai.graph.Node;
+import org.springframework.ai.model.tool.ToolCallConfirmationPolicy;
+import org.springframework.ai.model.tool.ToolCallDecision;
 import org.springframework.ai.session.Budget;
 import org.springframework.ai.session.BudgetPolicy;
 import org.springframework.ai.session.BudgetReachedException;
@@ -49,8 +52,7 @@ import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionStatus;
 import org.springframework.ai.session.SessionStatusEvents;
 import org.springframework.ai.session.StopReason;
-import org.springframework.ai.session.ToolConfirmation;
-import org.springframework.ai.session.ToolConfirmationPolicy;
+import org.springframework.ai.session.ToolConfirmations;
 import org.springframework.ai.tool.annotation.Tool;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -127,7 +129,7 @@ class InteractionAndPolicyTests {
 		assertThat(this.sessions.findById("w-1").stopReason()).isEqualTo(StopReason.REQUIRES_ACTION);
 
 		String answer = weatherAgent(chatModel, calls).resumeOutput("Weather in Paris?", interrupted.getRunId(),
-				ToolConfirmation.allow("getWeather"));
+				ToolCallDecision.allow("getWeather"));
 
 		assertThat(answer).isEqualTo("It is sunny in Paris");
 		assertThat(calls).hasValue(1);
@@ -135,9 +137,13 @@ class InteractionAndPolicyTests {
 		List<SessionEvent> interactions = this.sessions.getEvents("w-1",
 				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).build());
 		assertThat(interactions).hasSize(2);
-		assertThat(InteractionEvents.interaction(interactions.get(0)).kind()).isEqualTo(Interaction.KIND_TOOL_CONFIRMATION);
-		assertThat(ToolConfirmation.fromAnswer(InteractionEvents.answer(interactions.get(1))))
-			.containsExactly(ToolConfirmation.allow("getWeather"));
+		Interaction question = InteractionEvents.interaction(interactions.get(0));
+		assertThat(question.kind()).isEqualTo(Interaction.KIND_TOOL_CONFIRMATION);
+		assertThat(ToolConfirmations.awaiting(question)).containsExactly("getWeather");
+		assertThat(ToolConfirmations.reply(question).getToolCalls()).extracting(AssistantMessage.ToolCall::arguments)
+			.containsExactly("{\"city\":\"Paris\"}");
+		assertThat(ToolConfirmations.fromAnswer(InteractionEvents.answer(interactions.get(1))).decisions())
+			.containsExactly(ToolCallDecision.allow("getWeather"));
 		// The gated attempt reads as a started then failed call (the interruption unwinds the
 		// tool call), the confirmed one as started then completed
 		assertThat(this.sessions.getEvents("w-1", EventFilter.builder().eventTypes(Set.of(EventType.TOOL_CALL)).build()))
@@ -171,7 +177,7 @@ class InteractionAndPolicyTests {
 			.tools(new WeatherTools(calls))
 			.enable(feature)
 			.enable(new CheckpointerFeature(feature.checkpointer()))
-			.enable(new ToolConfirmationFeature(ToolConfirmationPolicy.forTools("getWeather")))
+			.enable(new ToolConfirmationFeature(ToolCallConfirmationPolicy.forTools("getWeather")))
 			.build();
 	}
 

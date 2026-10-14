@@ -10,11 +10,11 @@ appends history by hand:
 
 The memory advisor runs inside the tool-calling loop, once per round; the turn advisor
 runs outside it, so it sees the turn's final response however the loop ended. The memory
-advisor works on its own and then leaves the status alone; the `ToolConfirmationAdvisor`
-and the `BudgetAdvisor` need the turn advisor.
+advisor works on its own and then leaves the status alone; tool confirmation and the
+`BudgetAdvisor` need the turn advisor.
 
-The advisors live in the `spring-ai-session-chatclient` module, with the
-`ToolConfirmationAdvisor`, the `BudgetAdvisor` and the `RecursiveSummarizationCompactionStrategy`;
+The advisors live in the `spring-ai-session-chatclient` module, with the `BudgetAdvisor`
+and the `RecursiveSummarizationCompactionStrategy`;
 the core `spring-ai-session` module has no dependency on `ChatClient`, so an agent runtime
 that is not built on `ChatClient` can use the session without the advisors. The JDBC
 starter includes the `ChatClient` module.
@@ -60,12 +60,13 @@ On every `ChatClient` call the turn advisor:
 1. Finds the session or creates it, like the memory advisor, stamped with its own
    `agent(AgentSnapshot)`.
 2. Starts the turn (`startTurn`), which rejects a second concurrent turn on the same
-   session. A request that confirms tool calls resumes the parked turn instead; the
-   `ToolConfirmationAdvisor` starts it.
+   session. A request that decides on tool calls resumes the parked turn instead (see
+   [Tool confirmation](#tool-confirmation)).
 3. Ends the turn once the call returns (`END_TURN`), whether the loop ended with a final
-   reply, a `returnDirect` tool or a breached tool-call limit. A call that fails ends it
-   with `ERROR`, a cancelled stream with `INTERRUPTED`. A turn that already ended (parked
-   for a confirmation, interrupted, out of budget) is left as it is. See
+   reply, a `returnDirect` tool or a breached tool-call limit, or parks it when the loop
+   paused on tool calls that need a person's confirmation (`REQUIRES_ACTION`). A call
+   that fails ends it with `ERROR`, a cancelled stream with `INTERRUPTED`. A turn someone
+   else ended (interrupted, out of budget) is left as it is. See
    [Status, turns and archive](../session-management/concepts.md#status-turns-and-archive).
 4. If a trigger fires, compacts the session **synchronously** before returning, once per
    turn. The whole turn is written by then, so compaction never races the message
@@ -80,6 +81,33 @@ expanded prompt, the **after** phase appends the assistant message and compacts 
 ---
 
 ## Setup
+
+`SessionAdvisors` builds the session advisors together, each at its default order around
+the tool-calling loop that the `ChatClient` registers itself:
+
+```java
+ChatClient client = ChatClient.builder(chatModel)
+    .defaultAdvisors(SessionAdvisors.builder(sessionService)
+        .toolCallingManager(toolCallingManager)   // the loop's manager; see Tool confirmation
+        .compaction(new TurnCountTrigger(20),
+            RecursiveSummarizationCompactionStrategy.builder(chatClient).maxEvents(10).build())
+        .build())                                 // SessionTurnAdvisor, SessionMemoryAdvisor
+    .build();
+
+String answer = client.prompt()
+    .user("Hello")
+    .advisors(SessionAdvisors.session(sessionId))
+    .call()
+    .content();
+```
+
+- `agent(...)` and `scheduler(...)` apply to both advisors.
+- `budgetPolicy(...)` adds a `BudgetAdvisor` (see [Budget](#budget)).
+- `memory(b -> ...)` customizes the `SessionMemoryAdvisor`: its filters, event id
+  generators and usage recording.
+- `build()` returns a `List<Advisor>`.
+
+To place the advisors yourself, build them one by one:
 
 ```java
 SessionTurnAdvisor turn = SessionTurnAdvisor.builder(sessionService)
@@ -224,7 +252,7 @@ client.prompt()
 | `EVENT_FILTER_CONTEXT_KEY` | `"chat_memory_event_filter_id"` | Per-request `EventFilter` merged with the advisor-level filter |
 | `REQUEST_EVENT_ID_CONTEXT_KEY` | `"chat_memory_request_event_id"` | Set by the advisor: the id of the event that stores the request's trailing user or tool message, `null` when none was stored. Read it from the forwarded request or from `call().chatClientResponse().context()` |
 | `RESPONSE_EVENT_IDS_CONTEXT_KEY` | `"chat_memory_response_event_ids"` | Set by the advisor on the response: the ids of the events that store the reply's assistant messages, a `List<String>`, empty when none was stored. Streamed chunks do not carry it; `subscribe(sessionId)` delivers the stored events instead |
-| `ToolConfirmationAdvisor.TOOL_CONFIRMATION_CONTEXT_KEY` | `"tool_confirmations"` | A `ToolConfirmation` or a collection of them, one per tool call the parked turn waits on; see [Tool confirmation](#tool-confirmation) |
+| `SessionTurnAdvisor.TOOL_CALL_DECISIONS_CONTEXT_KEY` | `"tool_call_decisions"` | A `ToolCallDecisions`, a `ToolCallDecision` or a collection of them, for the tool calls the parked turn waits on; see [Tool confirmation](#tool-confirmation) |
 
 ---
 
@@ -313,65 +341,83 @@ via `and()`, `or()`, and `negate()`:
 
 ## Tool confirmation
 
-A `ToolConfirmationPolicy` names the tools a person must confirm before they run. It has
-two ends: its `eligibilityChecker()` on the tool-calling advisor keeps the loop from running
-those calls, and a `ToolConfirmationAdvisor` parks the turn when such a call comes back and
-resumes it when the decision arrives. The gate sits between the tool-calling advisor and
-`SessionMemoryAdvisor` (default order `HIGHEST_PRECEDENCE + 900`) and needs the
-`SessionTurnAdvisor`, which starts the turn the gate parks and ends the turn it resumes.
-Whatever the loop's position, keep
-the gate outside the memory advisor (a lower order value): it parks after the reply is
-stored and resumes before the history is loaded. If you set the memory advisor's order
-below the loop's to wrap it, set the gate's order below the memory advisor's too:
+Some tools should not run until a person has seen the call. Spring AI's tool calling
+decides which ones: a tool marked `@Tool(requiresConfirmation = true)`, or a
+`ToolCallConfirmationPolicy` on the `ToolCallingManager`. The tool-calling loop then
+pauses: none of the reply's calls run, and the reply comes back with the ids of the calls
+that wait for a decision (`ToolCallDecisions.awaitingDecision(response)`). The session
+makes the pause durable. The `SessionTurnAdvisor` parks the turn on it and resumes it when
+the decisions arrive, on any node.
+
+Give the turn advisor the loop's own manager, so the policy and the tool call limits are
+the same on both sides of the pause:
 
 ```java
-ToolConfirmationPolicy policy = ToolConfirmationPolicy.forTools("bash");
-ToolCallingManager toolCallingManager = ToolCallingManager.builder().build();
-
+// In Spring Boot, inject the ToolCallingManager bean: the ChatClient's own loop uses it
 ChatClient chatClient = ChatClient.builder(chatModel)
-    .defaultAdvisors(
-        SessionTurnAdvisor.builder(sessionService).build(),
-        ToolCallingAdvisor.builder()
-            .toolCallingManager(toolCallingManager)
-            .toolExecutionEligibilityChecker(policy.eligibilityChecker())
-            .build(),
-        ToolConfirmationAdvisor.builder(sessionService)
-            .policy(policy)
-            .toolCallingManager(toolCallingManager) // optional: share the loop's manager
-            .build(),
-        SessionMemoryAdvisor.builder(sessionService).build())
-    .defaultTools(bashTool, readFileTool)
+    .defaultAdvisors(SessionAdvisors.builder(sessionService)
+        .toolCallingManager(toolCallingManager)
+        .build())
+    .defaultTools(new BookingTools()) // bookFlight is @Tool(requiresConfirmation = true)
     .build();
 ```
 
-A reply that asks for `bash` comes back to the application with the tool call still in
+Without Spring Boot, or with a loop of your own, give the loop the same manager:
+`ToolCallingAdvisor.builder().toolCallingManager(toolCallingManager).build()`. Both
+default to `ToolCallingManager.builder().build()`, which gates the tools marked
+`requiresConfirmation`; pass one manager to both when you customize it.
+
+A reply that asks for `bookFlight` comes back to the application with the tool call in
 it, and the session is idle with `stopReason() == StopReason.REQUIRES_ACTION`. Show the
-call, then send the decision on the next request. The request carries no new user text
-(new text goes in the next turn) but must carry the tools, because the gate runs the
-allowed call with them:
+call, then send the decisions on the next request. The request carries no new user text
+(new text goes in the next turn), and it must carry the tools, because the allowed calls
+run with them:
 
 ```java
-ChatResponse reply = chatClient.prompt()
-    .advisors(a -> a
-        .param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId)
-        .param(ToolConfirmationAdvisor.TOOL_CONFIRMATION_CONTEXT_KEY, ToolConfirmation.allow(toolCallId)))
+List<String> waiting = ToolCallDecisions.awaitingDecision(reply);
+
+String answer = chatClient.prompt()
+    .advisors(SessionAdvisors.decide(sessionId, ToolCallDecision.allow(waiting.get(0))))
     .call()
-    .chatResponse();
+    .content();
 ```
 
-`ToolConfirmation.deny(toolCallId, "Not on production.")` answers the call with that text
-instead of running it. Every gated call needs a decision in the same request (a
-collection of confirmations for parallel calls); a call of the same reply the policy does
-not gate is allowed implicitly. A decision for a call that is not pending,
-a session that is not waiting, or new user text next to the decisions is an
-`IllegalArgumentException`, raised before anything is recorded. Resuming starts the turn
-with the same compare-and-set as any call, so a second request with the same decisions
-fails instead of running the tool twice. The parked turn is an
+`SessionAdvisors.decide` sets the session id and `SessionTurnAdvisor.TOOL_CALL_DECISIONS_CONTEXT_KEY`.
+
+When streaming, the ids are on the last chunk of the reply.
+
+- `ToolCallDecision.deny(toolCallId, "Not on production.")` answers the call with that
+  text instead of running it.
+- Every call that waits needs a decision. A call of the same reply that does not wait is
+  allowed.
+- The calls that run come from the session's log, never from the request.
+- A decision for a call that is not waiting, a session that is not waiting, new user text
+  next to the decisions, or an allowed call whose tool the request does not carry is an
+  `IllegalArgumentException`, raised before anything is recorded.
+- Resuming starts the turn with the same compare-and-set as any call, so a second request
+  with the same decisions fails instead of running the tool twice.
+- The tool results are stored like any other. A `returnDirect` tool's results are stored
+  and returned without calling the model.
+- A resumption that fails ends the turn with `ERROR`. If no call ran, the calls are still
+  open in the log and can be decided on again; once a call ran, they are answered with the
+  failure, so none runs twice.
+- The tool-calling loop counts its tool call limits from the resumption on, so a pause
+  restarts them once.
+- A `returnDirect` result is stored by the turn advisor with a random event id, not with
+  the memory advisor's id generators.
+- A turn that was interrupted before it could park keeps the reply; its calls stay
+  unanswered and the next turn goes on without them.
+- A model that gives its tool calls no ids gets some from the loop when it pauses; decide
+  on those. The results are stored under the ids the log holds.
+
+The parked turn is an
 [interaction](../session-management/concepts.md#interactions-a-parked-turn-in-general): an
-`INTERACTION` question of kind `toolConfirmation` with the gated calls, named by the status
-event next to the reply, and an `INTERACTION` answer with the decisions, so the approval can
-arrive on another node; the tool results are stored like any other. One known limitation: a confirmed tool marked `returnDirect` sends its result to
-the model like any other, since a resumption cannot short-circuit the advisor chain.
+`INTERACTION` question of kind `toolConfirmation` with the paused calls and the ids that
+wait, named by the status event next to the reply, and an `INTERACTION` answer with the
+decisions. `ToolConfirmations` reads and writes both.
+
+Tools that the Tool Search Tool adds per round are not on the request that resumes, so an
+allowed call to one cannot run; deny it, or put the tool on the request.
 
 ---
 

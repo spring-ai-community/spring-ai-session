@@ -198,7 +198,7 @@ The checkpointer API doesn't change: `CheckpointerFeature` simply takes this `Ch
   against its budget, and once it's reached it ends the turn with `BUDGET_REACHED` and refuses the call.
   It's the same check `BudgetAdvisor` does, in the core.
 - `ToolConfirmationFeature` is a `ToolCallInterceptor`. A gated call interrupts the run with the pending
-  call as the question. Resume with a `ToolConfirmation`: an allowed call runs through the agent's own
+  call as the question. Resume with a `ToolCallDecision`: an allowed call runs through the agent's own
   tools, a denied one answers the model with its message.
 
 ### 3.8 Following a session
@@ -226,7 +226,7 @@ Agent<String, String> agent = ModelAwareGraphAgent.builder(Graphs.toolCallLoop()
     .enable(feature)
     .enable(new CheckpointerFeature(feature.checkpointer()))   // the log is the checkpoint store
     .enable(new BudgetFeature(sessionService, BudgetPolicy.fixed(Budget.ofTotalTokens(200_000))))
-    .enable(new ToolConfirmationFeature(ToolConfirmationPolicy.forTools("bash")))
+    .enable(new ToolConfirmationFeature(ToolCallConfirmationPolicy.forTools("bash")))
     .build();
 
 agent.output("I am planning a trip to Paris.", new RunIdentification("trip-1", "run-1"));
@@ -250,8 +250,10 @@ needed from it:
 - **The run id on the turn.** `startTurn(sessionId, runId)`, carried on the status events.
 - **One parked-turn protocol.** `park`, `resume` and `pendingInteraction` on the service, used by both
   the `ChatClient` gate and the agent's interrupts. Tool confirmation is one kind of question.
-- **Shared value types in the core.** `Budget`, `BudgetPolicy`, `BudgetGuard` and
-  `ToolConfirmationPolicy`, so the features and the advisors use the same code.
+- **Shared value types in the core.** `Budget`, `BudgetPolicy` and `BudgetGuard`, so the features
+  and the advisors use the same code. Tool confirmation uses Spring AI's own
+  `ToolCallConfirmationPolicy` and `ToolCallDecision`, and `ToolConfirmations` keeps the question
+  and the answer in one shape for both.
 - **The agent on the child marker.** `CHILD_CREATED` carries the child's agent name, version and model,
   so a UI can label a child without a second read.
 

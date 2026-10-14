@@ -40,7 +40,10 @@ import org.springframework.util.Assert;
  */
 public record Interaction(String kind, String path, @Nullable Object payload, @Nullable String resumeType) {
 
-	/** A tool call that waits for a caller's {@link ToolConfirmation}; the payload names the calls. */
+	/**
+	 * Tool calls that wait for a person's decision; the payload names the calls
+	 * ({@link ToolConfirmations}).
+	 */
 	public static final String KIND_TOOL_CONFIRMATION = "toolConfirmation";
 
 	/** A runtime's interrupt node asking a human; the payload is its question. */
