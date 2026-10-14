@@ -46,6 +46,7 @@ import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
@@ -149,10 +150,22 @@ class DefaultSessionServiceTests {
 	void createWithExistingIdIsRejectedAndDoesNotReassignThePrincipal() {
 		Session original = this.service.create(CreateSessionRequest.builder().id("fixed-id").metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 
-		assertThatIllegalStateException().isThrownBy(() -> this.service.create(CreateSessionRequest.builder().id("fixed-id").metadata(SessionAttributes.PRINCIPAL_NAME, "mallory").build()))
-			.withMessageContaining("already exists");
+		assertThatExceptionOfType(SessionAlreadyExistsException.class)
+			.isThrownBy(() -> this.service.create(CreateSessionRequest.builder().id("fixed-id").metadata(SessionAttributes.PRINCIPAL_NAME, "mallory").build()))
+			.withMessageContaining("already exists")
+			.satisfies(ex -> assertThat(ex.getSessionId()).isEqualTo("fixed-id"));
 
 		assertThat(SessionAttributes.principalName(this.service.findById(original.id()))).isEqualTo("alice");
+	}
+
+	@Test
+	void createChildWithExistingIdIsRejected() {
+		Session root = this.service.create(CreateSessionRequest.builder().build());
+		this.service.createChild(root.id(), CreateSessionRequest.builder().id("child-1").build());
+
+		assertThatExceptionOfType(SessionAlreadyExistsException.class)
+			.isThrownBy(() -> this.service.createChild(root.id(), CreateSessionRequest.builder().id("child-1").build()))
+			.satisfies(ex -> assertThat(ex.getSessionId()).isEqualTo("child-1"));
 	}
 
 	@Test

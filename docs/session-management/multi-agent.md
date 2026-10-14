@@ -88,7 +88,7 @@ public class ResearcherTool {
                     .metadata(SessionAttributes.AGENT_MODEL, "claude-sonnet-5-5")
                     .build());
             }
-            catch (IllegalStateException alreadyCreated) {
+            catch (SessionAlreadyExistsException alreadyCreated) {
                 // a concurrent delegation created it first
             }
         }

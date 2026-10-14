@@ -108,7 +108,7 @@ public class DefaultSessionService implements SessionService {
 		// would reassign its owner and TTL while keeping its event log), even when two
 		// callers create the same id concurrently.
 		if (!this.sessionRepository.saveIfAbsent(session)) {
-			throw new IllegalStateException("Session already exists: " + sessionId);
+			throw new SessionAlreadyExistsException(sessionId);
 		}
 		return session;
 	}
@@ -190,7 +190,7 @@ public class DefaultSessionService implements SessionService {
 			.metadata(metadata)
 			.build();
 		if (!this.sessionRepository.saveIfAbsent(child)) {
-			throw new IllegalStateException("Session already exists: " + childId);
+			throw new SessionAlreadyExistsException(childId);
 		}
 		append(SessionTreeEvents.childCreated(child));
 		return child;

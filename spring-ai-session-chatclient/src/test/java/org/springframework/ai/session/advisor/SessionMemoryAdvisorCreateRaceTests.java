@@ -27,10 +27,12 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.Session;
+import org.springframework.ai.session.SessionAlreadyExistsException;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionAttributes;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
@@ -54,13 +56,25 @@ class SessionMemoryAdvisorCreateRaceTests {
 		assertThat(result.prompt().getInstructions()).extracting(m -> m.getText()).containsExactly("hello");
 	}
 
+	@Test
+	void otherCreateFailureIsNotTakenForLostRace() {
+		SessionService sessionService = sessionServiceWhereCreateFailsWith(new IllegalStateException("Store is read-only"));
+		SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService).build();
+
+		assertThatIllegalStateException().isThrownBy(() -> advisor.before(request(), mock(AdvisorChain.class)))
+			.withMessage("Store is read-only");
+	}
+
 	private static SessionService sessionServiceWhereCreateLosesTheRaceTo(String winner) {
-		Session stored = Session.builder().id(SESSION_ID).metadata(SessionAttributes.PRINCIPAL_NAME, winner).build();
+		return sessionServiceWhereCreateFailsWith(new SessionAlreadyExistsException(SESSION_ID));
+	}
+
+	private static SessionService sessionServiceWhereCreateFailsWith(RuntimeException failure) {
+		Session stored = Session.builder().id(SESSION_ID).metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build();
 		SessionService sessionService = mock(SessionService.class);
 		// Not found on the first lookup, created by the concurrent winner right after.
 		given(sessionService.findById(SESSION_ID)).willReturn(null, stored);
-		given(sessionService.create(any(CreateSessionRequest.class)))
-			.willThrow(new IllegalStateException("Session already exists: " + SESSION_ID));
+		given(sessionService.create(any(CreateSessionRequest.class))).willThrow(failure);
 		return sessionService;
 	}
 

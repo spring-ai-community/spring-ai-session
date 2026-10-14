@@ -57,6 +57,7 @@ import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Interaction;
 import org.springframework.ai.session.InterruptEvents;
 import org.springframework.ai.session.Session;
+import org.springframework.ai.session.SessionAlreadyExistsException;
 import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
@@ -412,7 +413,7 @@ public final class SessionFeature implements RunListener, ConversationIntercepto
 			state.inherited.put(path, inheritedMessages);
 			state.stored.put(path, 0);
 		}
-		catch (IllegalStateException alreadyCreated) {
+		catch (SessionAlreadyExistsException alreadyCreated) {
 			// A re-attempt of the same run: the child exists, its log holds what was stored
 			Session child = this.sessions.findById(childId);
 			Object inherited = child != null ? child.metadata().get(INHERITED_MESSAGES) : null;

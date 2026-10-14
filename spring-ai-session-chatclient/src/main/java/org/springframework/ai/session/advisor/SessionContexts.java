@@ -23,6 +23,7 @@ import org.jspecify.annotations.Nullable;
 
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.Session;
+import org.springframework.ai.session.SessionAlreadyExistsException;
 import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionService;
 
@@ -68,7 +69,8 @@ final class SessionContexts {
 			return sessionService
 				.create(CreateSessionRequest.builder().id(sessionId).metadata(sessionMetadata(context)).build());
 		}
-		catch (IllegalStateException ex) {
+		catch (SessionAlreadyExistsException ex) {
+			// A concurrent request created it first: use the stored session
 			Session existing = sessionService.findById(sessionId);
 			if (existing == null) {
 				throw ex;

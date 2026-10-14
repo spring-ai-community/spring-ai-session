@@ -343,6 +343,13 @@ caller's thread-local context, such as the security context. The advisor runs on
 session at a time, and one that a new turn's writes overtake is skipped and retried after
 that turn. The default stays synchronous.
 
+### New: `SessionAlreadyExistsException`
+
+`SessionService.create` and `createChild` reject an id that is already taken with a
+`SessionAlreadyExistsException`, which names the id (`getSessionId()`). It extends
+`IllegalStateException`, so code that catches that keeps working; catch the new type to
+tell a lost create race from any other failure, as the advisors and `SessionFeature` now do.
+
 ### New: `SessionAdvisors`
 
 `SessionAdvisors.builder(sessionService)...build()` returns the session advisors as a

@@ -46,7 +46,7 @@ public interface SessionService {
 	 * Creates a new root session. Uses {@link CreateSessionRequest#id()} when set,
 	 * otherwise a random UUID. A child of an existing session is created with
 	 * {@link #createChild}.
-	 * @throws IllegalStateException if a session with the requested id already exists
+	 * @throws SessionAlreadyExistsException if a session with the requested id already exists
 	 */
 	Session create(CreateSessionRequest request);
 
@@ -76,7 +76,7 @@ public interface SessionService {
 	 * appended to the parent's log.
 	 * @throws IllegalArgumentException if the parent does not exist, the depth limit is
 	 * reached, or the request diverges from the inherited attributes or expiry
-	 * @throws IllegalStateException if a session with the requested id already exists
+	 * @throws SessionAlreadyExistsException if a session with the requested id already exists
 	 */
 	Session createChild(String parentSessionId, CreateSessionRequest request);
 
