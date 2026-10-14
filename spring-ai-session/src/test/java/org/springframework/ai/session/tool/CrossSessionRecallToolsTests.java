@@ -28,7 +28,10 @@ import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionSelector;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionTreeEvents;
+import org.springframework.ai.session.SessionAttributes;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
@@ -47,20 +50,20 @@ class CrossSessionRecallToolsTests {
 			.build();
 	}
 
-	private CrossSessionRecallTools toolsFor(String userId) {
-		return CrossSessionRecallTools.builder(this.sessionService, userId).build();
+	private CrossSessionRecallTools toolsFor(String principal) {
+		return CrossSessionRecallTools.builder(this.sessionService, SessionSelector.principal(principal)).build();
 	}
 
 	@Test
-	void returnsNoResultsWhenUserHasNoSessions() {
+	void returnsNoResultsWhenThePrincipalHasNoSessions() {
 		String result = toolsFor("alice").crossSessionSearch("thinking...", "anything", null, null, 0);
 		assertThat(result).isEqualTo("No results found.");
 	}
 
 	@Test
 	void findsMatchesAcrossMultipleSessions() {
-		Session session1 = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
-		Session session2 = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session1 = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
+		Session session2 = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 
 		this.sessionService.appendMessage(session1.id(), new UserMessage("Tell me about Spring AI"));
 		this.sessionService.appendMessage(session2.id(), new UserMessage("What about LangChain?"));
@@ -73,8 +76,26 @@ class CrossSessionRecallToolsTests {
 	}
 
 	@Test
+	void treeMarkersAreNotSearchHits() {
+		Session root = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
+		Session child = this.sessionService.createChild(root.id(), "reviewer");
+		this.sessionService.appendMessage(child.id(), new AssistantMessage("Sofia is historic."));
+		// The marker on the root carries the child's answer; the answer is the child's log
+		this.sessionService.appendEvent(SessionTreeEvents.messageReceived(child, "Sofia is historic."));
+
+		assertThat(toolsFor("alice").crossSessionSearch("thinking...", "historic", null, null, 0))
+			.isEqualTo("No results found.");
+		CrossSessionRecallTools withChildren = CrossSessionRecallTools
+			.builder(this.sessionService, SessionSelector.principalWithChildren("alice"))
+			.build();
+		assertThat(withChildren.crossSessionSearch("thinking...", "historic", null, null, 0))
+			.contains("Sofia is historic.")
+			.containsOnlyOnce("historic");
+	}
+
+	@Test
 	void resultsIncludeSessionIdAcrossSessions() {
-		Session session1 = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session1 = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 		this.sessionService.appendMessage(session1.id(), new UserMessage("Spring AI memory management"));
 
 		String result = toolsFor("alice").crossSessionSearch("thinking...", "memory", null, null, 0);
@@ -83,9 +104,9 @@ class CrossSessionRecallToolsTests {
 	}
 
 	@Test
-	void onlySearchesSessionsForTheConfiguredUser() {
-		Session aliceSession = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
-		Session bobSession = this.sessionService.create(CreateSessionRequest.builder().userId("bob").build());
+	void onlySearchesTheSelectedSessions() {
+		Session aliceSession = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
+		Session bobSession = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "bob").build());
 
 		this.sessionService.appendMessage(aliceSession.id(), new UserMessage("alice secret note"));
 		this.sessionService.appendMessage(bobSession.id(), new UserMessage("bob secret note"));
@@ -97,7 +118,7 @@ class CrossSessionRecallToolsTests {
 
 	@Test
 	void multipleCommaSeparatedKeywordsDefaultToAnyMatch() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 		this.sessionService.appendMessage(session.id(), new UserMessage("we decided to ship it"));
 		this.sessionService.appendMessage(session.id(), new UserMessage("let's go with option B"));
 		this.sessionService.appendMessage(session.id(), new UserMessage("unrelated message"));
@@ -111,7 +132,7 @@ class CrossSessionRecallToolsTests {
 
 	@Test
 	void allMatchModeRequiresEveryKeyword() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 		this.sessionService.appendMessage(session.id(), new UserMessage("actually, let's use this instead"));
 		this.sessionService.appendMessage(session.id(), new UserMessage("actually that's fine as-is"));
 
@@ -123,7 +144,7 @@ class CrossSessionRecallToolsTests {
 
 	@Test
 	void sinceExcludesEventsBeforeTheGivenInstant() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 		this.sessionService.appendEvent(SessionEvent.builder()
 			.sessionId(session.id())
 			.timestamp(Instant.parse("2026-01-01T00:00:00Z"))
@@ -150,7 +171,7 @@ class CrossSessionRecallToolsTests {
 
 	@Test
 	void blankQueryThrowsInsteadOfSilentlySearchingEverything() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 		this.sessionService.appendMessage(session.id(), new UserMessage("this should never be returned"));
 
 		assertThatIllegalArgumentException()
@@ -168,7 +189,7 @@ class CrossSessionRecallToolsTests {
 
 	@Test
 	void matchModeIsCaseInsensitive() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 		this.sessionService.appendMessage(session.id(), new UserMessage("alpha and beta"));
 		this.sessionService.appendMessage(session.id(), new UserMessage("only alpha"));
 
@@ -179,7 +200,7 @@ class CrossSessionRecallToolsTests {
 
 	@Test
 	void commaOnlyQueryThrowsInsteadOfSilentlySearchingEverything() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 		this.sessionService.appendMessage(session.id(), new UserMessage("this should never be returned"));
 
 		assertThatIllegalArgumentException()
@@ -188,7 +209,7 @@ class CrossSessionRecallToolsTests {
 
 	@Test
 	void queryWithinTermLimitIsAccepted() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 		this.sessionService.appendMessage(session.id(), new UserMessage("term9 present"));
 
 		String query = String.join(",", java.util.stream.IntStream.rangeClosed(1, CrossSessionRecallTools.MAX_QUERY_TERMS)
@@ -217,7 +238,7 @@ class CrossSessionRecallToolsTests {
 		// Instant.toString() omits fractional seconds when exactly zero, so a naive
 		// String-lexicographic sort would place "afterExactSecond" before
 		// "beforeExactSecond" even though it is chronologically later.
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 		Instant exactSecond = Instant.parse("2026-01-01T00:00:00Z");
 
 		this.sessionService.appendEvent(SessionEvent.builder()
@@ -248,7 +269,7 @@ class CrossSessionRecallToolsTests {
 
 	@Test
 	void veryLargePageNumberReturnsNoResultsInsteadOfOverflowing() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 		this.sessionService.appendMessage(session.id(), new UserMessage("entry 1"));
 
 		String result = toolsFor("alice").crossSessionSearch("thinking...", "entry", null, null, Integer.MAX_VALUE);
@@ -258,8 +279,8 @@ class CrossSessionRecallToolsTests {
 
 	@Test
 	void paginationSplitsAggregatedResultsAcrossSessions() {
-		Session session1 = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
-		Session session2 = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session1 = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
+		Session session2 = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 
 		for (int i = 1; i <= 6; i++) {
 			this.sessionService.appendMessage(session1.id(), new UserMessage("entry " + i));
@@ -268,7 +289,9 @@ class CrossSessionRecallToolsTests {
 			this.sessionService.appendMessage(session2.id(), new UserMessage("entry " + i));
 		}
 
-		CrossSessionRecallTools tools = CrossSessionRecallTools.builder(this.sessionService, "alice").pageSize(10).build();
+		CrossSessionRecallTools tools = CrossSessionRecallTools.builder(this.sessionService, SessionSelector.principal("alice"))
+			.pageSize(10)
+			.build();
 
 		String page0 = tools.crossSessionSearch("thinking...", "entry", null, null, 0);
 		String page1 = tools.crossSessionSearch("thinking...", "entry", null, null, 1);
@@ -279,12 +302,13 @@ class CrossSessionRecallToolsTests {
 
 	@Test
 	void builderRejectsNullSessionService() {
-		assertThatIllegalArgumentException().isThrownBy(() -> CrossSessionRecallTools.builder(null, "alice"));
+		assertThatIllegalArgumentException().isThrownBy(() -> CrossSessionRecallTools.builder(null, SessionSelector.principal("alice")));
 	}
 
 	@Test
-	void builderRejectsEmptyUserId() {
-		assertThatIllegalArgumentException().isThrownBy(() -> CrossSessionRecallTools.builder(this.sessionService, ""));
+	void builderRejectsANullSelector() {
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> CrossSessionRecallTools.builder(this.sessionService, (SessionSelector) null));
 	}
 
 }

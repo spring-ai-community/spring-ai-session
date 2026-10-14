@@ -18,7 +18,7 @@ rather than as part of the conversation, and which part of the work belongs to w
 - **The library enforces this by default.** `DefaultSessionService` rejects a stored
   system message unless you enable `allowSystemMessages`. If you do enable it, **the latest
   stored system message wins**: it is the session's system prompt, and earlier ones are
-  superseded and archived by compaction.
+  superseded and leave the active view when a later compaction cuts.
 - **The integration** uses only the latest stored system message, puts system messages
   first, drops exact duplicates, and avoids re-sending history inside a tool loop.
   `SessionMemoryAdvisor` does this for `ChatClient`. Any other integration must do it
@@ -108,13 +108,13 @@ every turn, which duplicates the system prompt in every request and grows the lo
 `SessionRepository` access is not checked. To store system messages anyway, see
 [When storing a system message is acceptable](#when-storing-a-system-message-is-acceptable).
 
-### It returns history in log order
+### It returns the view, not the log
 
 `getActiveMessages(sessionId)` and `getEvents(sessionId, EventFilter.active())` return
-the active window (archived events excluded) in the order the events were stored.
-**Reads don't move system messages to the front or deduplicate them**; that is left to
-the integration. Compaction doesn't move them either: the kept system message stays where
-it was stored. `EventFilter.messageTypes(...)` can include or exclude `SYSTEM` events when
+the active window in log order until the first compaction; after one, the view starts
+with the pinned latest system message, then the summary, then the preserved and later
+events (see [Event lifecycle](concepts.md#event-lifecycle)). **Reads don't deduplicate
+system messages**; that is left to the integration. `EventFilter.messageTypes(...)` can include or exclude `SYSTEM` events when
 you load history.
 
 ### Compaction: the latest stored system message wins
@@ -124,14 +124,15 @@ a new one replaces the previous one, so it must carry the complete intended cont
 combining several instructions into it is the integration's responsibility. Every
 [compaction strategy](compaction.md) handles stored system messages the same way:
 
-- the latest one stays in the active window, where it was stored, and is never archived
+- the latest one is **pinned**: it stays in the active window, first, and is never covered
   or summarized. Integrations put it first in the prompt (`SessionMemoryAdvisor` does);
-- it doesn't use `maxEvents` / `maxTurns` / `maxEventsToKeep` slots.
+- it doesn't use `maxEvents` / `maxTurns` slots.
   `TokenCountCompactionStrategy` subtracts its tokens from the budget, because it is sent
   with the conversation;
-- earlier ones are **superseded**: archived whenever compaction runs (even when the
-  budget needs no cut), never summarized, and still searchable through
-  [Recall Storage](../recall-memory/recall-storage.md).
+- earlier ones are **superseded**: the next compaction that cuts covers them wherever they
+  sit, even inside the window it keeps, never summarizes them, and they stay searchable
+  through [Recall Storage](../recall-memory/recall-storage.md). A compaction that needs no
+  cut leaves them in the view; the integration uses only the latest one anyway.
 
 At most one stored system message is ever active, so an integration that stores one per
 turn cannot grow the active window.
@@ -150,9 +151,10 @@ Whatever builds the prompt sent to the model owns these steps:
    `Session.metadata`. Don't append it to the session.
 2. **Load only the active history**: `getActiveMessages(...)` or
    `getEvents(..., EventFilter.active())`.
-3. **Use only the latest stored system message** from the loaded history. Earlier ones are
-   superseded (they may still be active until the next compaction). Put system messages
-   first: many models reject or ignore a system message that is not at the start.
+3. **Use only the latest stored system message** from the loaded history: the last one in
+   the order the active view returns. Earlier ones are superseded (they may still be in
+   the view until the next compaction cuts). Put system messages first: many models reject
+   or ignore a system message that is not at the start.
 4. **Drop exact duplicates**, for example a stored system message that is also supplied
    with the request. Don't merge or rewrite texts, so the prompt stays byte-stable for
    prompt caching.
@@ -296,12 +298,12 @@ Then store the session's system prompt. It stays active and protected from compa
 until you store a new one:
 
 ```java
-Session session = sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+Session session = sessionService.create(CreateSessionRequest.builder().build());
 sessionService.appendMessage(session.id(), new SystemMessage("Answer in French."));
 ```
 
 To change it later, store a new, **complete** system message. The latest one wins, and the
-previous one is superseded and archived:
+previous one is superseded:
 
 ```java
 sessionService.appendMessage(session.id(), new SystemMessage("Answer in German."));

@@ -53,10 +53,10 @@ class SessionMemoryIT {
 
 	@Test
 	void createSessionAndFindById() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("alice").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice").build());
 
 		assertThat(session.id()).isNotBlank();
-		assertThat(session.userId()).isEqualTo("alice");
+		assertThat(SessionAttributes.principalName(session)).isEqualTo("alice");
 		assertThat(session.createdAt()).isNotNull();
 
 		Session found = this.sessionService.findById(session.id());
@@ -65,19 +65,19 @@ class SessionMemoryIT {
 	}
 
 	@Test
-	void findByUserIdReturnsAllUserSessions() {
-		this.sessionService.create(CreateSessionRequest.builder().userId("bob").build());
-		this.sessionService.create(CreateSessionRequest.builder().userId("bob").build());
-		this.sessionService.create(CreateSessionRequest.builder().userId("carol").build());
+	void findByIndexReturnsAllSessionsOfAPrincipal() {
+		this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "bob").build());
+		this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "bob").build());
+		this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "carol").build());
 
-		List<Session> bobSessions = this.sessionService.findByUserId("bob");
+		List<Session> bobSessions = this.sessionService.findByIndex(SessionAttributes.PRINCIPAL_NAME, "bob");
 		assertThat(bobSessions).hasSizeGreaterThanOrEqualTo(2);
-		assertThat(bobSessions).allMatch(s -> "bob".equals(s.userId()));
+		assertThat(bobSessions).allMatch(s -> "bob".equals(SessionAttributes.principalName(s)));
 	}
 
 	@Test
 	void deleteRemovesSessionCompletely() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("eve").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "eve").build());
 
 		this.sessionService.delete(session.id());
 
@@ -87,7 +87,7 @@ class SessionMemoryIT {
 	@Test
 	void sessionWithTimeToLiveHasExpiresAt() {
 		Session session = this.sessionService
-			.create(CreateSessionRequest.builder().userId("frank").timeToLive(Duration.ofHours(1)).build());
+			.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "frank").timeToLive(Duration.ofHours(1)).build());
 
 		assertThat(session.expiresAt()).isNotNull();
 		assertThat(session.expiresAt()).isAfter(session.createdAt());
@@ -97,7 +97,7 @@ class SessionMemoryIT {
 
 	@Test
 	void appendMessagesAndRetrieveInOrder() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-1").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-1").build());
 
 		this.sessionService.appendMessage(session.id(), new UserMessage("What is Spring AI?"));
 		this.sessionService.appendMessage(session.id(), new AssistantMessage("Spring AI is a framework."));
@@ -113,7 +113,7 @@ class SessionMemoryIT {
 
 	@Test
 	void getEventsWithLastNFilterReturnsCorrectSlice() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-2").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-2").build());
 
 		for (int i = 1; i <= 6; i++) {
 			this.sessionService.appendMessage(session.id(), new UserMessage("message " + i));
@@ -128,7 +128,7 @@ class SessionMemoryIT {
 
 	@Test
 	void keywordSearchReturnsOnlyMatchingEvents() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-3").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-3").build());
 
 		this.sessionService.appendMessage(session.id(), new UserMessage("Spring AI is awesome"));
 		this.sessionService.appendMessage(session.id(), new UserMessage("Machine learning is fascinating"));
@@ -142,7 +142,7 @@ class SessionMemoryIT {
 
 	@Test
 	void excludeSyntheticFilterHidesSummaryEvents() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-4").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-4").build());
 
 		this.sessionService.appendMessage(session.id(), new UserMessage("Hello"));
 		this.sessionService.appendMessage(session.id(), new AssistantMessage("Hi there!"));
@@ -173,7 +173,7 @@ class SessionMemoryIT {
 
 	@Test
 	void slidingWindowCompactionKeepsLastNEvents() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-5").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-5").build());
 
 		for (int i = 1; i <= 6; i++) {
 			this.sessionService.appendMessage(session.id(), new UserMessage("user turn " + i));
@@ -183,8 +183,8 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(4).build());
 
-		assertThat(result.archivedEventCount()).isPositive();
-		assertThat(result.compactedEvents()).hasSizeLessThanOrEqualTo(4);
+		assertThat(result.coveredEventCount()).isPositive();
+		assertThat(result.preservedEvents()).hasSizeLessThanOrEqualTo(4);
 
 		// The active window is trimmed to the kept events...
 		List<SessionEvent> active = this.sessionService.getEvents(session.id(), EventFilter.active());
@@ -192,14 +192,14 @@ class SessionMemoryIT {
 		// Window must start on a turn boundary (user message)
 		assertThat(active.get(0).getMessageType().getValue()).isEqualTo("user");
 
-		// ...but archived events are retained for Recall Storage (nothing is deleted)
+		// ...but covered events are retained for Recall Storage (nothing is deleted)
 		List<Message> all = this.sessionService.getMessages(session.id());
 		assertThat(all).hasSize(12);
 	}
 
 	@Test
 	void storedSystemMessageSurvivesCompactionAndStaysFirst() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-sys").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-sys").build());
 		this.sessionService.appendMessage(session.id(), new SystemMessage("Answer in French."));
 		for (int i = 1; i <= 5; i++) {
 			this.sessionService.appendMessage(session.id(), new UserMessage("question " + i));
@@ -209,7 +209,7 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
-		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText())
+		assertThat(result.coveredEvents()).extracting(e -> e.getMessage().getText())
 			.doesNotContain("Answer in French.");
 		assertThat(this.sessionService.getActiveMessages(session.id())).extracting(Message::getText)
 			.containsExactly("Answer in French.", "question 5", "answer 5");
@@ -217,7 +217,7 @@ class SessionMemoryIT {
 
 	@Test
 	void turnWindowCompactionKeepsLastNTurns() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-6").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-6").build());
 
 		for (int i = 1; i <= 5; i++) {
 			this.sessionService.appendMessage(session.id(), new UserMessage("user turn " + i));
@@ -227,7 +227,7 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				TurnWindowCompactionStrategy.builder().maxTurns(2).build());
 
-		assertThat(result.archivedEventCount()).isPositive();
+		assertThat(result.coveredEventCount()).isPositive();
 
 		// Active window: 2 turns × 2 messages per turn = 4 messages
 		List<SessionEvent> active = this.sessionService.getEvents(session.id(), EventFilter.active());
@@ -235,7 +235,7 @@ class SessionMemoryIT {
 		assertThat(active.get(0).getMessage().getText()).isEqualTo("user turn 4");
 		assertThat(active.get(3).getMessage().getText()).isEqualTo("assistant reply 5");
 
-		// Archived turns are retained (not deleted) — full history still available
+		// Covered turns are retained (not deleted) — full history still available
 		assertThat(this.sessionService.getMessages(session.id())).hasSize(10);
 		// ...while getActiveMessages() returns only the active window
 		assertThat(this.sessionService.getActiveMessages(session.id())).extracting(m -> m.getText())
@@ -244,7 +244,7 @@ class SessionMemoryIT {
 
 	@Test
 	void tokenCountCompactionDropsOldestEventsOverBudget() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-7").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-7").build());
 
 		// Add messages — each "token" word approximation ~1 token each
 		for (int i = 1; i <= 10; i++) {
@@ -255,17 +255,15 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				TokenCountCompactionStrategy.builder().maxTokens(20).build());
 
-		assertThat(result.archivedEventCount()).isPositive();
-		assertThat(result.compactedEvents().size()).isLessThan(10);
+		assertThat(result.coveredEventCount()).isPositive();
+		assertThat(result.preservedEvents().size()).isLessThan(10);
 		// Kept window must start on a user message (turn boundary)
-		if (!result.compactedEvents().isEmpty()) {
-			assertThat(result.compactedEvents().get(0).getMessageType().getValue()).isEqualTo("user");
-		}
+		assertThat(result.preservedEvents().get(0).getMessageType().getValue()).isEqualTo("user");
 	}
 
 	@Test
 	void compactionIsNoopWhenEventsWithinBudget() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-8").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-8").build());
 
 		this.sessionService.appendMessage(session.id(), new UserMessage("hi"));
 		this.sessionService.appendMessage(session.id(), new AssistantMessage("hello"));
@@ -274,13 +272,12 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(100).build());
 
-		assertThat(result.archivedEventCount()).isEqualTo(0);
-		assertThat(result.compactedEvents()).hasSize(2);
+		assertThat(result.isUnchanged()).isTrue();
 	}
 
 	@Test
 	void syntheticSummaryEventsArePreservedAfterCompaction() {
-		Session session = this.sessionService.create(CreateSessionRequest.builder().userId("user-9").build());
+		Session session = this.sessionService.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-9").build());
 
 		// Add some real events
 		for (int i = 1; i <= 4; i++) {
@@ -305,9 +302,10 @@ class SessionMemoryIT {
 		CompactionResult result = this.sessionService.compact(session.id(), req -> true,
 				SlidingWindowCompactionStrategy.builder().maxEvents(1).build());
 
-		// Synthetic events must survive compaction
-		long syntheticCount = result.compactedEvents().stream().filter(SessionEvent::isSynthetic).count();
-		assertThat(syntheticCount).isEqualTo(2);
+		// Synthetic events must survive compaction: a window pins the prior summary
+		assertThat(result.pinnedEvents()).hasSize(2).allMatch(SessionEvent::isSynthetic);
+		assertThat(this.sessionService.getActiveMessages(session.id())).extracting(Message::getText)
+			.startsWith("Summarize the conversation.", "User sent 4 messages.");
 	}
 
 	// --- Spring Boot configuration ---

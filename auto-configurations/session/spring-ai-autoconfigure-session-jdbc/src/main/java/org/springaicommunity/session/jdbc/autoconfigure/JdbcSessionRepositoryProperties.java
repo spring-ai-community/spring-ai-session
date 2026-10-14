@@ -16,6 +16,9 @@
 
 package org.springaicommunity.session.jdbc.autoconfigure;
 
+import java.util.LinkedHashSet;
+import java.util.Set;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.jdbc.init.DatabaseInitializationProperties;
 
@@ -24,7 +27,7 @@ import org.springframework.boot.jdbc.init.DatabaseInitializationProperties;
  * {@link org.springframework.ai.session.jdbc.JdbcSessionRepository}.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 @ConfigurationProperties(JdbcSessionRepositoryProperties.CONFIG_PREFIX)
 public class JdbcSessionRepositoryProperties extends DatabaseInitializationProperties {
@@ -32,6 +35,20 @@ public class JdbcSessionRepositoryProperties extends DatabaseInitializationPrope
 	public static final String CONFIG_PREFIX = "spring.ai.session.repository.jdbc";
 
 	private static final String DEFAULT_SCHEMA_LOCATION = "classpath:org/springframework/ai/session/jdbc/schema-@@platform@@.sql";
+
+	/**
+	 * Metadata keys to index in {@code AI_SESSION_INDEX} besides the principal name, so
+	 * that {@code findByIndex} can answer for them.
+	 */
+	private Set<String> indexedAttributes = new LinkedHashSet<>();
+
+	public Set<String> getIndexedAttributes() {
+		return this.indexedAttributes;
+	}
+
+	public void setIndexedAttributes(Set<String> indexedAttributes) {
+		this.indexedAttributes = indexedAttributes;
+	}
 
 	@Override
 	public String getDefaultSchemaLocation() {

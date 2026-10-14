@@ -31,7 +31,7 @@
     <version>0.11.0-SNAPSHOT</version>
 
     <name>Spring AI Session</name>
-    <description>Spring AI Session - conversation management with compaction strategies</description>
+    <description>Spring AI Session - the session model, service, repositories and compaction, independent of how an agent is built</description>
 
     <url>https://github.com/spring-ai-community/spring-ai-session</url>
 
@@ -45,10 +45,6 @@
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-model</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-client-chat</artifactId>
         </dependency>
         <dependency>
             <groupId>tools.jackson.core</groupId>

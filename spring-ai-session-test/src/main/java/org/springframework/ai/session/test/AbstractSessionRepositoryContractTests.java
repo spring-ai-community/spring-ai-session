@@ -39,13 +39,27 @@ import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.messages.part.OpaquePayload;
+import org.springframework.ai.chat.messages.part.ReasoningPart;
+import org.springframework.ai.chat.messages.part.TextPart;
+import org.springframework.ai.chat.messages.part.ToolResultPart;
+import org.springframework.ai.content.Media;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.EventFilter.MatchMode;
+import org.springframework.ai.session.Interaction;
+import org.springframework.ai.session.InteractionEvents;
 import org.springframework.ai.session.Session;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
-import org.springframework.ai.session.compaction.CompactionPlan;
-import org.springframework.ai.session.compaction.CompactionPlan.Insert;
+import org.springframework.ai.session.SessionStatus;
+import org.springframework.ai.session.StopReason;
+import org.springframework.ai.session.SessionTreeEvents;
+import org.springframework.ai.session.UsageEvents;
+import org.springframework.ai.session.TokenUsage;
+import org.springframework.ai.session.compaction.CompactionBoundary;
+import org.springframework.util.MimeTypeUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -71,8 +85,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * return a shared store. The tests cover session lifecycle, idempotent append, the read
  * contract of {@link SessionRepository#findEvents} (pushdown or
  * {@link EventFilter#apply(List)} must give the same result, including a {@code lastN}
- * window that keeps turns whole), cross-session reads, and the ordering rules of
- * {@link SessionRepository#applyCompaction}.
+ * window that keeps turns whole), cross-session reads, the atomic
+ * {@link SessionRepository#appendEvents} and the active view a boundary defines.
  *
  * @author Christian Tzolov
  * @since 0.10.0
@@ -102,7 +116,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 
 		assertThat(found).isNotNull();
 		assertThat(found.id()).isEqualTo(session.id());
-		assertThat(found.userId()).isEqualTo("user-1");
+		assertThat(SessionAttributes.principalName(found)).isEqualTo("user-1");
 	}
 
 	@Test
@@ -111,26 +125,197 @@ public abstract class AbstractSessionRepositoryContractTests {
 	}
 
 	@Test
-	void findByUserIdReturnsOnlyThatUsersSessions() {
+	void findByIndexReturnsTheSessionsWithThatAttributeValue() {
 		String alice = "alice-" + UUID.randomUUID();
 		String bob = "bob-" + UUID.randomUUID();
-		Session first = newSession(alice);
-		Session second = newSession(alice);
+		Instant t0 = Instant.parse("2026-02-01T00:00:00Z");
+		// Saved newest first: the lookup orders by creation time, then id
+		Session second = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.createdAt(t0.plusSeconds(60))
+			.metadata(SessionAttributes.PRINCIPAL_NAME, alice)
+			.build());
+		Session first = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.createdAt(t0)
+			.metadata(SessionAttributes.PRINCIPAL_NAME, alice)
+			.build());
 		newSession(bob);
 
-		assertThat(this.repository.findByUserId(alice)).extracting(Session::id)
-			.containsExactlyInAnyOrder(first.id(), second.id());
-		assertThat(this.repository.findByUserId(bob)).hasSize(1);
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, alice)).extracting(Session::id)
+			.containsExactly(first.id(), second.id());
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, bob)).hasSize(1);
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "nobody-" + UUID.randomUUID()))
+			.isEmpty();
+		assertThat(this.repository.findByIndex("no-such-attribute", alice)).isEmpty();
+	}
+
+	@Test
+	void theTreeLinksRoundTripAndAreLookedUpByParentAndByRoot() {
+		Instant t0 = Instant.parse("2025-01-01T00:00:00Z");
+		Session root = this.repository.save(Session.builder().id(UUID.randomUUID().toString()).createdAt(t0).build());
+		Session first = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.createdAt(t0.plusSeconds(1))
+			.parentSessionId(root.id())
+			.rootSessionId(root.id())
+			.build());
+		Session second = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.createdAt(t0.plusSeconds(2))
+			.parentSessionId(root.id())
+			.rootSessionId(root.id())
+			.build());
+		Session grandchild = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.createdAt(t0.plusSeconds(3))
+			.parentSessionId(first.id())
+			.rootSessionId(root.id())
+			.build());
+
+		// The links are stored as such
+		Session stored = this.repository.findById(grandchild.id());
+		assertThat(stored.parentSessionId()).isEqualTo(first.id());
+		assertThat(stored.rootSessionId()).isEqualTo(root.id());
+		assertThat(stored.isChild()).isTrue();
+		Session storedRoot = this.repository.findById(root.id());
+		assertThat(storedRoot.isRoot()).isTrue();
+		assertThat(storedRoot.rootSessionId()).isEqualTo(root.id());
+
+		// Direct children by parent, the whole tree (root included) by root, oldest first
+		assertThat(this.repository.findByParentSessionId(root.id())).extracting(Session::id)
+			.containsExactly(first.id(), second.id());
+		assertThat(this.repository.findByParentSessionId(first.id())).extracting(Session::id)
+			.containsExactly(grandchild.id());
+		assertThat(this.repository.findByParentSessionId(second.id())).isEmpty();
+		assertThat(this.repository.findByRootSessionId(root.id())).extracting(Session::id)
+			.containsExactly(root.id(), first.id(), second.id(), grandchild.id());
+		assertThat(this.repository.findByRootSessionId(first.id())).isEmpty();
+
+		// An update keeps the links
+		this.repository.save(Session.builder()
+			.id(first.id())
+			.parentSessionId(root.id())
+			.rootSessionId(root.id())
+			.metadata("note", "updated")
+			.build());
+		assertThat(this.repository.findById(first.id()).parentSessionId()).isEqualTo(root.id());
+		assertThat(this.repository.findByParentSessionId(root.id())).hasSize(2);
+	}
+
+	@Test
+	void theStatusRoundTripsAndChangesOnlyFromTheExpectedStatus() {
+		Session session = newSession("user-status");
+		assertThat(this.repository.findById(session.id()).status()).isEqualTo(SessionStatus.IDLE);
+
+		// A compare-and-set: only one of two concurrent starts wins
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, null, SessionStatus.RUNNING, null,
+				null, null))
+			.isTrue();
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, null, SessionStatus.RUNNING, null,
+				null, null))
+			.isFalse();
+		Session running = this.repository.findById(session.id());
+		assertThat(running.status()).isEqualTo(SessionStatus.RUNNING);
+		assertThat(running.stopReason()).isNull();
+
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.RUNNING, null, SessionStatus.IDLE, null,
+				StopReason.END_TURN, null)).isTrue();
+		assertThat(this.repository.findById(session.id()).stopReason()).isEqualTo(StopReason.END_TURN);
+
+		Instant archivedAt = Instant.parse("2026-03-01T00:00:00Z");
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, null, SessionStatus.TERMINATED, null,
+				null, archivedAt)).isTrue();
+		Session archived = this.repository.findById(session.id());
+		assertThat(archived.status()).isEqualTo(SessionStatus.TERMINATED);
+		assertThat(archived.stopReason()).isNull();
+		assertThat(archived.archivedAt()).isEqualTo(archivedAt);
+		assertThat(archived.isArchived()).isTrue();
+		// Nothing else changed, and an unknown session is not updated
+		assertThat(SessionAttributes.principalName(archived)).isEqualTo("user-status");
+		assertThat(this.repository.updateStatus("missing-" + UUID.randomUUID(), SessionStatus.IDLE, null,
+				SessionStatus.RUNNING, null, null, null)).isFalse();
+
+		// save() carries the status like any other field
+		Session saved = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.status(SessionStatus.RUNNING)
+			.build());
+		assertThat(this.repository.findById(saved.id()).status()).isEqualTo(SessionStatus.RUNNING);
+	}
+
+	@Test
+	void newSessionIsStoredWithoutRun() {
+		Session saved = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.status(SessionStatus.RUNNING)
+			.runId("run-1")
+			.build());
+		assertThat(this.repository.findById(saved.id()).runId()).isNull();
+
+		String inserted = UUID.randomUUID().toString();
+		assertThat(this.repository
+			.saveIfAbsent(Session.builder().id(inserted).status(SessionStatus.RUNNING).runId("run-1").build())).isTrue();
+		assertThat(this.repository.findById(inserted).runId()).isNull();
+	}
+
+	@Test
+	void runOfTurnRoundTripsAndEndsOnlyThatRunsTurn() {
+		Session session = newSession("user-run");
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.IDLE, null, SessionStatus.RUNNING, "run-1",
+				null, null))
+			.isTrue();
+		assertThat(this.repository.findById(session.id()).runId()).isEqualTo("run-1");
+		// save() keeps the run: only the status compare-and-set changes it
+		this.repository.save(Session.builder()
+			.id(session.id())
+			.status(SessionStatus.RUNNING)
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "user-run")
+			.metadata("note", "updated")
+			.build());
+		assertThat(this.repository.findById(session.id()).runId()).isEqualTo("run-1");
+
+		// Another run's end does not apply; this run's does, and clears the run
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.RUNNING, "run-2", SessionStatus.IDLE, null,
+				StopReason.END_TURN, null))
+			.isFalse();
+		assertThat(this.repository.updateStatus(session.id(), SessionStatus.RUNNING, "run-1", SessionStatus.IDLE, null,
+				StopReason.END_TURN, null))
+			.isTrue();
+		Session idle = this.repository.findById(session.id());
+		assertThat(idle.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(idle.runId()).isNull();
+	}
+
+	@Test
+	void findByIndexComparesTheValueAsAString() {
+		String id = UUID.randomUUID().toString();
+		this.repository.save(Session.builder().id(id).metadata(SessionAttributes.PRINCIPAL_NAME, 4242L).build());
+
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "4242")).extracting(Session::id)
+			.containsExactly(id);
+	}
+
+	@Test
+	void aSessionWithoutTheAttributeIsNotIndexed() {
+		String id = UUID.randomUUID().toString();
+		this.repository.save(Session.builder().id(id).metadata(Map.of("agent", "support")).build());
+
+		assertThat(this.repository.findById(id)).isNotNull();
+		assertThat(SessionAttributes.principalName(this.repository.findById(id))).isNull();
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "")).isEmpty();
 	}
 
 	@Test
 	void saveIfAbsentNeverOverwritesAnExistingSession() {
 		String id = UUID.randomUUID().toString();
 
-		assertThat(this.repository.saveIfAbsent(Session.builder().id(id).userId("alice").build())).isTrue();
-		assertThat(this.repository.saveIfAbsent(Session.builder().id(id).userId("mallory").build())).isFalse();
+		assertThat(this.repository.saveIfAbsent(principalSession(id, "alice"))).isTrue();
+		assertThat(this.repository.saveIfAbsent(principalSession(id, "mallory"))).isFalse();
 
-		assertThat(this.repository.findById(id).userId()).isEqualTo("alice");
+		assertThat(SessionAttributes.principalName(this.repository.findById(id))).isEqualTo("alice");
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "mallory")).extracting(Session::id)
+			.doesNotContain(id);
 	}
 
 	@Test
@@ -145,7 +330,7 @@ public abstract class AbstractSessionRepositoryContractTests {
 				String userId = "user-" + i;
 				results.add(executor.submit(() -> {
 					start.await();
-					return this.repository.saveIfAbsent(Session.builder().id(id).userId(userId).build());
+					return this.repository.saveIfAbsent(principalSession(id, userId));
 				}));
 			}
 			start.countDown();
@@ -167,22 +352,30 @@ public abstract class AbstractSessionRepositoryContractTests {
 	void saveOfAnExistingSessionKeepsCreatedAtAndEvents() {
 		String id = UUID.randomUUID().toString();
 		Instant created = Instant.parse("2026-01-01T00:00:00Z");
-		this.repository.save(Session.builder().id(id).userId("user-1").createdAt(created).build());
+		this.repository.save(Session.builder()
+			.id(id)
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "user-1")
+			.createdAt(created)
+			.build());
 		append(id, user("kept"));
 
 		Session updated = this.repository.save(Session.builder()
 			.id(id)
-			.userId("user-2")
 			.createdAt(Instant.parse("2026-06-01T00:00:00Z"))
-			.metadata(Map.of("key", "value"))
+			.metadata(Map.of("key", "value", SessionAttributes.PRINCIPAL_NAME, "user-2"))
 			.build());
 
 		assertThat(updated.createdAt()).isEqualTo(created);
 		Session found = this.repository.findById(id);
 		assertThat(found.createdAt()).isEqualTo(created);
-		assertThat(found.userId()).isEqualTo("user-2");
+		assertThat(SessionAttributes.principalName(found)).isEqualTo("user-2");
 		assertThat(found.metadata()).containsEntry("key", "value");
 		assertThat(texts(id, EventFilter.all())).containsExactly("kept");
+		// The index follows the metadata
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "user-1")).extracting(Session::id)
+			.doesNotContain(id);
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "user-2")).extracting(Session::id)
+			.contains(id);
 	}
 
 	@Test
@@ -194,6 +387,8 @@ public abstract class AbstractSessionRepositoryContractTests {
 
 		assertThat(this.repository.findById(session.id())).isNull();
 		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).isEmpty();
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "user-4")).extracting(Session::id)
+			.doesNotContain(session.id());
 	}
 
 	@Test
@@ -203,9 +398,17 @@ public abstract class AbstractSessionRepositoryContractTests {
 		String expired = UUID.randomUUID().toString();
 		String extended = UUID.randomUUID().toString();
 		String noTtl = UUID.randomUUID().toString();
-		this.repository.save(Session.builder().id(expired).userId(userId).expiresAt(now.minusSeconds(60)).build());
-		this.repository.save(Session.builder().id(extended).userId(userId).expiresAt(now.plusSeconds(60)).build());
-		this.repository.save(Session.builder().id(noTtl).userId(userId).build());
+		this.repository.save(Session.builder()
+			.id(expired)
+			.metadata(SessionAttributes.PRINCIPAL_NAME, userId)
+			.expiresAt(now.minusSeconds(60))
+			.build());
+		this.repository.save(Session.builder()
+			.id(extended)
+			.metadata(SessionAttributes.PRINCIPAL_NAME, userId)
+			.expiresAt(now.plusSeconds(60))
+			.build());
+		this.repository.save(principalSession(noTtl, userId));
 		append(expired, user("gone"));
 		append(extended, user("kept"));
 
@@ -345,11 +548,11 @@ public abstract class AbstractSessionRepositoryContractTests {
 	}
 
 	@Test
-	void excludeArchivedHidesArchivedEvents() {
-		Session session = newSession("user-archived");
+	void activeViewHidesCoveredEvents() {
+		Session session = newSession("user-covered");
 		append(session.id(), user("old"), user("new"));
 		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
-		apply(session.id(), plan(Set.of(log.get(0).getId()), List.of()));
+		compact(session.id(), List.of(), List.of(), List.of(log.get(1)));
 
 		assertThat(texts(session.id(), EventFilter.active())).containsExactly("new");
 		assertThat(texts(session.id(), EventFilter.all())).containsExactly("old", "new");
@@ -380,12 +583,67 @@ public abstract class AbstractSessionRepositoryContractTests {
 	}
 
 	@Test
-	void patternSearchMatchesWithTheJavaRegex() {
+	void aPatternIsLeftToTheService() {
 		Session session = newSession("user-pattern");
 		append(session.id(), user("msg-1"), user("msg-2"), user("msg-13"));
 
+		// The store reads the page as if the pattern were not there; the service matches it
 		assertThat(texts(session.id(), EventFilter.patternSearch(Pattern.compile("^msg-1\\d?$"))))
-			.containsExactly("msg-1", "msg-13");
+			.containsExactly("msg-1", "msg-2", "msg-13");
+	}
+
+	@Test
+	void aCursorReadsWhatWasLoggedAfterAnEvent() {
+		Session session = newSession("user-cursor");
+		append(session.id(), user("u1"), assistant("a1"), user("u2"), assistant("a2"), user("u3"));
+		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
+		String a1 = log.get(1).getId();
+
+		assertThat(texts(session.id(), EventFilter.after(a1))).containsExactly("u2", "a2", "u3");
+		assertThat(texts(session.id(), EventFilter.builder().after(a1, 2).build())).containsExactly("u2", "a2");
+		assertThat(texts(session.id(), EventFilter.after(log.get(4).getId()))).isEmpty();
+		// The cursor event need not match the criteria
+		assertThat(texts(session.id(),
+				EventFilter.builder().after(a1).messageTypes(Set.of(MessageType.USER)).build()))
+			.containsExactly("u2", "u3");
+		// A cursor and the active view
+		assertThat(texts(session.id(), EventFilter.active().toBuilder().after(a1).build()))
+			.containsExactly("u2", "a2", "u3");
+		// An unknown cursor, or one from another session, is an error
+		assertThatThrownBy(() -> this.repository.findEvents(session.id(), EventFilter.after("nope")))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("nope");
+		Session other = newSession("user-cursor-other");
+		append(other.id(), user("x"));
+		assertThatThrownBy(() -> this.repository.findEvents(other.id(), EventFilter.after(a1)))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> this.repository.findEvents(List.of(session.id(), other.id()), EventFilter.after(a1)))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> this.repository.findEvents(List.of(session.id(), other.id()),
+				EventFilter.active().toBuilder().after(a1).build()))
+			.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	void descendingOrderReversesTheWindowedResult() {
+		Session session = newSession("user-order");
+		append(session.id(), user("u1"), assistant("a1"), user("u2"), assistant("a2"), user("u3"));
+		String a1 = this.repository.findEvents(session.id(), EventFilter.all()).get(1).getId();
+
+		assertThat(texts(session.id(), EventFilter.builder().order(EventFilter.Order.DESC).build()))
+			.containsExactly("u3", "a2", "u2", "a1", "u1");
+		// The last-2 window lands mid-turn and is extended to its start, then reversed
+		assertThat(texts(session.id(), EventFilter.builder().lastN(2).order(EventFilter.Order.DESC).build()))
+			.containsExactly("u3", "a2", "u2");
+		assertThat(texts(session.id(), EventFilter.builder().page(0, 2).order(EventFilter.Order.DESC).build()))
+			.containsExactly("a1", "u1");
+		assertThat(texts(session.id(), EventFilter.builder().after(a1).order(EventFilter.Order.DESC).build()))
+			.containsExactly("u3", "a2", "u2");
+		// Across sessions the window is plain
+		assertThat(this.repository.findEvents(List.of(session.id()),
+				EventFilter.builder().lastN(2).order(EventFilter.Order.DESC).build()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("u3", "a2");
 	}
 
 	@Test
@@ -489,22 +747,22 @@ public abstract class AbstractSessionRepositoryContractTests {
 	}
 
 	@Test
-	void findEventsByUserIdWindowsArePlain() {
-		String userId = "user-cross-window-" + UUID.randomUUID();
-		Session session = newSession(userId);
+	void findEventsAcrossSessionsWindowsArePlain() {
+		Session session = newSession("user-cross-window-" + UUID.randomUUID());
 		append(session.id(), user("u1"), assistant("a1"));
 
-		assertThat(this.repository.findEventsByUserId(userId, EventFilter.lastN(1)))
+		assertThat(this.repository.findEvents(List.of(session.id()), EventFilter.lastN(1)))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("a1");
 	}
 
 	@Test
-	void findEventsByUserIdOrdersByTimestampAcrossSessionsAndPages() {
+	void findEventsAcrossSessionsOrdersByTimestampAndPages() {
 		String userId = "user-cross-" + UUID.randomUUID();
 		Session first = newSession(userId);
 		Session second = newSession(userId);
 		Session other = newSession("someone-else-" + UUID.randomUUID());
+		List<String> sessionIds = List.of(first.id(), second.id());
 		Instant base = Instant.parse("2026-04-01T00:00:00Z");
 		appendAt(first.id(), base.plusSeconds(10), "first-1");
 		appendAt(second.id(), base.plusSeconds(20), "second-1");
@@ -512,199 +770,480 @@ public abstract class AbstractSessionRepositoryContractTests {
 		appendAt(second.id(), base.plusSeconds(40), "second-2");
 		appendAt(other.id(), base.plusSeconds(25), "other");
 
-		assertThat(this.repository.findEventsByUserId(userId, EventFilter.all()))
+		assertThat(this.repository.findEvents(sessionIds, EventFilter.all()))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("first-1", "second-1", "first-2", "second-2");
-		assertThat(this.repository.findEventsByUserId(userId, EventFilter.builder().page(1).pageSize(3).build()))
+		assertThat(this.repository.findEvents(sessionIds, EventFilter.builder().page(1).pageSize(3).build()))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("second-2");
-		assertThat(this.repository.findEventsByUserId(userId, EventFilter.keywordSearch("second")))
+		assertThat(this.repository.findEvents(sessionIds, EventFilter.keywordSearch("second")))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("second-1", "second-2");
+		// The selection is the caller's: the index lookup is one way to make it
+		List<String> byIndex = this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, userId)
+			.stream()
+			.map(Session::id)
+			.toList();
+		assertThat(byIndex).containsExactlyInAnyOrderElementsOf(sessionIds);
+		// No sessions, no events; an unknown id contributes nothing
+		assertThat(this.repository.findEvents(List.of(), EventFilter.all())).isEmpty();
+		assertThat(this.repository.findEvents(List.of(first.id(), UUID.randomUUID().toString()), EventFilter.all()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("first-1", "first-2");
 	}
 
-	// --- Compaction ---
+	// --- Compaction: an append-only log and a projected view ---
 
 	@Test
-	void archivingFlagsEventsInPlaceAndIncrementsTheVersion() {
-		Session session = newSession("user-archive");
-		append(session.id(), user("u1"), assistant("a1"), user("u2"), assistant("a2"));
-		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
+	void appendEventsAppendsAtomicallyAndIncrementsTheVersionOnce() {
+		Session session = newSession("user-append-events");
+		append(session.id(), user("u1"), assistant("a1"));
 		long version = this.repository.getEventVersion(session.id());
 
-		boolean applied = this.repository.applyCompaction(session.id(),
-				plan(Set.of(log.get(0).getId(), log.get(1).getId()), List.of()), version);
+		boolean appended = this.repository.appendEvents(session.id(),
+				List.of(event(session.id(), user("u2")), event(session.id(), assistant("a2"))), version);
 
-		assertThat(applied).isTrue();
+		assertThat(appended).isTrue();
 		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(version + 1);
-		List<SessionEvent> after = this.repository.findEvents(session.id(), EventFilter.all());
-		assertThat(after).extracting(e -> e.getMessage().getText()).containsExactly("u1", "a1", "u2", "a2");
-		assertThat(after).extracting(SessionEvent::isArchived).containsExactly(true, true, false, false);
-		assertThat(texts(session.id(), EventFilter.active())).containsExactly("u2", "a2");
+		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1", "a1", "u2", "a2");
 	}
 
 	@Test
-	void aReplacedSummaryIsArchivedInPlaceNotRemoved() {
-		Session session = newSession("user-replaced-summary");
-		append(session.id(), user("u1"));
-		this.repository.appendEvent(synthetic(session.id(), new AssistantMessage("old summary")));
-		append(session.id(), user("u2"));
-		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
-
-		apply(session.id(), plan(Set.of(log.get(1).getId()), List.of()));
-
-		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1", "old summary", "u2");
-		assertThat(texts(session.id(), EventFilter.active())).containsExactly("u1", "u2");
-	}
-
-	@Test
-	void anInsertGoesImmediatelyBeforeItsAnchor() {
-		Session session = newSession("user-insert");
-		append(session.id(), user("u1"), assistant("a1"), user("u2"), assistant("a2"));
-		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
-		SessionEvent summary = synthetic(session.id(), new AssistantMessage("summary"));
-
-		apply(session.id(), plan(Set.of(log.get(0).getId(), log.get(1).getId()),
-				List.of(Insert.before(log.get(2).getId(), List.of(summary)))));
-
-		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1", "a1", "summary", "u2", "a2");
-		assertThat(texts(session.id(), EventFilter.active())).containsExactly("summary", "u2", "a2");
-	}
-
-	@Test
-	void anInsertWithoutAnAnchorIsAppended() {
-		Session session = newSession("user-append");
-		append(session.id(), user("u1"), assistant("a1"));
-		SessionEvent added = synthetic(session.id(), new AssistantMessage("added"));
-
-		apply(session.id(), plan(Set.of(), List.of(Insert.atEnd(List.of(added)))));
-
-		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1", "a1", "added");
-	}
-
-	@Test
-	void twoInsertsInOnePlanEachGoBeforeTheirOwnAnchor() {
-		Session session = newSession("user-two-inserts");
-		append(session.id(), user("u1"), user("u2"), user("u3"));
-		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
-		SessionEvent x = synthetic(session.id(), new AssistantMessage("x"));
-		SessionEvent y = synthetic(session.id(), new AssistantMessage("y"));
-
-		apply(session.id(), plan(Set.of(), List.of(Insert.before(log.get(1).getId(), List.of(x)),
-				Insert.before(log.get(2).getId(), List.of(y)))));
-
-		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1", "x", "u2", "y", "u3");
-	}
-
-	@Test
-	void repeatedSummarizationPlansNeverReorderTheLog() {
-		Session session = newSession("user-summaries");
-		String id = session.id();
-
-		// Pass 1: the system message stored inside turn 1 stays in place, active
-		append(id, user("u1"), system("sys-1"), assistant("a1"), user("u2"), assistant("a2"), user("u3"),
-				assistant("a3"), user("u4"), assistant("a4"), user("u5"), assistant("a5"));
-		List<SessionEvent> active = this.repository.findEvents(id, EventFilter.active());
-		List<SessionEvent> summary1 = summaryTurn(id, "summary 1");
-		apply(id, plan(ids(active, "u1", "a1", "u2", "a2", "u3", "a3"),
-				List.of(Insert.before(idOf(active, "u4"), summary1))));
-
-		assertThat(labels(this.repository.findEvents(id, EventFilter.all()))).containsExactly("u1", "sys-1", "a1",
-				"u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1", "u4", "a4", "u5", "a5");
-		assertThat(labels(this.repository.findEvents(id, EventFilter.active()))).containsExactly("sys-1", "Σ?",
-				"Σ:summary 1", "u4", "a4", "u5", "a5");
-
-		// Pass 2: the previous summary is archived in place, the new one precedes the kept
-		// window
-		append(id, user("u6"), assistant("a6"), user("u7"), assistant("a7"));
-		active = this.repository.findEvents(id, EventFilter.active());
-		apply(id, plan(ids(active, "Σ?", "Σ:summary 1", "u4", "a4", "u5", "a5"),
-				List.of(Insert.before(idOf(active, "u6"), summaryTurn(id, "summary 2")))));
-
-		assertThat(labels(this.repository.findEvents(id, EventFilter.all()))).containsExactly("u1", "sys-1", "a1",
-				"u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1", "u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6",
-				"u7", "a7");
-		assertThat(labels(this.repository.findEvents(id, EventFilter.active()))).containsExactly("sys-1", "Σ?",
-				"Σ:summary 2", "u6", "a6", "u7", "a7");
-
-		// Pass 3: superseded system messages are archived in place, including one inside
-		// the kept window, after the inserted summary
-		append(id, user("u8"), system("sys-2"), assistant("a8"), user("u9"), system("sys-3"), assistant("a9"));
-		active = this.repository.findEvents(id, EventFilter.active());
-		apply(id, plan(ids(active, "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7", "sys-1", "sys-2"),
-				List.of(Insert.before(idOf(active, "u8"), summaryTurn(id, "summary 3")))));
-
-		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
-		assertThat(labels(log)).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1",
-				"u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7", "Σ?", "Σ:summary 3", "u8",
-				"sys-2", "a8", "u9", "sys-3", "a9");
-		assertThat(labels(log.stream().filter(SessionEvent::isArchived).toList())).containsExactly("u1", "sys-1",
-				"a1", "u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1", "u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2",
-				"u6", "a6", "u7", "a7", "sys-2");
-		assertThat(labels(this.repository.findEvents(id, EventFilter.active()))).containsExactly("Σ?", "Σ:summary 3",
-				"u8", "a8", "u9", "sys-3", "a9");
-	}
-
-	@Test
-	void aStaleVersionIsRejectedAndChangesNothing() {
+	void appendEventsWithAStaleVersionWritesNothing() {
 		Session session = newSession("user-stale");
 		append(session.id(), user("u1"));
-		List<SessionEvent> log = this.repository.findEvents(session.id(), EventFilter.all());
 		long version = this.repository.getEventVersion(session.id());
-		SessionEvent summary = synthetic(session.id(), new AssistantMessage("should-not-land"));
 
-		boolean applied = this.repository.applyCompaction(session.id(),
-				plan(Set.of(log.get(0).getId()), List.of(Insert.atEnd(List.of(summary)))),
-				version - 1);
+		boolean appended = this.repository.appendEvents(session.id(),
+				List.of(event(session.id(), assistant("should-not-land"))), version - 1);
 
-		assertThat(applied).isFalse();
+		assertThat(appended).isFalse();
 		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(version);
-		List<SessionEvent> after = this.repository.findEvents(session.id(), EventFilter.all());
-		assertThat(after).extracting(e -> e.getMessage().getText()).containsExactly("u1");
-		assertThat(after.get(0).isArchived()).isFalse();
+		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1");
 	}
 
 	@Test
-	void anUnknownArchiveIdIsRejectedAndChangesNothing() {
-		Session session = newSession("user-unknown-archive");
+	void appendEventsRejectsAnEventOfAnotherSessionAndADuplicateIdAndChangesNothing() {
+		Session session = newSession("user-reject");
+		Session other = newSession("user-reject");
 		append(session.id(), user("u1"));
 		long version = this.repository.getEventVersion(session.id());
-		CompactionPlan plan = plan(Set.of(UUID.randomUUID().toString()), List.of());
+		SessionEvent existing = this.repository.findEvents(session.id(), EventFilter.all()).get(0);
 
-		assertThatThrownBy(() -> this.repository.applyCompaction(session.id(), plan, version))
+		assertThatThrownBy(() -> this.repository.appendEvents(session.id(),
+				List.of(event(other.id(), user("wrong session"))), version))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> this.repository.appendEvents(session.id(), List.of(event(session.id(), user("fresh")),
+				SessionEvent.builder().id(existing.getId()).sessionId(session.id()).message(user("dup")).build()),
+				version))
 			.isInstanceOf(IllegalArgumentException.class);
 		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(version);
 		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1");
 	}
 
 	@Test
-	void anUnknownAnchorIdIsRejectedAndChangesNothing() {
-		Session session = newSession("user-unknown-anchor");
+	void appendEventsRejectsADuplicateIdWithinTheBatchAndAnEmptyBatch() {
+		Session session = newSession("user-batch-dup");
 		append(session.id(), user("u1"));
 		long version = this.repository.getEventVersion(session.id());
-		SessionEvent summary = synthetic(session.id(), new AssistantMessage("summary"));
-		CompactionPlan plan = plan(Set.of(),
-				List.of(Insert.before(UUID.randomUUID().toString(), List.of(summary))));
+		SessionEvent fresh = event(session.id(), user("fresh"));
+		SessionEvent twin = SessionEvent.builder().id(fresh.getId()).sessionId(session.id()).message(user("twin")).build();
 
-		assertThatThrownBy(() -> this.repository.applyCompaction(session.id(), plan, version))
+		assertThatThrownBy(() -> this.repository.appendEvents(session.id(), List.of(fresh, twin), version))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> this.repository.appendEvents(session.id(), List.of(), version))
 			.isInstanceOf(IllegalArgumentException.class);
 		assertThat(this.repository.getEventVersion(session.id())).isEqualTo(version);
 		assertThat(texts(session.id(), EventFilter.all())).containsExactly("u1");
 	}
 
 	@Test
-	void applyCompactionOnAnUnknownSessionIsRejected() {
-		CompactionPlan plan = plan(Set.of(), List.of());
-
-		assertThatThrownBy(() -> this.repository.applyCompaction(UUID.randomUUID().toString(), plan, 0L))
+	void appendEventsOnAnUnknownSessionIsRejected() {
+		String unknown = UUID.randomUUID().toString();
+		assertThatThrownBy(() -> this.repository.appendEvents(unknown, List.of(event(unknown, user("u1"))), 0L))
 			.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	void theCompactedViewIsPinnedThenSummaryThenPreservedThenWhatFollows() {
+		Session session = newSession("user-view");
+		String id = session.id();
+		append(id, user("u1"), system("rules"), assistant("a1"), user("u2"), assistant("a2"));
+		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
+		compact(id, List.of(log.get(1)), summaryTurn(id, "summary 1"), List.of(log.get(3), log.get(4)));
+		append(id, user("u3"));
+
+		assertThat(labels(this.repository.findEvents(id, EventFilter.active()))).containsExactly("rules", "Σ?",
+				"Σ:summary 1", "u2", "a2", "u3");
+		assertThat(labels(this.repository.findEvents(id, EventFilter.all()))).containsExactly("u1", "rules", "a1",
+				"u2", "a2", "⊥", "Σ?", "Σ:summary 1", "u3");
+	}
+
+	@Test
+	void aLaterBoundaryWinsAndTheLogOnlyGrows() {
+		Session session = newSession("user-chain");
+		String id = session.id();
+		append(id, user("u1"), user("u2"));
+		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
+		compact(id, List.of(), summaryTurn(id, "summary 1"), List.of(log.get(1)));
+		append(id, user("u3"), user("u4"));
+		List<String> logAfterFirst = labels(this.repository.findEvents(id, EventFilter.all()));
+		List<SessionEvent> view = this.repository.findEvents(id, EventFilter.active());
+		// The second compaction covers summary 1, u2 and u3 and keeps u4
+		compact(id, List.of(), summaryTurn(id, "summary 2"), List.of(view.get(view.size() - 1)));
+		append(id, user("u5"));
+
+		assertThat(labels(this.repository.findEvents(id, EventFilter.active()))).containsExactly("Σ?", "Σ:summary 2",
+				"u4", "u5");
+		assertThat(labels(this.repository.findEvents(id, EventFilter.all())))
+			.startsWith(logAfterFirst.toArray(String[]::new))
+			.endsWith("⊥", "Σ?", "Σ:summary 2", "u5");
+	}
+
+	@Test
+	void aPinnedEventOlderThanAnEarlierBoundaryIsStillInTheView() {
+		Session session = newSession("user-pinned");
+		String id = session.id();
+		append(id, system("rules"), user("u1"), assistant("a1"));
+		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
+		SessionEvent rules = log.get(0);
+		compact(id, List.of(rules), List.of(), List.of(log.get(1), log.get(2)));
+		append(id, user("u2"), assistant("a2"));
+		List<SessionEvent> view = this.repository.findEvents(id, EventFilter.active());
+		compact(id, List.of(rules), List.of(), view.subList(view.size() - 2, view.size()));
+
+		assertThat(labels(this.repository.findEvents(id, EventFilter.active()))).containsExactly("rules", "u2", "a2");
+	}
+
+	@Test
+	void windowsAndCriteriaApplyToTheView() {
+		Session session = newSession("user-view-window");
+		String id = session.id();
+		append(id, user("u1 secret"), assistant("a1"), user("u2"), assistant("a2"), user("u3"), assistant("a3"));
+		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
+		compact(id, List.of(), summaryTurn(id, "summary"), log.subList(2, 6));
+
+		// lastN on the view keeps turns whole and never reaches into covered events
+		assertThat(texts(id, EventFilter.active().merge(EventFilter.lastN(1)))).containsExactly("u3", "a3");
+		assertThat(texts(id, EventFilter.active().merge(EventFilter.lastN(5))))
+			.containsExactly("Summarize the conversation we had so far.", "summary", "u2", "a2", "u3", "a3");
+		// a message-type filter on the view
+		assertThat(texts(id, EventFilter.builder().activeView(true).messageTypes(Set.of(MessageType.USER)).build()))
+			.containsExactly("Summarize the conversation we had so far.", "u2", "u3");
+		// text search: the covered event is found in the whole log, not in the view
+		assertThat(texts(id, EventFilter.keywordSearch("secret"))).containsExactly("u1 secret");
+		assertThat(texts(id, EventFilter.builder().activeView(true).keyword("secret").build())).isEmpty();
+	}
+
+	@Test
+	void timeRangesAndPagesApplyToTheView() {
+		Session session = newSession("user-view-page");
+		String id = session.id();
+		Instant t0 = Instant.parse("2025-01-01T00:00:00Z");
+		for (int i = 1; i <= 6; i++) {
+			appendAt(id, t0.plusSeconds(i), "u" + i);
+		}
+		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
+		compact(id, List.of(), List.of(), log.subList(2, 6));
+
+		// a time range on the view does not reach the covered u2
+		assertThat(texts(id,
+				EventFilter.builder().activeView(true).from(t0.plusSeconds(2)).to(t0.plusSeconds(4)).build()))
+			.containsExactly("u3", "u4");
+		assertThat(texts(id, EventFilter.builder().from(t0.plusSeconds(2)).to(t0.plusSeconds(4)).build()))
+			.containsExactly("u2", "u3", "u4");
+		// pages count from the oldest event of the view
+		assertThat(texts(id, EventFilter.builder().activeView(true).page(0).pageSize(2).build()))
+			.containsExactly("u3", "u4");
+		assertThat(texts(id, EventFilter.builder().activeView(true).page(1).pageSize(2).build()))
+			.containsExactly("u5", "u6");
+		assertThat(texts(id, EventFilter.builder().page(0).pageSize(2).build())).containsExactly("u1", "u2");
+	}
+
+	@Test
+	void aBoundaryNamingIdsTheLogDoesNotHoldSkipsThem() {
+		Session session = newSession("user-ghost-ids");
+		String id = session.id();
+		append(id, user("u1"), user("u2"));
+		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
+		// Named by the boundary, never written
+		SessionEvent ghost = event(id, user("ghost"));
+		compact(id, List.of(ghost), List.of(), List.of(log.get(1), ghost));
+		append(id, user("u3"));
+
+		assertThat(texts(id, EventFilter.active())).containsExactly("u2", "u3");
+	}
+
+	@Test
+	void anEventThatIsNotAMessageIsInTheViewOnlyWhenItFollowsTheBoundary() {
+		Session session = newSession("user-typed-view");
+		String id = session.id();
+		append(id, user("u1"));
+		this.repository.appendEvent(status(id, "RUNNING"));
+		append(id, user("u2"));
+		List<SessionEvent> log = this.repository.findEvents(id, EventFilter.all());
+		// The service builds the boundary from the conversation: it names u2 only
+		compact(id, List.of(), List.of(), List.of(log.get(2)));
+		this.repository.appendEvent(status(id, "IDLE"));
+
+		EventFilter statuses = EventFilter.builder().eventTypes(Set.of(EventType.STATUS)).build();
+		assertThat(this.repository.findEvents(id, statuses)).extracting(e -> e.getPayload().get("status"))
+			.containsExactly("RUNNING", "IDLE");
+		assertThat(this.repository.findEvents(id, statuses.merge(EventFilter.builder().activeView(true).build())))
+			.extracting(e -> e.getPayload().get("status"))
+			.containsExactly("IDLE");
+		// The boundary itself is not part of the view it defines
+		assertThat(labels(this.repository.findEvents(id, EventFilter.builder().activeView(true).build())))
+			.containsExactly("u2", "IDLE");
+	}
+
+	@Test
+	void aViewReadAcrossSessionsIsPerSession() {
+		String userId = "user-cross-view-" + UUID.randomUUID();
+		Session first = newSession(userId);
+		Session second = newSession(userId);
+		append(first.id(), user("f1"), user("f2"));
+		append(second.id(), user("s1"));
+		List<SessionEvent> log = this.repository.findEvents(first.id(), EventFilter.all());
+		compact(first.id(), List.of(), List.of(), List.of(log.get(1)));
+
+		List<String> sessionIds = List.of(first.id(), second.id());
+		assertThat(this.repository.findEvents(sessionIds, EventFilter.active()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactlyInAnyOrder("f2", "s1");
+		assertThat(this.repository.findEvents(sessionIds, EventFilter.all()).stream().filter(SessionEvent::hasMessage))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactlyInAnyOrder("f1", "f2", "s1");
+	}
+
+	// --- Typed events ---
+
+	@Test
+	void anEventThatIsNotAMessageRoundTripsItsTypeAndPayload() {
+		Session session = newSession("user-typed");
+		append(session.id(), user("hello"));
+		this.repository.appendEvent(SessionEvent.builder()
+			.sessionId(session.id())
+			.type(EventType.STATUS)
+			.payload(Map.of("status", "IDLE", "stopReason", "END_TURN", "turn", 1))
+			.build());
+
+		List<SessionEvent> all = this.repository.findEvents(session.id(), EventFilter.all());
+		assertThat(all).extracting(SessionEvent::getType).containsExactly(EventType.MESSAGE, EventType.STATUS);
+		SessionEvent status = all.get(1);
+		assertThat(status.hasMessage()).isFalse();
+		assertThat(status.getPayload()).containsEntry("status", "IDLE")
+			.containsEntry("stopReason", "END_TURN")
+			.containsEntry("turn", 1);
+	}
+
+	@Test
+	void activeKeepsOnlyMessageEventsInLogOrderBeforeAnyBoundary() {
+		Session session = newSession("user-active");
+		append(session.id(), user("q1"));
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).type(EventType.USAGE).build());
+		append(session.id(), assistant("a1"));
+
+		assertThat(texts(session.id(), EventFilter.active())).containsExactly("q1", "a1");
+		assertThat(this.repository.findEvents(session.id(), EventFilter.all())).extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE, EventType.USAGE, EventType.MESSAGE);
+	}
+
+	@Test
+	void eventTypesFilterSelectsTypesAndMessageAndTextFiltersSkipNonMessageEvents() {
+		Session session = newSession("user-types");
+		append(session.id(), user("hello"));
+		this.repository.appendEvent(SessionEvent.builder()
+			.sessionId(session.id())
+			.type(EventType.STATUS)
+			.payload("status", "hello")
+			.build());
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).type(EventType.USAGE).build());
+
+		assertThat(this.repository.findEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.STATUS, EventType.USAGE)).build()))
+			.extracting(SessionEvent::getType)
+			.containsExactly(EventType.STATUS, EventType.USAGE);
+		assertThat(texts(session.id(), EventFilter.builder().messageTypes(Set.of(MessageType.USER)).build()))
+			.containsExactly("hello");
+		// "hello" sits in the STATUS payload too, but a payload is not message text
+		assertThat(texts(session.id(), EventFilter.keywordSearch("hello"))).containsExactly("hello");
+	}
+
+	@Test
+	void messagePartsAndMetadataSurviveARoundTrip() {
+		Session session = newSession("user-parts");
+		Media image = Media.builder()
+			.mimeType(MimeTypeUtils.IMAGE_PNG)
+			.data(java.net.URI.create("https://example.com/cat.png"))
+			.build();
+		OpaquePayload signature = new OpaquePayload("anthropic", "signature", "sig-1");
+		append(session.id(), UserMessage.builder().text("look").media(image).metadata(Map.of("source", "web")).build(),
+				AssistantMessage.builder()
+					.parts(List.of(new ReasoningPart("thinking", null, signature, Map.of()), TextPart.of("a cat")))
+					.build(),
+				ToolResponseMessage.builder()
+					.results(List.of(new ToolResultPart("c1", "lookup", List.of(TextPart.of("boom")), true, null,
+							Map.of())))
+					.build());
+
+		List<SessionEvent> events = this.repository.findEvents(session.id(), EventFilter.all());
+		UserMessage user = (UserMessage) events.get(0).getMessage();
+		assertThat(user.getText()).isEqualTo("look");
+		assertThat(user.getMedia()).hasSize(1);
+		assertThat(user.getMedia().get(0).getMimeType()).isEqualTo(MimeTypeUtils.IMAGE_PNG);
+		assertThat(user.getMetadata()).containsEntry("source", "web");
+		AssistantMessage assistant = (AssistantMessage) events.get(1).getMessage();
+		assertThat(assistant.getText()).isEqualTo("a cat");
+		assertThat(assistant.getReasoning()).hasSize(1);
+		assertThat(assistant.getReasoning().get(0).payload()).isEqualTo(signature);
+		ToolResponseMessage tool = (ToolResponseMessage) events.get(2).getMessage();
+		assertThat(tool.getResults()).hasSize(1);
+		assertThat(tool.getResults().get(0).isError()).isTrue();
+		assertThat(tool.getResponses().get(0).responseData()).isEqualTo("boom");
+	}
+
+	@Test
+	void lastNExtendsPastNonMessageEventsToTheTurnStart() {
+		Session session = newSession("user-window-typed");
+		append(session.id(), user("u1"), assistant("a1"));
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).type(EventType.STATUS).build());
+		append(session.id(), user("u2"));
+		this.repository.appendEvent(SessionEvent.builder().sessionId(session.id()).type(EventType.USAGE).build());
+		append(session.id(), assistant("a2"));
+
+		List<SessionEvent> window = this.repository.findEvents(session.id(), EventFilter.lastN(1));
+		assertThat(window).extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE, EventType.USAGE, EventType.MESSAGE);
+		assertThat(window.stream().filter(SessionEvent::hasMessage).map(e -> e.getMessage().getText()))
+			.containsExactly("u2", "a2");
+		assertThat(texts(session.id(), EventFilter.active().merge(EventFilter.lastN(1)))).containsExactly("u2",
+				"a2");
+	}
+
+	@Test
+	void anApplicationsOwnEventTypeGoesThroughTheStore() {
+		Session session = newSession("user-custom-type");
+		EventType progress = EventType.of("MY_APP.PROGRESS");
+		append(session.id(), user("u1"));
+		this.repository.appendEvent(SessionEvent.builder()
+			.sessionId(session.id())
+			.type(progress)
+			.payload("step", 2)
+			.payload("note", "halfway")
+			.build());
+
+		List<SessionEvent> stored = this.repository.findEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(progress)).build());
+		assertThat(stored).hasSize(1);
+		assertThat(stored.get(0).getType()).isEqualTo(progress);
+		assertThat(stored.get(0).hasMessage()).isFalse();
+		assertThat(stored.get(0).getPayload()).containsEntry("note", "halfway");
+		assertThat(((Number) stored.get(0).getPayload().get("step")).intValue()).isEqualTo(2);
+		// Never part of the conversation
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active())).hasSize(1);
+	}
+
+	@Test
+	void anInteractionKeepsItsQuestionAndAnswerThroughTheStore() {
+		Session session = newSession("user-interaction");
+		append(session.id(), user("u1"));
+		SessionEvent question = InteractionEvents.required(session.id(),
+				new Interaction(Interaction.KIND_INTERRUPT, "approve/", Map.of("question", "Publish?", "draft", 3), "com.acme.Approval"));
+		this.repository.appendEvent(question);
+		this.repository.appendEvent(InteractionEvents.answered(session.id(), question.getId(), Map.of("approved", true)));
+
+		List<SessionEvent> stored = this.repository.findEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).build());
+		assertThat(stored).hasSize(2);
+		Interaction asked = InteractionEvents.interaction(stored.get(0));
+		assertThat(asked).isNotNull();
+		assertThat(asked.kind()).isEqualTo(Interaction.KIND_INTERRUPT);
+		assertThat(asked.path()).isEqualTo("approve/");
+		assertThat(asked.resumeType()).isEqualTo("com.acme.Approval");
+		// The question comes back as JSON data: a map with its scalars
+		assertThat(asked.payload()).isInstanceOf(Map.class);
+		@SuppressWarnings("unchecked")
+		Map<String, Object> askedPayload = (Map<String, Object>) asked.payload();
+		assertThat(askedPayload).containsEntry("question", "Publish?");
+		assertThat(((Number) askedPayload.get("draft")).intValue()).isEqualTo(3);
+		assertThat(InteractionEvents.requiredEventId(stored.get(1))).isEqualTo(question.getId());
+		@SuppressWarnings("unchecked")
+		Map<String, Object> answer = (Map<String, Object>) InteractionEvents.answer(stored.get(1));
+		assertThat(answer).containsEntry("approved", true);
+		// A last-1 window of non-message events is plain: no turn to extend to
+		assertThat(this.repository.findEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.INTERACTION)).lastN(1).build()))
+			.singleElement()
+			.satisfies(e -> assertThat(InteractionEvents.isAnswered(e)).isTrue());
+	}
+
+	@Test
+	void aUsageEventKeepsItsCountsThroughTheStore() {
+		Session session = newSession("user-usage");
+		append(session.id(), user("u1"), assistant("a1"));
+		this.repository.appendEvent(UsageEvents.of(session.id(), new TokenUsage(1200, 30, 1230, 1000, 0), "claude"));
+
+		List<SessionEvent> usage = this.repository.findEvents(session.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.USAGE)).build());
+		assertThat(usage).hasSize(1);
+		assertThat(UsageEvents.usage(usage.get(0))).isEqualTo(new TokenUsage(1200, 30, 1230, 1000, 0));
+		assertThat(UsageEvents.model(usage.get(0))).isEqualTo("claude");
+		assertThat(usage.get(0).hasMessage()).isFalse();
+		// Never part of the active conversation
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active())).hasSize(2);
+	}
+
+	@Test
+	void aTreeMarkerCarriesItsMessageThroughTheStoreAndNeverStartsATurn() {
+		Session root = newSession("user-marker");
+		Session child = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.parentSessionId(root.id())
+			.rootSessionId(root.id())
+			.metadata(SessionAttributes.AGENT_NAME, "reviewer")
+			.build());
+		append(root.id(), user("u1"), assistant("a1"));
+		this.repository.appendEvent(SessionTreeEvents.messageSent(child, "review Sofia"));
+		this.repository.appendEvent(SessionTreeEvents.messageReceived(child, "Historic"));
+		append(root.id(), assistant("a2"));
+
+		List<SessionEvent> markers = this.repository.findEvents(root.id(),
+				EventFilter.builder().eventTypes(Set.of(EventType.MESSAGE_SENT, EventType.MESSAGE_RECEIVED)).build());
+		assertThat(markers).hasSize(2);
+		assertThat(markers.get(0).getMessageType()).isEqualTo(MessageType.USER);
+		assertThat(markers.get(0).getMessage().getText()).isEqualTo("review Sofia");
+		assertThat(markers.get(0).getPayload()).containsEntry(SessionTreeEvents.PAYLOAD_SESSION_ID, child.id())
+			.containsEntry(SessionTreeEvents.PAYLOAD_AGENT_NAME, "reviewer");
+		assertThat(markers.get(1).getMessageType()).isEqualTo(MessageType.ASSISTANT);
+		assertThat(markers.get(1).getMessage().getText()).isEqualTo("Historic");
+
+		// Text and message-type criteria see the marker's message; the active view does not
+		assertThat(this.repository.findEvents(root.id(), EventFilter.keywordSearch("historic")))
+			.extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE_RECEIVED);
+		assertThat(this.repository.findEvents(root.id(),
+				EventFilter.builder().messageTypes(Set.of(MessageType.USER)).build()))
+			.extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE, EventType.MESSAGE_SENT);
+		assertThat(texts(root.id(), EventFilter.active())).containsExactly("u1", "a1", "a2");
+
+		// A window extends to the real turn start, past the marker that carries a user message
+		assertThat(this.repository.findEvents(root.id(), EventFilter.lastN(1))).extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE, EventType.MESSAGE, EventType.MESSAGE_SENT,
+					EventType.MESSAGE_RECEIVED, EventType.MESSAGE);
 	}
 
 	// --- Helpers ---
 
-	/** Saves a new session with a random id for the given user. */
-	protected Session newSession(String userId) {
-		return this.repository.save(Session.builder().id(UUID.randomUUID().toString()).userId(userId).build());
+	/** Saves a new session with a random id for the given principal. */
+	protected Session newSession(String principalName) {
+		return this.repository.save(principalSession(UUID.randomUUID().toString(), principalName));
+	}
+
+	/** A session with the given id whose metadata names the principal. */
+	protected static Session principalSession(String id, String principalName) {
+		return Session.builder().id(id).metadata(SessionAttributes.PRINCIPAL_NAME, principalName).build();
 	}
 
 	/** Appends each message as its own event. */
@@ -720,19 +1259,48 @@ public abstract class AbstractSessionRepositoryContractTests {
 			.appendEvent(SessionEvent.builder().sessionId(sessionId).timestamp(timestamp).message(user(text)).build());
 	}
 
-	/** Applies the plan at the current version and asserts it was accepted. */
-	protected void apply(String sessionId, CompactionPlan plan) {
-		assertThat(this.repository.applyCompaction(sessionId, plan, this.repository.getEventVersion(sessionId)))
+	/** The texts of the message events matching the filter, in the order returned. */
+	protected List<String> texts(String sessionId, EventFilter filter) {
+		return this.repository.findEvents(sessionId, filter)
+			.stream()
+			.filter(SessionEvent::hasMessage)
+			.map(e -> e.getMessage().getText())
+			.toList();
+	}
+
+	protected static SessionEvent event(String sessionId, Message message) {
+		return SessionEvent.builder().sessionId(sessionId).message(message).build();
+	}
+
+	/** A status event, the simplest event that is not a message. */
+	protected static SessionEvent status(String sessionId, String status) {
+		return SessionEvent.builder().sessionId(sessionId).type(EventType.STATUS).payload("status", status).build();
+	}
+
+	/**
+	 * Records a compaction the way the service does: appends a boundary naming the pinned,
+	 * summary and preserved events, followed by the summary events, under the current
+	 * version.
+	 */
+	protected void compact(String sessionId, List<SessionEvent> pinned, List<SessionEvent> summary,
+			List<SessionEvent> preserved) {
+		String boundaryId = UUID.randomUUID().toString();
+		CompactionBoundary boundary = new CompactionBoundary(boundaryId, ids(pinned), ids(summary), ids(preserved),
+				0, 0, "test");
+		List<SessionEvent> events = new ArrayList<>();
+		events.add(SessionEvent.builder()
+			.id(boundaryId)
+			.sessionId(sessionId)
+			.type(EventType.COMPACTION)
+			.payload(boundary.toPayload())
+			.build());
+		events.addAll(summary);
+		assertThat(this.repository.appendEvents(sessionId, events, this.repository.getEventVersion(sessionId)))
 			.isTrue();
 	}
 
-	/** The texts of the events matching the filter, in the order returned. */
-	protected List<String> texts(String sessionId, EventFilter filter) {
-		return this.repository.findEvents(sessionId, filter).stream().map(e -> e.getMessage().getText()).toList();
-	}
-
-	protected static CompactionPlan plan(Set<String> archiveIds, List<Insert> inserts) {
-		return new CompactionPlan(archiveIds, inserts);
+	private static List<String> ids(List<SessionEvent> events) {
+		return events.stream().map(SessionEvent::getId).toList();
 	}
 
 	/** A synthetic event, as a compaction strategy would produce it. */
@@ -752,10 +1320,17 @@ public abstract class AbstractSessionRepositoryContractTests {
 
 	/**
 	 * Event labels: the text, "Σ?" for a synthetic shadow prompt, "Σ:text" for a summary,
-	 * "A[name]" for an assistant tool call and "T[name]" for a tool result.
+	 * "A[name]" for an assistant tool call, "T[name]" for a tool result, "⊥" for a
+	 * compaction boundary and the status (or the type name) for any other event.
 	 */
 	protected static List<String> labels(List<SessionEvent> events) {
 		return events.stream().map(e -> {
+			if (e.getType() == EventType.COMPACTION) {
+				return "⊥";
+			}
+			if (!e.hasMessage()) {
+				return String.valueOf(e.getPayload().getOrDefault("status", e.getType().name()));
+			}
 			if (e.isSynthetic()) {
 				return (e.getMessageType() == MessageType.USER) ? "Σ?" : "Σ:" + e.getMessage().getText();
 			}

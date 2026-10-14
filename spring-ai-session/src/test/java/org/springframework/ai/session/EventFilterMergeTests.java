@@ -43,7 +43,7 @@ class EventFilterMergeTests {
 	void otherLastNOverridesBase() {
 		EventFilter base = EventFilter.lastN(10);
 		EventFilter other = EventFilter.lastN(3);
-		assertThat(base.merge(other).lastN()).isEqualTo(3);
+		assertThat(base.merge(other).window()).isEqualTo(EventFilter.Window.last(3));
 	}
 
 	@Test
@@ -75,7 +75,7 @@ class EventFilterMergeTests {
 	void otherKeywordOverridesBase() {
 		EventFilter base = EventFilter.builder().keyword("spring").pageSize(5).build();
 		EventFilter other = EventFilter.builder().keyword("ai").pageSize(5).build();
-		assertThat(base.merge(other).keyword()).isEqualTo("ai");
+		assertThat(base.merge(other).keywords()).containsExactly("ai");
 	}
 
 	@Test
@@ -100,8 +100,7 @@ class EventFilterMergeTests {
 		EventFilter base = EventFilter.builder().page(0).pageSize(10).build();
 		EventFilter other = EventFilter.builder().page(2).pageSize(5).build();
 		EventFilter merged = base.merge(other);
-		assertThat(merged.page()).isEqualTo(2);
-		assertThat(merged.pageSize()).isEqualTo(5);
+		assertThat(merged.window()).isEqualTo(EventFilter.Window.page(2, 5));
 	}
 
 	// --- base fields are kept when other has no value ---
@@ -111,35 +110,30 @@ class EventFilterMergeTests {
 		EventFilter base = EventFilter.lastN(20);
 		EventFilter other = EventFilter.keywordSearch("spring", 1, 5);
 		EventFilter merged = base.merge(other);
-		assertThat(merged.lastN()).isNull();
-		assertThat(merged.page()).isEqualTo(1);
-		assertThat(merged.pageSize()).isEqualTo(5);
-		assertThat(merged.keyword()).isEqualTo("spring");
+		assertThat(merged.window()).isEqualTo(EventFilter.Window.page(1, 5));
+		assertThat(merged.keywords()).containsExactly("spring");
 	}
 
 	@Test
 	void otherLastNReplacesBasePagination() {
 		EventFilter base = EventFilter.builder().page(3).pageSize(10).build();
 		EventFilter merged = base.merge(EventFilter.lastN(4));
-		assertThat(merged.lastN()).isEqualTo(4);
-		assertThat(merged.page()).isNull();
-		assertThat(merged.pageSize()).isNull();
+		assertThat(merged.window()).isEqualTo(EventFilter.Window.last(4));
 	}
 
 	@Test
 	void basePaginationKeptWhenOtherHasNoRetrievalModifier() {
 		EventFilter base = EventFilter.builder().page(3).pageSize(10).build();
 		EventFilter merged = base.merge(EventFilter.builder().keyword("orch").build());
-		assertThat(merged.page()).isEqualTo(3);
-		assertThat(merged.pageSize()).isEqualTo(10);
-		assertThat(merged.keyword()).isEqualTo("orch");
+		assertThat(merged.window()).isEqualTo(EventFilter.Window.page(3, 10));
+		assertThat(merged.keywords()).containsExactly("orch");
 	}
 
 	@Test
 	void baseLastNKeptWhenOtherIsAll() {
 		EventFilter base = EventFilter.lastN(5);
 		EventFilter other = EventFilter.all();
-		assertThat(base.merge(other).lastN()).isEqualTo(5);
+		assertThat(base.merge(other).window()).isEqualTo(EventFilter.Window.last(5));
 	}
 
 	// --- excludeSynthetic is OR-ed ---
@@ -155,17 +149,17 @@ class EventFilterMergeTests {
 		assertThat(EventFilter.all().merge(EventFilter.all()).excludeSynthetic()).isFalse();
 	}
 
-	// --- excludeArchived is OR-ed ---
+	// --- activeView is OR-ed ---
 
 	@Test
-	void excludeArchivedIsTrueWhenEitherSideIsTrue() {
-		assertThat(EventFilter.all().merge(EventFilter.active()).excludeArchived()).isTrue();
-		assertThat(EventFilter.active().merge(EventFilter.all()).excludeArchived()).isTrue();
+	void activeViewIsTrueWhenEitherSideIsTrue() {
+		assertThat(EventFilter.all().merge(EventFilter.active()).activeView()).isTrue();
+		assertThat(EventFilter.active().merge(EventFilter.all()).activeView()).isTrue();
 	}
 
 	@Test
-	void excludeArchivedIsFalseWhenBothAreFalse() {
-		assertThat(EventFilter.all().merge(EventFilter.all()).excludeArchived()).isFalse();
+	void activeViewIsFalseWhenBothAreFalse() {
+		assertThat(EventFilter.all().merge(EventFilter.all()).activeView()).isFalse();
 	}
 
 	// --- merging two EventFilter.all() produces all() ---

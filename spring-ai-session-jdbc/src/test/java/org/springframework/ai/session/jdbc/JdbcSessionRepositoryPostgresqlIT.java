@@ -39,8 +39,10 @@ import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
-import org.springframework.ai.session.compaction.CompactionPlan;
+import org.springframework.ai.session.EventType;
+import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.test.AbstractSessionRepositoryContractTests;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -91,8 +93,8 @@ class JdbcSessionRepositoryPostgresqlIT {
 	}
 
 	@Test
-	void repeatedRecursiveSummarizationNeverReordersTheLog() {
-		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
+	void repeatedRecursiveSummarizationOnlyAppendsAndProjectsTheView() {
+		DialectScenarios.repeatedRecursiveSummarizationOnlyAppendsAndProjectsTheView(this.repository);
 	}
 
 	@Test
@@ -103,7 +105,7 @@ class JdbcSessionRepositoryPostgresqlIT {
 	@Test
 	void appendConcurrentWithCompactionIsOrderedAfterRetainedEvents() throws Exception {
 		String sessionId = UUID.randomUUID().toString();
-		this.repository.save(Session.builder().id(sessionId).userId("user-pg").build());
+		this.repository.save(Session.builder().id(sessionId).metadata(SessionAttributes.PRINCIPAL_NAME, "user-pg").build());
 
 		SessionEvent oldUser = event(sessionId, new UserMessage("old question"));
 		SessionEvent oldAssistant = event(sessionId, new AssistantMessage("old answer"));
@@ -133,9 +135,18 @@ class JdbcSessionRepositoryPostgresqlIT {
 				}
 			});
 			awaitBlockedOnLock();
-			CompactionPlan plan = new CompactionPlan(Set.of(oldUser.getId()),
-					List.of(CompactionPlan.Insert.before(oldAssistant.getId(), List.of(summary))));
-			return this.repository.applyCompaction(sessionId, plan, version);
+			// A boundary that covers the old question, keeps the old answer and stands the
+			// summary in for it; the blocked append lands after the summary.
+			String boundaryId = UUID.randomUUID().toString();
+			CompactionBoundary boundary = new CompactionBoundary(boundaryId, List.of(), List.of(summary.getId()),
+					List.of(oldAssistant.getId()), 1, 0, "test");
+			SessionEvent boundaryEvent = SessionEvent.builder()
+				.id(boundaryId)
+				.sessionId(sessionId)
+				.type(EventType.COMPACTION)
+				.payload(boundary.toPayload())
+				.build();
+			return this.repository.appendEvents(sessionId, List.of(boundaryEvent, summary), version);
 		});
 
 		assertThat(compacted).isTrue();

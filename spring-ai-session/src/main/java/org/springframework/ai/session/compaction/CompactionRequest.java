@@ -18,7 +18,6 @@ package org.springframework.ai.session.compaction;
 
 import java.util.List;
 
-import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.util.Assert;
@@ -29,14 +28,12 @@ import org.springframework.util.Assert;
  *
  * @param session the session being evaluated for compaction
  * @param events the session's current list of events, ordered from oldest to newest
- * @param currentEventCount total number of events in the session
  * @param currentTurnCount total number of turns in the session (a turn is a user message
  * plus all subsequent events up to the next user message)
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
-public record CompactionRequest(Session session, List<SessionEvent> events, int currentEventCount,
-		int currentTurnCount) {
+public record CompactionRequest(Session session, List<SessionEvent> events, int currentTurnCount) {
 
 	/**
 	 * Creates a {@code CompactionRequest} from the given session and its event list.
@@ -44,14 +41,10 @@ public record CompactionRequest(Session session, List<SessionEvent> events, int 
 	public static CompactionRequest of(Session session, List<SessionEvent> events) {
 		Assert.notNull(session, "session must not be null");
 		Assert.notNull(events, "events must not be null");
-		int eventCount = events.size();
 		// Count only non-synthetic USER messages: a synthetic summary turn's shadow prompt
 		// is not a real turn.
-		int turnCount = (int) events.stream()
-			.filter(e -> !e.isSynthetic())
-			.filter(e -> e.getMessageType() == MessageType.USER)
-			.count();
-		return new CompactionRequest(session, events, eventCount, turnCount);
+		int turnCount = (int) events.stream().filter(e -> !e.isSynthetic()).filter(SessionEvent::isTurnStart).count();
+		return new CompactionRequest(session, events, turnCount);
 	}
 
 }

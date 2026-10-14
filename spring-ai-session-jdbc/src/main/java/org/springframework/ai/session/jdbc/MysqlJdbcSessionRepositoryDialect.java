@@ -20,27 +20,33 @@ package org.springframework.ai.session.jdbc;
  * {@link JdbcSessionRepositoryDialect} for MySQL and MariaDB.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public class MysqlJdbcSessionRepositoryDialect implements JdbcSessionRepositoryDialect {
 
 	@Override
 	public String getUpsertSessionSql() {
 		return """
-				INSERT INTO AI_SESSION (id, user_id, created_at, expires_at, metadata)
-				VALUES (?, ?, ?, ?, ?)
+				INSERT INTO AI_SESSION (id, user_id, parent_session_id, root_session_id, status, stop_reason, archived_at,
+					created_at, expires_at, metadata)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON DUPLICATE KEY UPDATE
-					user_id    = VALUES(user_id),
-					expires_at = VALUES(expires_at),
-					metadata   = VALUES(metadata)
+					user_id           = VALUES(user_id),
+					parent_session_id = VALUES(parent_session_id),
+					root_session_id   = VALUES(root_session_id),
+					status            = VALUES(status),
+					stop_reason       = VALUES(stop_reason),
+					archived_at       = VALUES(archived_at),
+					expires_at        = VALUES(expires_at),
+					metadata          = VALUES(metadata)
 				""";
 	}
 
 	@Override
-	public String getKeywordFilterFragment() {
+	public String getKeywordPredicateFragment() {
 		// MySQL LIKE is case-insensitive for most collations; LOWER() is still applied
 		// for safety with binary collations.
-		return "AND LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
+		return "LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
 	}
 
 }

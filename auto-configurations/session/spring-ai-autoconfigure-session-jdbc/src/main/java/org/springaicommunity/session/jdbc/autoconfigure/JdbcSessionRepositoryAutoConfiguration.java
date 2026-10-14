@@ -42,7 +42,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * application declares its own {@link SessionRepository} bean of any type.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 @AutoConfiguration(after = DataSourceAutoConfiguration.class)
 // DatabaseInitializationProperties (spring-boot-jdbc, an optional dependency) is the base
@@ -56,9 +56,13 @@ public class JdbcSessionRepositoryAutoConfiguration {
 	@Bean
 	@ConditionalOnMissingBean(SessionRepository.class)
 	@DependsOnDatabaseInitialization
-	JdbcSessionRepository jdbcSessionRepository(DataSource dataSource) {
+	JdbcSessionRepository jdbcSessionRepository(DataSource dataSource, JdbcSessionRepositoryProperties properties) {
 		JdbcSessionRepositoryDialect dialect = JdbcSessionRepositoryDialect.from(dataSource);
-		return JdbcSessionRepository.builder().dataSource(dataSource).dialect(dialect).build();
+		return JdbcSessionRepository.builder()
+			.dataSource(dataSource)
+			.dialect(dialect)
+			.indexedAttributes(properties.getIndexedAttributes())
+			.build();
 	}
 
 	@Bean

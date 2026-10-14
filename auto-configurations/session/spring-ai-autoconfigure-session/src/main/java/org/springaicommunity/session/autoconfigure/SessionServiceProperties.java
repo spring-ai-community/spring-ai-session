@@ -17,12 +17,14 @@
 package org.springaicommunity.session.autoconfigure;
 
 import java.time.Duration;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 @ConfigurationProperties(SessionServiceProperties.CONFIG_PREFIX)
 public class SessionServiceProperties {
@@ -40,6 +42,18 @@ public class SessionServiceProperties {
 	 */
 	private boolean allowSystemMessages = false;
 
+	/**
+	 * How deep a session tree may go: 1 (the default) allows child sessions of a root and
+	 * no children of children; 0 disables createChild.
+	 */
+	private int maxTreeDepth = 1;
+
+	/**
+	 * The metadata keys a child session takes from its parent and may not diverge from,
+	 * besides the principal name, which is always inherited.
+	 */
+	private Set<String> inheritedAttributes = new LinkedHashSet<>();
+
 	public Duration getTimeToLive() {
 		return timeToLive;
 	}
@@ -54,6 +68,22 @@ public class SessionServiceProperties {
 
 	public void setAllowSystemMessages(boolean allowSystemMessages) {
 		this.allowSystemMessages = allowSystemMessages;
+	}
+
+	public int getMaxTreeDepth() {
+		return this.maxTreeDepth;
+	}
+
+	public void setMaxTreeDepth(int maxTreeDepth) {
+		this.maxTreeDepth = maxTreeDepth;
+	}
+
+	public Set<String> getInheritedAttributes() {
+		return this.inheritedAttributes;
+	}
+
+	public void setInheritedAttributes(Set<String> inheritedAttributes) {
+		this.inheritedAttributes = inheritedAttributes;
 	}
 
 }

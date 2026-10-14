@@ -25,6 +25,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionAttributes;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -93,17 +94,6 @@ class CompactionRequestTests {
 	}
 
 	@Test
-	void currentEventCountMatchesEventListSize() {
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("q1")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a1")).build());
-
-		CompactionRequest request = requestWith(events);
-
-		assertThat(request.currentEventCount()).isEqualTo(2);
-	}
-
-	@Test
 	void ofRejectsNullSession() {
 		assertThatThrownBy(() -> CompactionRequest.of(null, List.of())).isInstanceOf(IllegalArgumentException.class);
 	}
@@ -111,7 +101,7 @@ class CompactionRequestTests {
 	// --- helper ---
 
 	private CompactionRequest requestWith(List<SessionEvent> events) {
-		Session session = Session.builder().id(SESSION_ID).userId("test-user").build();
+		Session session = Session.builder().id(SESSION_ID).metadata(SessionAttributes.PRINCIPAL_NAME, "test-user").build();
 		return CompactionRequest.of(session, new ArrayList<>(events));
 	}
 

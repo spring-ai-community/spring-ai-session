@@ -4,9 +4,10 @@
 event log stays searchable by keyword, even after compaction has pruned older events from
 the active context window, so the agent can surface any prior exchange on demand.
 
-This works because compaction **archives** rather than deletes. The advisor injects only
-the `EventFilter.active()` view, while `conversation_search` searches the whole log,
-archived events included.
+This works because compaction **covers** rather than deletes: it appends a boundary that
+leaves older events out of the active view, and never changes the log. The advisor injects
+only the `EventFilter.active()` view, while `conversation_search` searches the whole log,
+covered events included.
 
 !!! tip "Searching across a user's other sessions"
     `conversation_search` is scoped to the one session in the request's tool context; the

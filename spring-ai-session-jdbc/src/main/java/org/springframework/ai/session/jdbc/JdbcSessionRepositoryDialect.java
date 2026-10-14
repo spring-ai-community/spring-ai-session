@@ -33,7 +33,7 @@ import org.springframework.jdbc.support.JdbcUtils;
  * {@link JdbcSessionRepository}.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  * @see PostgresJdbcSessionRepositoryDialect
  * @see H2JdbcSessionRepositoryDialect
  * @see MysqlJdbcSessionRepositoryDialect
@@ -42,61 +42,45 @@ public interface JdbcSessionRepositoryDialect {
 
 	/**
 	 * Upsert a row in {@code AI_SESSION}. The statement must insert a new row or update
-	 * an existing one. On update only {@code user_id}, {@code expires_at} and
-	 * {@code metadata} are refreshed — {@code created_at} keeps its original value and
-	 * {@code event_version} must <em>not</em> be modified.
+	 * an existing one. On update only {@code user_id}, {@code parent_session_id},
+	 * {@code root_session_id}, {@code status}, {@code stop_reason}, {@code archived_at},
+	 * {@code expires_at} and {@code metadata} are refreshed — {@code created_at} keeps its
+	 * original value and {@code event_version} must <em>not</em> be modified.
 	 *
 	 * <p>
-	 * Parameters (in order): {@code id}, {@code user_id}, {@code created_at},
-	 * {@code expires_at}, {@code metadata}.
+	 * Parameters (in order): {@code id}, {@code user_id} (the 0.10 owner column, written
+	 * with the principal name or an empty string), {@code parent_session_id},
+	 * {@code root_session_id}, {@code status}, {@code stop_reason}, {@code archived_at},
+	 * {@code created_at}, {@code expires_at}, {@code metadata}.
 	 */
 	String getUpsertSessionSql();
 
 	/**
 	 * Inserts a row into {@code AI_SESSION} only if its {@code id} does not exist yet.
-	 * Same five parameters as {@link #getUpsertSessionSql()}. Must update one row on
+	 * Same ten parameters as {@link #getUpsertSessionSql()}. Must update one row on
 	 * insert and either update zero rows or fail with a duplicate-key error when the id
 	 * exists. The default is a plain {@code INSERT} (duplicate key error); dialects whose
 	 * failed statements abort the enclosing transaction (PostgreSQL) should use a
 	 * conflict-ignoring form instead.
 	 */
 	default String getInsertSessionIfAbsentSql() {
-		return "INSERT INTO AI_SESSION (id, user_id, created_at, expires_at, metadata) VALUES (?, ?, ?, ?, ?)";
+		return "INSERT INTO AI_SESSION (id, user_id, parent_session_id, root_session_id, status, stop_reason,"
+				+ " archived_at, created_at, expires_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	}
-
-	/**
-	 * Case-insensitive substring filter fragment appended to the dynamic
-	 * {@code findEvents} query when
-	 * {@link org.springframework.ai.session.EventFilter#keyword()} is set.
-	 *
-	 * <p>
-	 * The fragment must be a complete {@code AND ...} clause with a single {@code ?}
-	 * placeholder that will be bound to {@code '%' + escaped(keyword.toLowerCase()) + '%'},
-	 * where {@code !}, {@code %} and {@code _} in the keyword are escaped with {@code !}
-	 * so they match literally. The fragment must therefore declare {@code ESCAPE '!'}.
-	 * Example (PostgreSQL / H2):
-	 * {@code AND LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'}
-	 */
-	String getKeywordFilterFragment();
 
 	/**
 	 * Case-insensitive substring <em>predicate</em> — no leading {@code AND}, exactly one
-	 * {@code ?} placeholder — against the event's message content. Used by
-	 * {@code JdbcSessionRepository} to build the multi-term
-	 * {@link org.springframework.ai.session.EventFilter#keywords()} /
-	 * {@link org.springframework.ai.session.EventFilter#matchMode()} filter, repeating
-	 * this predicate once per term and joining with {@code AND}/{@code OR} depending on
-	 * match mode (e.g. {@code AND (pred OR pred OR pred)}).
-	 *
-	 * <p>
-	 * Defaults to the same expression as {@link #getKeywordFilterFragment()} minus the
-	 * {@code AND } prefix, which is correct for every dialect shipped today (they all use
-	 * identical {@code LOWER(COALESCE(...)) LIKE ?} SQL). Override only if a future
-	 * dialect needs different substring-match SQL.
+	 * {@code ?} placeholder — against the event's message content (alias {@code e}).
+	 * {@code JdbcSessionRepository} repeats it once per term of
+	 * {@link org.springframework.ai.session.EventFilter#keywords()}, joined with
+	 * {@code AND}/{@code OR} depending on the
+	 * {@link org.springframework.ai.session.EventFilter#matchMode()}, and binds each
+	 * placeholder to {@code '%' + escaped(term.toLowerCase()) + '%'}, where {@code !},
+	 * {@code %} and {@code _} in the term are escaped with {@code !} so they match
+	 * literally. The predicate must therefore declare {@code ESCAPE '!'}. Example
+	 * (PostgreSQL / H2): {@code LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'}
 	 */
-	default String getKeywordPredicateFragment() {
-		return "LOWER(COALESCE(e.message_content, '')) LIKE ? ESCAPE '!'";
-	}
+	String getKeywordPredicateFragment();
 
 	/**
 	 * Detects the dialect from the database product name reported by the

@@ -27,44 +27,47 @@ import org.springframework.ai.tokenizer.TokenCountEstimator;
 import org.springframework.util.Assert;
 
 /**
- * Compaction strategy that retains only the last {@code maxTurns} complete
- * <em>turns</em>, discarding older ones.
+ * Compaction strategy that keeps only the last {@code maxTurns} complete <em>turns</em>
+ * in the view, covering older ones.
  *
- * <h3>What is a turn?</h3>
+ * <h2>What is a turn?</h2>
  * <p>
  * A turn begins with a {@link MessageType#USER} message and ends just before the next
  * user message. It includes every event the agent produced in response: assistant
  * messages, tool calls, tool results, and any additional assistant follow-ups. A turn is
  * the atomic unit of a conversation.
  *
- * <h3>Algorithm</h3>
+ * <h2>Algorithm</h2>
  * <ol>
- * <li>Strip out the latest stored system message (the system prompt — earlier stored
- * system messages are superseded and archived; see
- * {@code CompactionUtils#pinnedSystemEvents}) and synthetic summary events — they are
- * always preserved, in place.</li>
- * <li>Collect any events that appear before the first user message (rare, but possible
- * for pre-seeded tool state) — these are preserved as preamble.</li>
+ * <li>Pin the latest stored system message (the system prompt; see
+ * {@code CompactionUtils#pinnedSystemEvents}) and the synthetic summary events: they stay
+ * at the front of the view whatever the cut.</li>
+ * <li>Pin any events that appear before the first user message (rare, but possible for
+ * pre-seeded tool state): the preamble is kept verbatim, ahead of the turns.</li>
  * <li>Group the remaining events into turns (each turn starts at a user message).</li>
  * <li>If the turn count is within {@code maxTurns}, return unchanged.</li>
- * <li>Archive the oldest turns until only {@code maxTurns} remain.</li>
- * <li>Return every event that is not archived, in its original log order.</li>
+ * <li>Cover the oldest turns until only {@code maxTurns} remain and preserve those. The
+ * log is not changed: the service records the decision as an appended compaction
+ * boundary, and the view from then on is the pinned events followed by the preserved
+ * turns.</li>
  * </ol>
  *
- * <h3>No-op condition</h3>
+ * <h2>No-op condition</h2>
  * <p>
- * If the session has at most {@code maxTurns} turns, no real events are removed. If
- * superseded stored system messages are present, only those are
- * archived.
+ * If the session has at most {@code maxTurns} turns nothing is covered and
+ * {@link CompactionResult#unchanged()} is returned; no boundary is written. A superseded
+ * stored system message is covered only when a later pass cuts.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  * @see TurnCountTrigger
  */
 public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 
 	/** Default number of complete turns preserved after compaction. */
 	public static final int DEFAULT_MAX_TURNS = 10;
+
+	private static final String STRATEGY_NAME = "turn-window";
 
 	private final int maxTurns;
 
@@ -83,20 +86,20 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 
 		List<SessionEvent> events = request.events();
 
-		// 1. Separate the kept system message (the latest), superseded ones, synthetic
-		// summary events and the real events
+		// 1. Separate the real events from what is pinned: the latest stored system message
+		// and the synthetic summary a previous compaction left
 		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
-		List<SessionEvent> supersededSystem = CompactionUtils.supersededSystemEvents(events, pinnedSystem);
-		List<SessionEvent> synthetic = events.stream().filter(SessionEvent::isSynthetic).toList();
+		List<SessionEvent> synthetic = CompactionUtils.syntheticEvents(events);
 		List<SessionEvent> real = CompactionUtils.compactableEvents(events);
 		ToIntFunction<SessionEvent> tokens = e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e));
 
-		// 2. Skip any preamble events that appear before the first user message (e.g.,
-		// pre-seeded tool context). They are kept verbatim, in place.
+		// 2. Any preamble events before the first user message (e.g. pre-seeded tool
+		// context) are pinned too: kept verbatim, ahead of the turns.
 		int firstUserIdx = 0;
-		while (firstUserIdx < real.size() && !CompactionUtils.isTurnStart(real.get(firstUserIdx))) {
+		while (firstUserIdx < real.size() && !real.get(firstUserIdx).isTurnStart()) {
 			firstUserIdx++;
 		}
+		List<SessionEvent> preamble = real.subList(0, firstUserIdx);
 		List<SessionEvent> afterPreamble = real.subList(firstUserIdx, real.size());
 
 		// 3. Group into turns — each turn starts at a user message
@@ -104,17 +107,13 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 
 		// 4. No-op if within budget
 		if (turns.size() <= this.maxTurns) {
-			return CompactionUtils.unchangedExceptSuperseded(events, supersededSystem, tokens);
+			return CompactionResult.unchanged();
 		}
 
-		// 5. Archive oldest turns
-		int toArchiveCount = turns.size() - this.maxTurns;
-		List<List<SessionEvent>> archivedTurns = turns.subList(0, toArchiveCount);
-		List<SessionEvent> archived = archivedTurns.stream().flatMap(List::stream).toList();
-
-		// 6. Everything else (system message, synthetics, preamble, kept turns) stays in
-		// the active window, in its original log order
-		return CompactionUtils.archiving(events, archived, supersededSystem, tokens);
+		// 5. Cover the oldest turns: the cut is the first event of the oldest kept turn
+		int cutIndex = real.indexOf(turns.get(turns.size() - this.maxTurns).get(0));
+		List<SessionEvent> pinned = CompactionUtils.concat(CompactionUtils.concat(pinnedSystem, synthetic), preamble);
+		return CompactionUtils.cut(events, pinned, real, cutIndex, List.of(), 0, tokens, STRATEGY_NAME);
 	}
 
 	/**
@@ -127,7 +126,7 @@ public final class TurnWindowCompactionStrategy implements CompactionStrategy {
 		List<SessionEvent> currentTurn = null;
 
 		for (SessionEvent event : events) {
-			if (CompactionUtils.isTurnStart(event)) {
+			if (event.isTurnStart()) {
 				if (currentTurn != null) {
 					turns.add(currentTurn);
 				}

@@ -17,23 +17,27 @@
 package org.springframework.ai.session.compaction;
 
 /**
- * Strategy for compacting a session's event history to manage context window size.
+ * Strategy for compacting a session's active view to manage context window size.
  *
  * <p>
- * Compaction never reorders events: a strategy returns the new active window in log order
- * (see {@link CompactionResult#compactedEvents()}), placing any new event, such as a
- * summary turn, right before the existing event it should precede.
+ * A strategy is policy, not storage: given the active view it decides which events leave
+ * the view (covered), which stay at the front (pinned), which recent events are kept
+ * verbatim (preserved), and what summary stands in for the covered ones. It never writes.
+ * {@link org.springframework.ai.session.SessionService#compact} records the decision by
+ * appending a {@link CompactionBoundary} event and the summary events; the log itself is
+ * never changed.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 @FunctionalInterface
 public interface CompactionStrategy {
 
 	/**
-	 * Compacts the given list of events, returning a result with the retained events and
-	 * those that were archived/removed.
-	 * @param request contextual information including token estimates
+	 * Decides how to compact the given view.
+	 * @param request the session, its active view and counts
+	 * @return the decision; {@link CompactionResult#unchanged()} when nothing should leave
+	 * the view
 	 */
 	CompactionResult compact(CompactionRequest request);
 

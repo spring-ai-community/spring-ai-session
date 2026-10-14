@@ -15,9 +15,10 @@ to compact) and **strategies** (how to compact).
 ## Entry point
 
 `SessionService.compact()` is the single entry point. It evaluates the trigger first and
-only runs the strategy when the trigger fires. The strategy's result is turned into a
-`CompactionPlan` (which events to archive and which new events to insert), and the repository applies
-that plan in one version-checked write; when the plan is empty, nothing is written.
+only runs the strategy when the trigger fires. The strategy's result is recorded as one
+`COMPACTION` boundary event, followed by the summary events, in one version-checked append;
+when the result is unchanged, nothing is written. The log itself is never modified: the
+boundary names the events that make up the active view from then on.
 
 ```java
 // Compact when turn count exceeds 20, keeping the last 10 events
@@ -27,27 +28,30 @@ CompactionResult result = service.compact(
     SlidingWindowCompactionStrategy.builder().maxEvents(10).build()
 );
 
-System.out.println(result.archivedEventCount());   // derived: archivedEvents().size()
-System.out.println(result.compactedEvents());      // the new active window, in log order
-System.out.println(result.archivedEvents());       // the archived (not deleted) events
+System.out.println(result.coveredEventCount());    // derived: coveredEvents().size()
+System.out.println(result.coveredEvents());        // the events that left the view (not deleted)
+System.out.println(result.pinnedEvents());         // kept at the front of the view (system prompt)
+System.out.println(result.preservedEvents());      // the recent events kept verbatim
+System.out.println(result.summary());              // the new summary turn, as messages
 System.out.println(result.tokensEstimatedSaved()); // rough token saving estimate
+System.out.println(result.isUnchanged());          // nothing left the view, nothing written
 
 // Compact unconditionally — pass an always-fire trigger
 service.compact(sessionId, req -> true, SlidingWindowCompactionStrategy.builder().maxEvents(10).build());
 ```
 
-- **Archived, never deleted.** Archived events leave the prompt but stay in the log, and
-  remain searchable through [Recall Storage](../recall-memory/recall-storage.md). This
-  includes a synthetic summary that a newer summary replaces: it is archived like the
-  events it stood for. Compaction never removes an event from the log. See
+- **Covered, never deleted.** Covered events leave the prompt but stay in the log,
+  untouched, and remain searchable through [Recall Storage](../recall-memory/recall-storage.md).
+  This includes a synthetic summary that a newer summary replaces: it is covered like the
+  events it stood for. Compaction never removes or changes an event in the log. See
   [Event lifecycle](concepts.md#event-lifecycle).
-- **Concurrent writes are safe.** The write is version-checked: if another writer changed
-  the log during the pass, compaction is silently skipped, and a no-op result skips the
-  write entirely. See the [compaction pass sequence](compaction-internals.md#2-sequence-a-compaction-pass-end-to-end)
-  and the [JDBC concurrency diagram](compaction-internals.md#6-sequence-jdbc-applycompaction-and-a-concurrent-append).
+- **Concurrent writes are safe.** The append is version-checked: if another writer changed
+  the log during the pass, compaction is silently skipped, and an unchanged result skips
+  the write entirely. See the [compaction pass sequence](compaction-internals.md#2-sequence-a-compaction-pass-end-to-end)
+  and the [JDBC concurrency diagram](compaction-internals.md#6-sequence-jdbc-appendevents-and-a-concurrent-append).
 - **Stored system messages are configuration.** If you store them (opt-in), the latest one
-  is always kept where it was stored, never summarized and not counted against `maxEvents` /
-  `maxTurns` / `maxEventsToKeep`; earlier ones are archived on every pass. See
+  is always pinned first in the view, never summarized and not counted against `maxEvents` /
+  `maxTurns` / `maxEvents`; earlier ones are covered when a pass cuts. See
   [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins).
 
 ---
@@ -98,30 +102,32 @@ CompactionTrigger trigger = CompositeCompactionTrigger.anyOf(
 ## Compaction Strategies
 
 Strategies implement `CompactionStrategy` (a `@FunctionalInterface`). Each receives a
-`CompactionRequest` with the session and its active events, and returns a
-`CompactionResult`: the new active window, in log order, and the events it archived.
+`CompactionRequest` with the session and its active view, and returns a
+`CompactionResult`: which events leave the view (covered), which stay at its front
+(pinned), which recent events are kept verbatim (preserved), and the summary that stands in
+for the covered ones.
 
 | Strategy | LLM call? | Context preserved | Best for |
 |---|---|---|---|
 | `SlidingWindowCompactionStrategy` | No | Last N messages verbatim | Cost-sensitive, short-term context |
 | `TurnWindowCompactionStrategy` | No | Last N complete turns verbatim | Turn-structured dialogues |
 | `TokenCountCompactionStrategy` | No | Token-budget suffix verbatim | Hard context window limits |
-| `RecursiveSummarizationCompactionStrategy` | Yes | Rolling LLM summary + active window | Long-running, context-rich sessions |
+| `RecursiveSummarizationCompactionStrategy` (in `spring-ai-session-chatclient`) | Yes | Rolling LLM summary + active window | Long-running, context-rich sessions |
 
 **Common behaviour.** Every strategy:
 
-- keeps the latest stored system message and the synthetic summary events, and archives
-  earlier stored system messages;
-- **never reorders events**: archived events are flagged in place, and every kept event,
-  including the system message, stays where it was stored. A new summary goes right
-  before the kept conversation. `SessionMemoryAdvisor` still puts system messages first
-  in the prompt;
+- pins the latest stored system message, so it is first in the view; the window
+  strategies also pin the earlier synthetic summary turns, while the recursive strategy
+  replaces them;
+- **never changes the log**: the result is recorded as an appended boundary, and the view
+  is projected from it as pinned events, then the summary, then the preserved events, then
+  everything appended since;
 - applies its limit only to the real conversation events;
-- starts the kept window at a `USER` message and always keeps the most recent turn (see
-  [Turn-boundary Safety](#turn-boundary-safety)). The exception is
-  `TurnWindowCompactionStrategy`'s preamble: events before the first `USER` message, kept
-  verbatim;
-- returns the new active window: every event that is not archived, in log order.
+- starts the preserved events at a `USER` message and always keeps the most recent turn
+  (see [Turn-boundary Safety](#turn-boundary-safety)). The exception is
+  `TurnWindowCompactionStrategy`'s preamble: events before the first `USER` message,
+  pinned;
+- returns `CompactionResult.unchanged()` when nothing should leave the view.
 
 ### Token accounting
 
@@ -170,9 +176,9 @@ TurnWindowCompactionStrategy.builder().maxTurns(10).build();
 TurnWindowCompactionStrategy.builder().maxTurns(10).tokenCountEstimator(myEstimator).build();
 ```
 
-It groups events into turns (each starting at a `USER` message) and archives the oldest
+It groups events into turns (each starting at a `USER` message) and covers the oldest
 until `maxTurns` remain. Events before the first `USER` message form a **preamble** that is
-always kept, where it was stored.
+always pinned.
 
 ### TokenCountCompactionStrategy
 
@@ -190,13 +196,13 @@ TokenCountCompactionStrategy.builder().maxTokens(4000).tokenCountEstimator(myEst
 It walks real events from newest to oldest and stops at the first event that would exceed
 the remaining budget. The result is a **contiguous suffix**: skipping individual oversize
 events would leave gaps that break conversation coherence. The cut then snaps forward to
-the next `USER` message, so leading events that are not `USER` messages are archived with
+the next `USER` message, so leading events that are not `USER` messages are covered with
 the older ones. Unlike the other strategies it has no "everything fits" shortcut: it
 always walks the events.
 
 #### How the budget is spent
 
-The preserved events that are sent with the conversation take their tokens off
+The pinned events that are sent with the conversation take their tokens off
 `maxTokens` before any conversation is considered:
 
 ```
@@ -214,17 +220,20 @@ conversation, or keep system prompts out of the session (see
 
 ### RecursiveSummarizationCompactionStrategy
 
-LLM-powered strategy that uses a `ChatClient` to summarize the events being archived.
+This strategy summarizes with a `ChatClient`, so it lives in the `spring-ai-session-chatclient`
+module, in the same `compaction` package as the others.
+
+LLM-powered strategy that uses a `ChatClient` to summarize the events being covered.
 The summary is stored as a synthetic user+assistant turn so subsequent compaction passes
 can build on it — creating a rolling, recursive compressed history.
 
 ```java
 RecursiveSummarizationCompactionStrategy strategy =
     RecursiveSummarizationCompactionStrategy.builder(chatClient)
-        .maxEventsToKeep(10)           // active window size: real events kept
+        .maxEvents(10)                 // active window size: real events kept
                                        // intact; defaults to 10
         .overlapSize(2)                // events from active window fed to summary prompt;
-                                       // >= 0 and < maxEventsToKeep, else
+                                       // >= 0 and < maxEvents, else
                                        // IllegalArgumentException; defaults to 2
         .systemPrompt("...")           // optional custom system prompt
         .shadowPrompt("...")           // optional custom USER shadow prompt; defaults to
@@ -241,28 +250,28 @@ RecursiveSummarizationCompactionStrategy strategy =
 
 **What the LLM sees, and what happens to its answer**
 
-The summarizer is given the previous summary (if any), the events being archived, and the
-first `overlapSize` events of the kept window for continuity; stored system messages are
-never included. The answer is stored as a synthetic summary turn, `[USER shadow prompt,
-ASSISTANT summary]`, inserted right before the kept window. Because the previous summary
-is part of the input, each summary builds on its predecessors, and the previous summary
-turn is archived in place like the events it summarized. The step-by-step, including when
-no LLM call is made, is in
+The summarizer is given the previous summary (if any), the events being covered, and the
+first `overlapSize` events of the preserved window for continuity; stored system messages
+are never included. The answer is returned as a synthetic summary turn, `[USER shadow
+prompt, ASSISTANT summary]`, which the service appends with the boundary and the view
+places right before the preserved events. Because the previous summary is part of the
+input, each summary builds on its predecessors, and the previous summary turn is covered
+like the events it summarized. The step-by-step, including when no LLM call is made, is in
 [How Compaction Works](compaction-internals.md#4-sequence-recursivesummarizationcompactionstrategy).
 
 **LLM failure handling**
 
 If the LLM returns a null or blank summary, the strategy logs a `WARN` and skips
-summarization, leaving the conversation unchanged (superseded stored system messages are
-still archived). If the LLM call throws, the exception propagates
-out of `SessionService.compact(...)`. `SessionMemoryAdvisor` catches and logs it, so the
+summarization, leaving the view unchanged and writing nothing. If the LLM call throws, the
+exception propagates
+out of `SessionService.compact(...)`. `SessionTurnAdvisor` catches and logs it, so the
 user's chat call still succeeds; if you call `compact(...)` yourself, handle it there.
 Register a callback to react to a blank summary:
 
 ```java
 RecursiveSummarizationCompactionStrategy strategy =
     RecursiveSummarizationCompactionStrategy.builder(chatClient)
-        .maxEventsToKeep(10)
+        .maxEvents(10)
         .onSummarizationFailure(req -> {
             log.error("Compaction failed for session {}", req.session().id());
             // retry, alert, increment a metric, etc.
@@ -278,7 +287,7 @@ rendering or multilingual summaries:
 ```java
 RecursiveSummarizationCompactionStrategy strategy =
     RecursiveSummarizationCompactionStrategy.builder(chatClient)
-        .maxEventsToKeep(10)
+        .maxEvents(10)
         .eventFormatter(event -> {
             // ToolResponseMessage.getText() is null — render the response data instead
             if (event.getMessage() instanceof ToolResponseMessage trm) {
@@ -303,9 +312,9 @@ Every strategy gives two guarantees, whatever its budget:
   the user message that started its turn. (`TurnWindowCompactionStrategy`'s preamble,
   events before the first `USER` message, is the one exception: it is kept verbatim.)
 - **The most recent turn is always kept.** When the newest turn alone exceeds the budget,
-  a long tool-calling loop for example, it stays active anyway, so compaction never
-  archives the turn in progress. When there is no turn boundary to cut at, nothing is
-  archived and the summarizing strategy makes no LLM call.
+  a long tool-calling loop for example, it stays in the view anyway, so compaction never
+  covers the turn in progress. When there is no turn boundary to cut at, nothing is
+  covered and the summarizing strategy makes no LLM call.
 
 ```
 Budget: 3 events   [u1, a1, u2, a2a, | a2b, u3, a3]   cut lands inside turn 2
@@ -313,4 +322,4 @@ Kept:              [u1, a1, u2, a2a, a2b, | u3, a3]   moved to the next turn sta
 ```
 
 How the cut is computed, and seven worked examples of the tricky cases, are in
-[How Compaction Works](compaction-internals.md#3-activity-how-a-strategy-chooses-what-to-archive).
+[How Compaction Works](compaction-internals.md#3-activity-how-a-strategy-chooses-what-to-cover).

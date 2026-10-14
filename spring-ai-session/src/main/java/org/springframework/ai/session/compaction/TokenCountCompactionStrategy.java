@@ -18,7 +18,6 @@ package org.springframework.ai.session.compaction;
 
 import java.util.List;
 import java.util.function.ToIntFunction;
-import java.util.stream.Stream;
 
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.tokenizer.JTokkitTokenCountEstimator;
@@ -26,38 +25,41 @@ import org.springframework.ai.tokenizer.TokenCountEstimator;
 import org.springframework.util.Assert;
 
 /**
- * Compaction strategy that retains events within a maximum estimated token budget. Token
+ * Compaction strategy that keeps the view within a maximum estimated token budget. Token
  * count is approximated with the help of a {@link TokenCountEstimator}.
  *
- * <h3>Algorithm</h3>
+ * <h2>Algorithm</h2>
  * <ol>
- * <li>Separate the latest stored system message (the system prompt; earlier stored
- * system messages are superseded and archived, see
- * {@code CompactionUtils#pinnedSystemEvents}) and the synthetic summary events. They are
- * always preserved, in place. Their token cost is deducted from the
- * budget before real events are considered, so a large system prompt or prior compaction
- * summary reduces the space available for real events.</li>
+ * <li>Pin the latest stored system message (the system prompt; see
+ * {@code CompactionUtils#pinnedSystemEvents}) and the synthetic summary events: they stay
+ * at the front of the view whatever the cut. Their token cost is deducted from the budget
+ * before real events are considered, so a large system prompt or prior compaction summary
+ * reduces the space available for real events.</li>
  * <li>Walk real events from newest to oldest, accumulating cost until the budget is
  * exhausted. Stops at the first event that would exceed the remaining budget, producing a
  * contiguous kept window (a suffix of the real-event list). Skipping oversize events and
  * continuing would produce non-contiguous gaps that break conversation coherence.</li>
  * <li>Snap the cut point to the next user message. This guarantees the kept window
  * always starts at a turn boundary.</li>
- * <li>Return every event that is not archived, in its original log order.</li>
+ * <li>Cover every real event before the cut and preserve the rest. The log is not
+ * changed: the service records the decision as an appended compaction boundary, and the
+ * view from then on is the pinned events followed by the preserved ones.</li>
  * </ol>
  *
- * <h3>No-op condition</h3>
+ * <h2>No-op condition</h2>
  * <p>
- * If all real events fit within the token budget no real events are archived and the
- * session is returned unchanged. If superseded stored system messages are present, only those are
- * archived.
+ * If all real events fit within the token budget nothing is covered and
+ * {@link CompactionResult#unchanged()} is returned; no boundary is written. A superseded
+ * stored system message is covered only when a later pass cuts.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public final class TokenCountCompactionStrategy implements CompactionStrategy {
 
 	public static final int DEFAULT_MAX_TOKENS = 4000;
+
+	private static final String STRATEGY_NAME = "token-count";
 
 	private final int maxTokens;
 
@@ -71,26 +73,21 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 	}
 
 	@Override
-	public CompactionResult compact(CompactionRequest context) {
+	public CompactionResult compact(CompactionRequest request) {
+		Assert.notNull(request, "request must not be null");
 
-		Assert.notNull(context, "context must not be null");
-		Assert.notNull(context.session(), "session must not be null");
+		List<SessionEvent> events = request.events();
 
-		List<SessionEvent> events = context.events();
-
-		// Always keep the latest stored system message and synthetic events; earlier stored
-		// system messages are superseded and archived
-		List<SessionEvent> pinnedSystem = CompactionUtils.pinnedSystemEvents(events);
-		List<SessionEvent> supersededSystem = CompactionUtils.supersededSystemEvents(events, pinnedSystem);
-		List<SessionEvent> synthetic = events.stream().filter(SessionEvent::isSynthetic).toList();
+		// The latest stored system message and the synthetic summary a previous compaction
+		// left are pinned: kept at the front of the view whatever the cut
+		List<SessionEvent> pinned = CompactionUtils.concat(CompactionUtils.pinnedSystemEvents(events),
+				CompactionUtils.syntheticEvents(events));
 		List<SessionEvent> real = CompactionUtils.compactableEvents(events);
 		ToIntFunction<SessionEvent> tokens = e -> this.tokenCountEstimator.estimate(CompactionUtils.formatEvent(e));
 
-		// Preserved events are sent to the model too, so their cost comes off the budget
+		// Pinned events are sent to the model too, so their cost comes off the budget
 		// first.
-		int preservedTokens = Stream.concat(pinnedSystem.stream(), synthetic.stream()).mapToInt(tokens).sum();
-
-		int remainingBudget = this.maxTokens - preservedTokens;
+		int remainingBudget = this.maxTokens - pinned.stream().mapToInt(tokens).sum();
 
 		// Walk from newest to oldest, accumulating events until the budget is reached.
 		// Stop at the first event that would exceed the remaining budget so the kept
@@ -109,20 +106,16 @@ public final class TokenCountCompactionStrategy implements CompactionStrategy {
 			}
 		}
 
-		// Snap the raw cut forward to the nearest USER event so the kept window always
-		// starts at a turn boundary.
-		// If no later turn start exists (the newest turn alone exceeds the budget), keep
-		// that last turn rather than archiving the whole active window.
-		int cutIndex = CompactionUtils.retainLastTurn(real, CompactionUtils.snapToTurnStart(real, rawCutIndex));
-
-		List<SessionEvent> archived = real.subList(0, cutIndex);
-
-		if (archived.isEmpty()) {
-			return CompactionUtils.unchangedExceptSuperseded(events, supersededSystem, tokens);
+		// Everything fits: nothing leaves the view and no boundary is written, even when
+		// the view starts mid-turn (snapping the cut would otherwise cover the preamble)
+		if (rawCutIndex == 0) {
+			return CompactionResult.unchanged();
 		}
 
+		// Cut at a turn boundary; the newest turn is kept even when it alone exceeds the budget
+		int cutIndex = CompactionUtils.turnCut(real, rawCutIndex);
 
-		return CompactionUtils.archiving(events, archived, supersededSystem, tokens);
+		return CompactionUtils.cut(events, pinned, real, cutIndex, List.of(), 0, tokens, STRATEGY_NAME);
 	}
 
 	public int getMaxTokens() {

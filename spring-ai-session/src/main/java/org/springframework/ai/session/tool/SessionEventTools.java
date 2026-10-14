@@ -18,13 +18,14 @@ package org.springframework.ai.session.tool;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.tool.annotation.Tool;
@@ -42,8 +43,8 @@ import org.springframework.util.StringUtils;
  *
  * <p>
  * The session to search is resolved from {@link ToolContext} using the
- * {@link ChatMemory#CONVERSATION_ID} key — the same key
- * {@link org.springframework.ai.session.advisor.SessionMemoryAdvisor#SESSION_ID_CONTEXT_KEY}
+ * {@code ChatMemory.CONVERSATION_ID} key — the same key
+ * {@code SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY}
  * reads from the advisor context. Advisor parameters are <em>not</em> propagated into the
  * {@code ToolContext}, so the caller must pass the session ID to both on every request:
  *
@@ -69,7 +70,7 @@ import org.springframework.util.StringUtils;
  * of searching — it never falls back to a shared session.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public class SessionEventTools {
 
@@ -77,10 +78,10 @@ public class SessionEventTools {
 
 	/**
 	 * Context key used to resolve the session ID from {@link ToolContext}. Equals
-	 * {@link ChatMemory#CONVERSATION_ID} and
-	 * {@link org.springframework.ai.session.advisor.SessionMemoryAdvisor#SESSION_ID_CONTEXT_KEY}.
+	 * {@code ChatMemory.CONVERSATION_ID} and
+	 * {@code SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY}.
 	 */
-	public static final String SESSION_ID_CONTEXT_KEY = ChatMemory.CONVERSATION_ID;
+	public static final String SESSION_ID_CONTEXT_KEY = "chat_memory_conversation_id";
 
 	static final String MISSING_SESSION_ID_RESULT = "Error: conversation_search is unavailable because no session ID "
 			+ "was provided in the tool context.";
@@ -186,12 +187,14 @@ public class SessionEventTools {
 		}
 
 		// Synthetic summaries paraphrase the real events, which are still in the log, so
-		// searching them too would only return the same facts twice.
+		// searching them too would only return the same facts twice. Only conversation is
+		// searched: a tree marker carries a child's message too, which the child's log holds.
 		EventFilter filter = EventFilter.builder()
 			.keyword(query)
 			.page(pageNumber)
 			.pageSize(this.pageSize)
 			.excludeSynthetic(true)
+			.eventTypes(Set.of(EventType.MESSAGE))
 			.build();
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, filter);
 

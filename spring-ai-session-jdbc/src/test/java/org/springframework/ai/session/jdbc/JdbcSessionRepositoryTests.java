@@ -16,8 +16,11 @@
 
 package org.springframework.ai.session.jdbc;
 
+import java.sql.Connection;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import javax.sql.DataSource;
@@ -36,20 +39,27 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionStatus;
+import org.springframework.ai.session.SessionTreeEvents;
+import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.ai.session.compaction.SlidingWindowCompactionStrategy;
 import org.springframework.ai.session.test.AbstractSessionRepositoryContractTests;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
@@ -94,9 +104,8 @@ class JdbcSessionRepositoryTests {
 		Instant expiry = Instant.ofEpochMilli(Instant.now().plusSeconds(3600).toEpochMilli());
 		Session session = Session.builder()
 			.id(UUID.randomUUID().toString())
-			.userId("user-meta")
 			.expiresAt(expiry)
-			.metadata(java.util.Map.of("model", "gpt-4o"))
+			.metadata(java.util.Map.of(SessionAttributes.PRINCIPAL_NAME, "user-meta", "model", "gpt-4o"))
 			.build();
 		this.repository.save(session);
 
@@ -117,8 +126,7 @@ class JdbcSessionRepositoryTests {
 
 		Session updated = Session.builder()
 			.id(session.id())
-			.userId(session.userId())
-			.metadata(java.util.Map.of("newKey", "newVal"))
+			.metadata(java.util.Map.of(SessionAttributes.PRINCIPAL_NAME, "user-meta", "newKey", "newVal"))
 			.build();
 		this.repository.save(updated);
 
@@ -175,6 +183,259 @@ class JdbcSessionRepositoryTests {
 	}
 
 	// -------------------------------------------------------------------------
+	// Rows written before 0.11.0
+	// -------------------------------------------------------------------------
+
+	@Test
+	void rowsWrittenBeforeZeroElevenAreReadThroughTheLegacyColumns() {
+		Session session = buildSession("user-legacy");
+		this.repository.save(session);
+		String insert = "INSERT INTO AI_SESSION_EVENT (id, session_id, timestamp, message_type, message_content,"
+				+ " message_data, synthetic, archived, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
+		this.jdbcTemplate.update(insert, "legacy-1", session.id(), now, "USER", "what is the weather?", null, false,
+				false, null);
+		this.jdbcTemplate.update(insert, "legacy-2", session.id(), now, "ASSISTANT", null,
+				"[{\"id\":\"c1\",\"type\":\"function\",\"name\":\"get_weather\",\"arguments\":\"{}\"}]", false,
+				false, null);
+		this.jdbcTemplate.update(insert, "legacy-3", session.id(), now, "TOOL", null,
+				"[{\"id\":\"c1\",\"name\":\"get_weather\",\"responseData\":\"sunny\"}]", false, false, null);
+		this.jdbcTemplate.update(insert, "legacy-4", session.id(), now, "ASSISTANT", "it is sunny", null, true, true,
+				"{\"compactionSource\":\"test\"}");
+
+		List<SessionEvent> events = this.repository.findEvents(session.id(), EventFilter.all());
+		assertThat(events).extracting(SessionEvent::getType).containsOnly(EventType.MESSAGE);
+		assertThat(events.get(0).getMessage().getText()).isEqualTo("what is the weather?");
+		assertThat(((AssistantMessage) events.get(1).getMessage()).getToolCalls()).extracting(t -> t.name())
+			.containsExactly("get_weather");
+		assertThat(((ToolResponseMessage) events.get(2).getMessage()).getResponses()).extracting(r -> r.responseData())
+			.containsExactly("sunny");
+		assertThat(events.get(3).isSynthetic()).isTrue();
+		assertThat(events.get(3).getMetadata()).containsEntry("compactionSource", "test");
+		// A row flagged archived by a 0.10 compaction is left out of the view until the
+		// session's first boundary...
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active())).hasSize(3);
+
+		// ...after which only the boundary decides: a boundary that names the flagged row
+		// puts it in the view
+		String boundaryId = UUID.randomUUID().toString();
+		CompactionBoundary boundary = new CompactionBoundary(boundaryId, List.of(), List.of(), List.of("legacy-4"), 3,
+				0, "test");
+		SessionEvent boundaryEvent = SessionEvent.builder()
+			.id(boundaryId)
+			.sessionId(session.id())
+			.type(EventType.COMPACTION)
+			.payload(boundary.toPayload())
+			.build();
+		assertThat(this.repository.appendEvents(session.id(), List.of(boundaryEvent),
+				this.repository.getEventVersion(session.id()))).isTrue();
+		assertThat(this.repository.findEvents(session.id(), EventFilter.active()))
+			.extracting(e -> e.getMessage().getText())
+			.containsExactly("it is sunny");
+	}
+
+	// -------------------------------------------------------------------------
+	// Indexed attributes and the 0.10 user_id column
+	// -------------------------------------------------------------------------
+
+	@Test
+	void aSessionRowWrittenBeforeZeroElevenHasItsOwnerAsPrincipal() {
+		String legacy = UUID.randomUUID().toString();
+		String migrated = UUID.randomUUID().toString();
+		java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
+		String insert = "INSERT INTO AI_SESSION (id, user_id, created_at, expires_at, metadata, event_version)"
+				+ " VALUES (?, ?, ?, ?, ?, 0)";
+		this.jdbcTemplate.update(insert, legacy, "alice", now, null, null);
+		this.jdbcTemplate.update(insert, migrated, "alice", now, null, "{\"principalName\":\"bob\"}");
+
+		// user_id is the principal when the metadata has none...
+		assertThat(SessionAttributes.principalName(this.repository.findById(legacy))).isEqualTo("alice");
+		// ...and the metadata wins when it has one
+		assertThat(SessionAttributes.principalName(this.repository.findById(migrated))).isEqualTo("bob");
+	}
+
+	@Test
+	void theSchemaScriptIndexesLegacyOwnersOnce() throws Exception {
+		String legacy = UUID.randomUUID().toString();
+		String owner = "legacy-owner-" + UUID.randomUUID();
+		this.jdbcTemplate.update("INSERT INTO AI_SESSION (id, user_id, created_at, event_version) VALUES (?, ?, ?, 0)",
+				legacy, owner, java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, owner)).isEmpty();
+
+		// Re-running the bundled script copies user_id into the index, and only once
+		for (int run = 0; run < 2; run++) {
+			try (Connection connection = this.dataSource.getConnection()) {
+				ScriptUtils.executeSqlScript(connection,
+						new ClassPathResource("org/springframework/ai/session/jdbc/schema-h2.sql"));
+			}
+		}
+
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, owner)).extracting(Session::id)
+			.containsExactly(legacy);
+		assertThat(this.jdbcTemplate.queryForObject("SELECT COUNT(*) FROM AI_SESSION_INDEX WHERE session_id = ?",
+				Integer.class, legacy)).isEqualTo(1);
+	}
+
+	@Test
+	void theBundledScriptUpgradesAZeroTenDatabase() throws Exception {
+		DataSource zeroTen = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+				"jdbc:h2:mem:upgrade-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+		JdbcTemplate old = new JdbcTemplate(zeroTen);
+		old.execute("CREATE TABLE AI_SESSION (id VARCHAR(255) NOT NULL PRIMARY KEY, user_id VARCHAR(255) NOT NULL,"
+				+ " created_at TIMESTAMP NOT NULL, expires_at TIMESTAMP, metadata LONGVARCHAR,"
+				+ " event_version BIGINT NOT NULL DEFAULT 0)");
+		old.execute("CREATE TABLE AI_SESSION_EVENT (seq BIGINT GENERATED BY DEFAULT AS IDENTITY,"
+				+ " id VARCHAR(255) NOT NULL PRIMARY KEY, session_id VARCHAR(255) NOT NULL, timestamp TIMESTAMP NOT NULL,"
+				+ " message_type VARCHAR(20) NOT NULL, message_content LONGVARCHAR, message_data LONGVARCHAR,"
+				+ " synthetic BOOLEAN NOT NULL DEFAULT FALSE, archived BOOLEAN NOT NULL DEFAULT FALSE,"
+				+ " branch VARCHAR(500), metadata LONGVARCHAR,"
+				+ " CONSTRAINT fk_old FOREIGN KEY (session_id) REFERENCES AI_SESSION (id) ON DELETE CASCADE)");
+		java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
+		old.update("INSERT INTO AI_SESSION (id, user_id, created_at, event_version) VALUES ('old', 'alice', ?, 1)", now);
+		old.update("INSERT INTO AI_SESSION_EVENT (id, session_id, timestamp, message_type, message_content)"
+				+ " VALUES ('e-old', 'old', ?, 'USER', 'hello from 0.10')", now);
+
+		// Re-runnable: twice is the same as once
+		for (int run = 0; run < 2; run++) {
+			try (Connection connection = zeroTen.getConnection()) {
+				ScriptUtils.executeSqlScript(connection,
+						new ClassPathResource("org/springframework/ai/session/jdbc/schema-h2.sql"));
+			}
+		}
+
+		JdbcSessionRepository upgraded = JdbcSessionRepository.builder()
+			.dataSource(zeroTen)
+			.dialect(new H2JdbcSessionRepositoryDialect())
+			.build();
+		Session legacy = upgraded.findById("old");
+		assertThat(legacy).isNotNull();
+		assertThat(SessionAttributes.principalName(legacy)).isEqualTo("alice");
+		assertThat(legacy.isRoot()).isTrue();
+		assertThat(legacy.status()).isEqualTo(SessionStatus.IDLE);
+		assertThat(upgraded.updateStatus("old", SessionStatus.IDLE, null, SessionStatus.RUNNING, "run-1", null, null)).isTrue();
+		assertThat(upgraded.findByIndex(SessionAttributes.PRINCIPAL_NAME, "alice")).extracting(Session::id)
+			.containsExactly("old");
+		assertThat(upgraded.findByRootSessionId("old")).extracting(Session::id).containsExactly("old");
+		assertThat(upgraded.findEvents("old", EventFilter.all())).extracting(e -> e.getMessage().getText())
+			.containsExactly("hello from 0.10");
+		// The 0.11 columns are there: a child session and an event that is not a message
+		Session child = upgraded.save(Session.builder().id("child").parentSessionId("old").rootSessionId("old").build());
+		assertThat(upgraded.findByParentSessionId("old")).extracting(Session::id).containsExactly(child.id());
+		upgraded.appendEvent(SessionEvent.builder().sessionId("old").type(EventType.STATUS).payload("status", "IDLE").build());
+		assertThat(upgraded.findEvents("old", EventFilter.all())).extracting(SessionEvent::getType)
+			.containsExactly(EventType.MESSAGE, EventType.STATUS);
+	}
+
+	@Test
+	void theWriterDecidesWhichAttributesAreIndexed() {
+		JdbcSessionRepository tenantAware = JdbcSessionRepository.builder()
+			.dataSource(this.dataSource)
+			.dialect(new H2JdbcSessionRepositoryDialect())
+			.indexedAttributes(Set.of("tenant"))
+			.build();
+		assertThat(tenantAware.getIndexedAttributes()).contains("tenant")
+			.containsAll(JdbcSessionRepository.DEFAULT_INDEXED_ATTRIBUTES);
+		String tenant = "acme-" + UUID.randomUUID();
+		Session indexed = tenantAware.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.metadata(Map.of("tenant", tenant, SessionAttributes.PRINCIPAL_NAME, "alice"))
+			.build());
+		Session notIndexed = this.repository.save(Session.builder()
+			.id(UUID.randomUUID().toString())
+			.metadata(Map.of("tenant", tenant, SessionAttributes.PRINCIPAL_NAME, "alice"))
+			.build());
+
+		// Both repositories read the same table: what matters is who wrote the row
+		assertThat(tenantAware.findByIndex("tenant", tenant)).extracting(Session::id).containsExactly(indexed.id());
+		assertThat(this.repository.findByIndex("tenant", tenant)).extracting(Session::id)
+			.containsExactly(indexed.id());
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, "alice")).extracting(Session::id)
+			.contains(indexed.id(), notIndexed.id());
+		// Re-saving with the tenant-aware repository indexes the missing attribute
+		tenantAware.save(notIndexed);
+		assertThat(tenantAware.findByIndex("tenant", tenant)).hasSize(2);
+	}
+
+	@Test
+	void indexedValuesMatchOnTheirFirstFiveHundredAndTwelveCharacters() {
+		String prefix = "p-" + UUID.randomUUID() + "-";
+		String value = prefix + "x".repeat(JdbcSessionRepository.MAX_INDEXED_VALUE_LENGTH);
+		Session session = this.repository
+			.save(Session.builder().id(UUID.randomUUID().toString()).metadata("tenant", "irrelevant").metadata(SessionAttributes.PRINCIPAL_NAME, value).build());
+
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, value)).extracting(Session::id)
+			.containsExactly(session.id());
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME,
+				value.substring(0, JdbcSessionRepository.MAX_INDEXED_VALUE_LENGTH)))
+			.extracting(Session::id)
+			.containsExactly(session.id());
+		// A value that differs only after the indexed prefix is not told apart
+		assertThat(this.repository.findByIndex(SessionAttributes.PRINCIPAL_NAME, value + "tail")).extracting(Session::id)
+			.containsExactly(session.id());
+		// The stored metadata keeps the full value
+		assertThat(SessionAttributes.principalName(this.repository.findById(session.id()))).isEqualTo(value);
+	}
+
+	@Test
+	void aSessionTreeRoundTripsThroughTheStoreAndIsDeletedTogether() {
+		DefaultSessionService service = DefaultSessionService.builder().sessionRepository(this.repository).build();
+		Session root = service.create(CreateSessionRequest.builder()
+			.metadata(SessionAttributes.PRINCIPAL_NAME, "alice")
+			.timeToLive(java.time.Duration.ofHours(2))
+			.build());
+
+		Session child = service.createChild(root.id(), "researcher");
+		service.appendMessage(child.id(), new UserMessage("child work"));
+
+		// The links are columns, the marker's payload round-trips through the codec
+		assertThat(service.findChildren(root.id())).extracting(Session::id).containsExactly(child.id());
+		assertThat(service.findTree(root.id())).extracting(Session::id).containsExactly(root.id(), child.id());
+		assertThat(this.jdbcTemplate.queryForObject("SELECT root_session_id FROM AI_SESSION WHERE id = ?",
+				String.class, root.id())).isEqualTo(root.id());
+		assertThat(this.jdbcTemplate.queryForObject("SELECT parent_session_id FROM AI_SESSION WHERE id = ?",
+				String.class, child.id())).isEqualTo(root.id());
+		// Only the principal is indexed; the links need no index rows
+		assertThat(this.jdbcTemplate.queryForObject("SELECT COUNT(*) FROM AI_SESSION_INDEX WHERE session_id = ?",
+				Integer.class, child.id())).isEqualTo(1);
+		Session stored = this.repository.findById(child.id());
+		assertThat(stored.parentSessionId()).isEqualTo(root.id());
+		assertThat(stored.rootSessionId()).isEqualTo(root.id());
+		assertThat(SessionAttributes.principalName(stored)).isEqualTo("alice");
+		assertThat(SessionAttributes.agentName(stored)).isEqualTo("researcher");
+		assertThat(stored.expiresAt()).isEqualTo(root.expiresAt());
+		List<SessionEvent> markers = this.repository.findEvents(root.id(),
+				EventFilter.builder().eventTypes(java.util.Set.of(EventType.CHILD_CREATED)).build());
+		assertThat(markers).hasSize(1);
+		assertThat(markers.get(0).getPayload()).containsEntry(SessionTreeEvents.PAYLOAD_SESSION_ID, child.id())
+			.containsEntry(SessionTreeEvents.PAYLOAD_AGENT_NAME, "researcher");
+
+		// Deleting the root removes the child, its events and its index rows
+		service.delete(root.id());
+		assertThat(this.repository.findById(child.id())).isNull();
+		assertThat(this.jdbcTemplate.queryForObject("SELECT COUNT(*) FROM AI_SESSION_EVENT WHERE session_id = ?",
+				Integer.class, child.id())).isZero();
+		assertThat(this.jdbcTemplate.queryForObject("SELECT COUNT(*) FROM AI_SESSION_INDEX WHERE session_id = ?",
+				Integer.class, child.id())).isZero();
+	}
+
+	@Test
+	void aRowWrittenBeforeTheTreeColumnsReadsAsARoot() {
+		// A 0.10 row has NULL links (the bundled script backfills root_session_id, a schema
+		// managed outside it may not)
+		this.jdbcTemplate.update("INSERT INTO AI_SESSION (id, user_id, created_at, metadata, event_version)"
+				+ " VALUES (?, 'alice', ?, '{}', 0)", "legacy-row", java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+
+		Session legacy = this.repository.findById("legacy-row");
+		assertThat(legacy.isRoot()).isTrue();
+		assertThat(legacy.parentSessionId()).isNull();
+		assertThat(legacy.rootSessionId()).isEqualTo("legacy-row");
+		// Its tree is itself, backfill or not
+		assertThat(this.repository.findByRootSessionId("legacy-row")).extracting(Session::id)
+			.containsExactly("legacy-row");
+		assertThat(this.repository.findByParentSessionId("legacy-row")).isEmpty();
+	}
+
+	// -------------------------------------------------------------------------
 	// Versioning and CAS
 	// -------------------------------------------------------------------------
 
@@ -189,8 +450,8 @@ class JdbcSessionRepositoryTests {
 	}
 
 	@Test
-	void repeatedRecursiveSummarizationNeverReordersTheLog() {
-		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
+	void repeatedRecursiveSummarizationOnlyAppendsAndProjectsTheView() {
+		DialectScenarios.repeatedRecursiveSummarizationOnlyAppendsAndProjectsTheView(this.repository);
 	}
 
 	@Test
@@ -241,7 +502,7 @@ class JdbcSessionRepositoryTests {
 			.sessionRepository(this.repository)
 			.allowSystemMessages(true)
 			.build();
-		Session session = service.create(CreateSessionRequest.builder().userId("user-sys").build());
+		Session session = service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-sys").build());
 		service.appendMessage(session.id(), new SystemMessage("Answer in French."));
 		for (int i = 1; i <= 3; i++) {
 			service.appendMessage(session.id(), new UserMessage("question " + i));
@@ -257,7 +518,7 @@ class JdbcSessionRepositoryTests {
 	}
 
 	@Test
-	void compactionWithoutNewEventsDoesNotReinsertKeptRows() {
+	void compactionAppendsABoundaryAndRewritesNoRow() {
 		Session session = buildSession("user-seq");
 		this.repository.save(session);
 		for (String text : List.of("u1", "a1", "u2", "a2", "u3", "a3")) {
@@ -270,9 +531,13 @@ class JdbcSessionRepositoryTests {
 
 		service.compact(session.id(), request -> true, SlidingWindowCompactionStrategy.builder().maxEvents(2).build());
 
-		// Nothing was inserted, so every row keeps its seq: archiving happens in place
-		assertThat(this.jdbcTemplate.queryForList("SELECT seq FROM AI_SESSION_EVENT WHERE session_id = ? ORDER BY seq",
-				Long.class, session.id())).isEqualTo(seqsBefore);
+		// Every existing row keeps its seq, and exactly one row was appended: the boundary
+		List<Long> seqsAfter = this.jdbcTemplate.queryForList(
+				"SELECT seq FROM AI_SESSION_EVENT WHERE session_id = ? ORDER BY seq", Long.class, session.id());
+		assertThat(seqsAfter).hasSize(seqsBefore.size() + 1).startsWith(seqsBefore.toArray(Long[]::new));
+		assertThat(this.jdbcTemplate.queryForObject(
+				"SELECT event_type FROM AI_SESSION_EVENT WHERE session_id = ? ORDER BY seq DESC LIMIT 1", String.class,
+				session.id())).isEqualTo("COMPACTION");
 		assertThat(this.repository.findEvents(session.id(), EventFilter.active()))
 			.extracting(e -> e.getMessage().getText())
 			.containsExactly("u3", "a3");
@@ -282,8 +547,11 @@ class JdbcSessionRepositoryTests {
 	// Helpers
 	// -------------------------------------------------------------------------
 
-	private Session buildSession(String userId) {
-		return Session.builder().id(UUID.randomUUID().toString()).userId(userId).build();
+	private Session buildSession(String principal) {
+		return Session.builder()
+			.id(UUID.randomUUID().toString())
+			.metadata(SessionAttributes.PRINCIPAL_NAME, principal)
+			.build();
 	}
 
 	private void appendEntry(String sessionId, int n) {

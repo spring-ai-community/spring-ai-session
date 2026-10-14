@@ -78,8 +78,8 @@ class JdbcSessionRepositoryMysqlIT {
 	}
 
 	@Test
-	void repeatedRecursiveSummarizationNeverReordersTheLog() {
-		DialectScenarios.repeatedRecursiveSummarizationNeverReordersTheLog(this.repository);
+	void repeatedRecursiveSummarizationOnlyAppendsAndProjectsTheView() {
+		DialectScenarios.repeatedRecursiveSummarizationOnlyAppendsAndProjectsTheView(this.repository);
 	}
 
 	/** The repository contract, run against MySQL. */

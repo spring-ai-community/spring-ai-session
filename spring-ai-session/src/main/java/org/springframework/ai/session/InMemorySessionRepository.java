@@ -18,14 +18,17 @@ package org.springframework.ai.session;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.jspecify.annotations.Nullable;
 
-import org.springframework.ai.session.compaction.CompactionPlan;
 import org.springframework.util.Assert;
 
 /**
@@ -38,7 +41,7 @@ import org.springframework.util.Assert;
  * record. All mutations are performed atomically via {@link ConcurrentHashMap#compute}.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public final class InMemorySessionRepository implements SessionRepository {
 
@@ -60,14 +63,19 @@ public final class InMemorySessionRepository implements SessionRepository {
 		Assert.notNull(session, "session must not be null");
 		SessionData saved = this.store.compute(session.id(), (id, existing) -> {
 			if (existing == null) {
-				return new SessionData(session, List.of(), 0L);
+				return new SessionData(withoutRun(session), List.of(), 0L);
 			}
 			// Update: keep the original creation time, like the JDBC upsert does.
 			Session updated = Session.builder()
 				.id(session.id())
-				.userId(session.userId())
 				.createdAt(existing.session().createdAt())
 				.expiresAt(session.expiresAt())
+				.parentSessionId(session.parentSessionId())
+				.rootSessionId(session.rootSessionId())
+				.status(session.status())
+				.runId(existing.session().runId())
+				.stopReason(session.stopReason())
+				.archivedAt(session.archivedAt())
 				.metadata(session.metadata())
 				.build();
 			return new SessionData(updated, existing.events(), existing.version());
@@ -76,9 +84,59 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
+	public boolean updateStatus(String sessionId, SessionStatus expected, @Nullable String expectedRunId,
+			SessionStatus status, @Nullable String runId, @Nullable StopReason stopReason,
+			@Nullable Instant archivedAt) {
+		Assert.hasText(sessionId, "sessionId must not be null or empty");
+		Assert.notNull(expected, "expected must not be null");
+		Assert.notNull(status, "status must not be null");
+		boolean[] changed = { false };
+		this.store.computeIfPresent(sessionId, (id, data) -> {
+			Session current = data.session();
+			if (current.status() != expected
+					|| (expectedRunId != null && !expectedRunId.equals(current.runId()))) {
+				return data;
+			}
+			changed[0] = true;
+			Session updated = Session.builder()
+				.id(current.id())
+				.createdAt(current.createdAt())
+				.expiresAt(current.expiresAt())
+				.parentSessionId(current.parentSessionId())
+				.rootSessionId(current.rootSessionId())
+				.status(status)
+				.runId(runId)
+				.stopReason(stopReason)
+				.archivedAt(archivedAt)
+				.metadata(current.metadata())
+				.build();
+			return new SessionData(updated, data.events(), data.version());
+		});
+		return changed[0];
+	}
+
+	@Override
 	public boolean saveIfAbsent(Session session) {
 		Assert.notNull(session, "session must not be null");
-		return this.store.putIfAbsent(session.id(), new SessionData(session, List.of(), 0L)) == null;
+		return this.store.putIfAbsent(session.id(), new SessionData(withoutRun(session), List.of(), 0L)) == null;
+	}
+
+	/** The session as a new one is stored: without a run, which only updateStatus sets. */
+	private static Session withoutRun(Session session) {
+		if (session.runId() == null) {
+			return session;
+		}
+		return Session.builder()
+			.id(session.id())
+			.createdAt(session.createdAt())
+			.expiresAt(session.expiresAt())
+			.parentSessionId(session.parentSessionId())
+			.rootSessionId(session.rootSessionId())
+			.status(session.status())
+			.stopReason(session.stopReason())
+			.archivedAt(session.archivedAt())
+			.metadata(session.metadata())
+			.build();
 	}
 
 	@Override
@@ -89,12 +147,36 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public List<Session> findByUserId(String userId) {
-		Assert.hasText(userId, "userId must not be null or empty");
+	public List<Session> findByIndex(String name, String value) {
+		Assert.hasText(name, "name must not be null or empty");
+		Assert.notNull(value, "value must not be null");
 		return this.store.values()
 			.stream()
-			.filter(d -> userId.equals(d.session().userId()))
 			.map(SessionData::session)
+			.filter(s -> s.metadata().containsKey(name) && value.equals(String.valueOf(s.metadata().get(name))))
+			.sorted(Comparator.comparing(Session::createdAt).thenComparing(Session::id))
+			.toList();
+	}
+
+	@Override
+	public List<Session> findByParentSessionId(String parentSessionId) {
+		Assert.hasText(parentSessionId, "parentSessionId must not be null or empty");
+		return this.store.values()
+			.stream()
+			.map(SessionData::session)
+			.filter(s -> parentSessionId.equals(s.parentSessionId()))
+			.sorted(Comparator.comparing(Session::createdAt).thenComparing(Session::id))
+			.toList();
+	}
+
+	@Override
+	public List<Session> findByRootSessionId(String rootSessionId) {
+		Assert.hasText(rootSessionId, "rootSessionId must not be null or empty");
+		return this.store.values()
+			.stream()
+			.map(SessionData::session)
+			.filter(s -> rootSessionId.equals(s.rootSessionId()))
+			.sorted(Comparator.comparing(Session::createdAt).thenComparing(Session::id))
 			.toList();
 	}
 
@@ -148,9 +230,9 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public boolean applyCompaction(String sessionId, CompactionPlan plan, long expectedVersion) {
+	public boolean appendEvents(String sessionId, List<SessionEvent> events, long expectedVersion) {
 		Assert.hasText(sessionId, "sessionId must not be null or empty");
-		Assert.notNull(plan, "plan must not be null");
+		Assert.notEmpty(events, "events must not be empty");
 		boolean[] success = { false };
 		this.store.compute(sessionId, (id, existing) -> {
 			if (existing == null) {
@@ -159,10 +241,19 @@ public final class InMemorySessionRepository implements SessionRepository {
 			if (existing.version() != expectedVersion) {
 				return existing;
 			}
-			// applyTo validates the plan against the log and throws before anything changes
-			List<SessionEvent> compacted = plan.applyTo(existing.events());
+			// Validate everything before anything changes
+			Set<String> ids = new HashSet<>();
+			existing.events().forEach(e -> ids.add(e.getId()));
+			for (SessionEvent event : events) {
+				Assert.isTrue(sessionId.equals(event.getSessionId()),
+						() -> "Event '" + event.getId() + "' belongs to session '" + event.getSessionId() + "'");
+				Assert.isTrue(ids.add(event.getId()),
+						() -> "Event id '" + event.getId() + "' is already in the log of session " + sessionId);
+			}
+			List<SessionEvent> newEvents = new ArrayList<>(existing.events());
+			newEvents.addAll(events);
 			success[0] = true;
-			return existing.withEvents(compacted);
+			return existing.withEvents(newEvents);
 		});
 		return success[0];
 	}
@@ -184,13 +275,16 @@ public final class InMemorySessionRepository implements SessionRepository {
 	}
 
 	@Override
-	public List<SessionEvent> findEventsByUserId(String userId, EventFilter filter) {
-		Assert.hasText(userId, "userId must not be null or empty");
+	public List<SessionEvent> findEvents(Collection<String> sessionIds, EventFilter filter) {
+		Assert.notNull(sessionIds, "sessionIds must not be null");
 		Assert.notNull(filter, "filter must not be null");
+		Assert.isTrue(!(filter.window() instanceof EventFilter.Window.After),
+				"a cursor window is per session; read one session at a time");
 		EventFilter perSession = filter.withoutWindow();
-		List<SessionEvent> matches = this.store.values()
-			.stream()
-			.filter(d -> userId.equals(d.session().userId()))
+		List<SessionEvent> matches = sessionIds.stream()
+			.distinct()
+			.map(this.store::get)
+			.filter(Objects::nonNull)
 			.flatMap(d -> perSession.apply(d.events()).stream())
 			.sorted(Comparator.comparing(SessionEvent::getTimestamp).thenComparing(SessionEvent::getId))
 			.toList();

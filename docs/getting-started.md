@@ -3,7 +3,7 @@
 ## Requirements
 
 - Java 17+
-- Spring AI `2.0.1+`
+- Spring AI `2.1.0-SNAPSHOT+`
 - Spring Boot `4.1.1+`
 
 ---
@@ -99,12 +99,12 @@ or to a snapshot version (see [Maven Repositories](#maven-repositories)):
 
 === "In-memory (testing only)"
 
-    Add the session management module:
+    Add the `ChatClient` integration, which brings the core module with it:
 
     ```xml
     <dependency>
         <groupId>org.springaicommunity</groupId>
-        <artifactId>spring-ai-session</artifactId>
+        <artifactId>spring-ai-session-chatclient</artifactId>
     </dependency>
     ```
 
@@ -126,26 +126,23 @@ or to a snapshot version (see [Maven Repositories](#maven-repositories)):
 
 ---
 
-## Wire the ChatClient advisor
+## Wire the ChatClient advisors
 
-`SessionMemoryAdvisor` loads history before each request, appends the user and assistant
-messages after each response, and compacts when a trigger fires.
+`SessionMemoryAdvisor` loads history before each model call and appends the user and
+assistant messages after it. `SessionTurnAdvisor` runs each `ChatClient` call as one turn of
+the session and compacts when a trigger fires once the turn has ended.
 
 ```java
 @Bean
-SessionMemoryAdvisor sessionMemoryAdvisor(SessionService sessionService) {
-    return SessionMemoryAdvisor.builder(sessionService)
-        .defaultUserId("alice")
-        // Compact when 20 turns accumulate, keeping the last 10 events
-        .compactionTrigger(new TurnCountTrigger(20))
-        .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
-        .build();
-}
-
-@Bean
-ChatClient chatClient(ChatModel chatModel, SessionMemoryAdvisor advisor) {
+ChatClient chatClient(ChatModel chatModel, SessionService sessionService) {
     return ChatClient.builder(chatModel)
-        .defaultAdvisors(advisor)
+        .defaultAdvisors(
+            SessionTurnAdvisor.builder(sessionService)
+                // Compact when 20 turns accumulate, keeping the last 10 events
+                .compactionTrigger(new TurnCountTrigger(20))
+                .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
+                .build(),
+            SessionMemoryAdvisor.builder(sessionService).build())
         .build();
 }
 ```
@@ -169,13 +166,21 @@ If no session exists for the given ID, the advisor creates one automatically.
 Released versions are published to **Maven Central**, so no extra repository
 configuration is needed.
 
-To use a `-SNAPSHOT` version, add the Central Portal snapshot repository:
+To use a `-SNAPSHOT` version of Spring AI Session, add the Central Portal snapshot repository.
+Spring AI `2.1.0-SNAPSHOT`, which 0.11.0 builds against, is published to the Spring snapshot
+repository, so add that one too until Spring AI 2.1.0 is released:
 
 ```xml
 <repositories>
     <repository>
         <id>central-portal-snapshots</id>
         <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        <snapshots><enabled>true</enabled></snapshots>
+        <releases><enabled>false</enabled></releases>
+    </repository>
+    <repository>
+        <id>spring-snapshots</id>
+        <url>https://repo.spring.io/snapshot</url>
         <snapshots><enabled>true</enabled></snapshots>
         <releases><enabled>false</enabled></releases>
     </repository>

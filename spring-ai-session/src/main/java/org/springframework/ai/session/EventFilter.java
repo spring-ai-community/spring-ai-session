@@ -17,6 +17,8 @@
 package org.springframework.ai.session;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -25,43 +27,41 @@ import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.session.compaction.CompactionBoundary;
 import org.springframework.util.Assert;
 
 /**
- * Criteria for filtering {@link SessionEvent}s when retrieving session history.
+ * Criteria for reading {@link SessionEvent}s: per-event criteria (a time range, message
+ * and event types, synthetic events, keywords), the view (the whole log or the
+ * {@linkplain Builder#activeView(boolean) active view}), a retrieval {@link Window} and
+ * an {@link Order}.
  *
  * <p>
- * Filters are composable: all non-null criteria must match for an event to be included.
- * {@link #lastN} and {@link #page}/{@link #pageSize} are post-match retrieval modifiers
- * applied after per-event matching.
- *
- * <p>
- * <strong>Retrieval modifier contract:</strong>
+ * All per-event criteria set must match for an event to be included. The window is
+ * applied after per-event matching, to the matching events in log order:
  * <ul>
- * <li>{@link #lastN} is a lower bound on a per-session read: the newest N matching events
- * are returned, extended back to the start of the turn the window lands in (see
- * {@link SessionEvent#isTurnStart()}), so a prompt never begins with an assistant reply
- * or a tool result whose user message or tool call was cut off. The extension is skipped
- * for filters with text criteria (a search result is not a prompt) and when no turn start
- * precedes the window. Pages and cross-session reads are plain. See
- * {@link #applyTurnAwareWindow(List)}.</li>
- * <li>{@link #lastN} and {@link #pageSize} are <em>mutually exclusive</em>; setting both
- * throws {@link IllegalArgumentException}.</li>
- * <li>If {@link #pageSize} is set and {@link #page} is {@code null}, {@link #page}
- * defaults to {@code 0} (first page).</li>
- * <li>Setting {@link #page} without {@link #pageSize} throws
- * {@link IllegalArgumentException}.</li>
- * <li>{@link #lastN} must be greater than zero if set.</li>
- * <li>{@link #pageSize} must be greater than zero if set.</li>
- * <li>{@link #page} must be non-negative if set.</li>
- * <li>Paginated results are sliced from the per-event-filtered list in <em>chronological
- * order</em> (oldest first). Page 0 therefore contains the oldest matching events, and
- * the highest-numbered page contains the most recent ones.</li>
+ * <li>{@link Window.All}: every matching event.</li>
+ * <li>{@link Window.Last}: the newest N matching events of one session, extended back to
+ * the start of the turn the window lands in (see {@link SessionEvent#isTurnStart()}), so
+ * a prompt never begins with an assistant reply or a tool result whose user message or
+ * tool call was cut off. The extension is skipped for filters with text criteria (a
+ * search result is not a prompt), when no turn start precedes the window, and across
+ * sessions.</li>
+ * <li>{@link Window.Page}: a page of the matching events, oldest first, so page 0 holds
+ * the oldest.</li>
+ * <li>{@link Window.After}: the matching events logged after a given event, oldest
+ * first, at most {@code limit} of them: a cursor for reading what happened since an
+ * event a client has seen. The cursor event itself need not match the criteria. A
+ * cursor that names no event of the session is an error. Not available across
+ * sessions.</li>
  * </ul>
+ * {@link Order#DESC} reverses the windowed result, newest first.
  *
  * <p>
- * Use the static factory methods for common cases or {@link #builder()} for custom
- * combinations:
+ * A {@link #pattern()} is not part of the {@link SessionRepository} read contract: a
+ * store ignores it, and {@link SessionService} applies it after the read, before the
+ * window. Use the static factory methods for common cases or {@link #builder()} for
+ * custom combinations:
  *
  * <pre>{@code
  * EventFilter filter = EventFilter.builder()
@@ -69,19 +69,18 @@ import org.springframework.util.Assert;
  *     .messageTypes(Set.of(MessageType.USER, MessageType.ASSISTANT))
  *     .excludeSynthetic(true)
  *     .build();
+ * EventFilter since = EventFilter.builder().after(lastSeenEventId).build();
  * }</pre>
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullable Set<MessageType> messageTypes,
-		boolean excludeSynthetic, @Nullable Integer lastN, @Nullable String keyword,
-		@Nullable List<String> keywords, @Nullable MatchMode matchMode, @Nullable Pattern pattern,
-		@Nullable Integer page, @Nullable Integer pageSize, boolean excludeArchived) {
+		@Nullable Set<EventType> eventTypes, boolean excludeSynthetic, boolean activeView,
+		@Nullable List<String> keywords, @Nullable MatchMode matchMode, @Nullable Pattern pattern, Window window,
+		@Nullable Order order) {
 
-	/**
-	 * How multiple {@link #keywords()} combine when matching an event's text.
-	 */
+	/** How multiple {@link #keywords()} combine when matching an event's text. */
 	public enum MatchMode {
 
 		/** Match if the text contains at least one of the keywords. */
@@ -92,83 +91,147 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 
 	}
 
+	/** The order of the returned events. */
+	public enum Order {
+
+		/** Oldest first: log order. The default. */
+		ASC,
+
+		/** Newest first. */
+		DESC
+
+	}
+
+	/** The retrieval window: which of the matching events are returned. */
+	public sealed interface Window permits Window.All, Window.Last, Window.Page, Window.After {
+
+		/** Every matching event. */
+		Window ALL = new All();
+
+		/** The newest {@code n} matching events, extended to the start of their turn. */
+		static Window last(int n) {
+			return new Last(n);
+		}
+
+		/** Page {@code page} (zero-based) of {@code size} matching events, oldest first. */
+		static Window page(int page, int size) {
+			return new Page(page, size);
+		}
+
+		/** Every matching event logged after the given one. */
+		static Window after(String eventId) {
+			return new After(eventId, null);
+		}
+
+		/** At most {@code limit} matching events logged after the given one. */
+		static Window after(String eventId, int limit) {
+			return new After(eventId, limit);
+		}
+
+		/** Every matching event. */
+		record All() implements Window {
+		}
+
+		/** The newest {@code n} matching events. */
+		record Last(int n) implements Window {
+			public Last {
+				if (n <= 0) {
+					throw new IllegalArgumentException("lastN must be greater than 0");
+				}
+			}
+		}
+
+		/** A page of the matching events, oldest first. */
+		record Page(int page, int size) implements Window {
+			public Page {
+				if (page < 0) {
+					throw new IllegalArgumentException("page must be >= 0");
+				}
+				if (size <= 0) {
+					throw new IllegalArgumentException("pageSize must be greater than 0");
+				}
+			}
+		}
+
+		/** The matching events after a given event: a cursor. */
+		record After(String eventId, @Nullable Integer limit) implements Window {
+			public After {
+				Assert.hasText(eventId, "eventId must not be null or empty");
+				if (limit != null && limit <= 0) {
+					throw new IllegalArgumentException("limit must be greater than 0");
+				}
+			}
+		}
+
+	}
+
 	public EventFilter {
-		keyword = (keyword != null && !keyword.isBlank()) ? keyword.toLowerCase(Locale.ROOT) : null;
 		keywords = (keywords != null && !keywords.isEmpty()) ? keywords.stream()
 			.filter(k -> k != null && !k.isBlank())
 			.map(k -> k.toLowerCase(Locale.ROOT))
 			.toList() : null;
 		keywords = (keywords != null && keywords.isEmpty()) ? null : keywords;
 		matchMode = (keywords != null) ? (matchMode != null ? matchMode : MatchMode.ANY) : null;
-		messageTypes = (messageTypes != null && !messageTypes.isEmpty()) ? messageTypes : null;
-		if (lastN != null && lastN <= 0) {
-			throw new IllegalArgumentException("lastN must be greater than 0");
-		}
-		if (lastN != null && pageSize != null) {
-			throw new IllegalArgumentException("lastN and page/pageSize are mutually exclusive");
-		}
-		if (pageSize != null && pageSize <= 0) {
-			throw new IllegalArgumentException("pageSize must be greater than 0");
-		}
-		if (page != null && page < 0) {
-			throw new IllegalArgumentException("page must be >= 0");
-		}
-		if (page != null && pageSize == null) {
-			throw new IllegalArgumentException("pageSize must be set when page is set");
-		}
-		if (pageSize != null && page == null) {
-			page = 0;
-		}
+		messageTypes = (messageTypes != null && !messageTypes.isEmpty()) ? Set.copyOf(messageTypes) : null;
+		eventTypes = (eventTypes != null && !eventTypes.isEmpty()) ? Set.copyOf(eventTypes) : null;
+		Assert.notNull(window, "window must not be null");
 	}
 
 	/**
 	 * Returns a filter combining this (base) filter with {@code other}, where every
 	 * criterion set on {@code other} takes precedence. The {@code excludeSynthetic} and
-	 * {@code excludeArchived} flags are OR-ed (either side can only narrow the result).
-	 *
-	 * <p>
-	 * The retrieval modifier — {@link #lastN} or {@link #page}/{@link #pageSize} — is
-	 * treated as a single unit: if {@code other} sets either form, it replaces this
-	 * filter's modifier entirely. This lets a per-request paginated search override a base
-	 * {@code lastN} window (and vice versa) instead of failing on the mutually exclusive
-	 * combination.
+	 * {@code activeView} flags are OR-ed (either side can only narrow the result). The
+	 * window of {@code other} replaces this filter's window unless it is
+	 * {@link Window#ALL}, so a per-request page can override a base {@code last} window.
 	 */
 	public EventFilter merge(EventFilter other) {
-		boolean otherHasRetrievalModifier = other.lastN != null || other.pageSize != null;
-		EventFilter retrieval = otherHasRetrievalModifier ? other : this;
-		return new EventFilter(other.from != null ? other.from : this.from, other.to != null ? other.to : this.to,
-				other.messageTypes != null ? other.messageTypes : this.messageTypes,
-				other.excludeSynthetic || this.excludeSynthetic, retrieval.lastN,
-				other.keyword != null ? other.keyword : this.keyword,
-				other.keywords != null ? other.keywords : this.keywords,
-				other.matchMode != null ? other.matchMode : this.matchMode,
-				other.pattern != null ? other.pattern : this.pattern, retrieval.page, retrieval.pageSize,
-				other.excludeArchived || this.excludeArchived);
+		Assert.notNull(other, "other must not be null");
+		return toBuilder().from(other.from != null ? other.from : this.from)
+			.to(other.to != null ? other.to : this.to)
+			.messageTypes(other.messageTypes != null ? other.messageTypes : this.messageTypes)
+			.eventTypes(other.eventTypes != null ? other.eventTypes : this.eventTypes)
+			.excludeSynthetic(other.excludeSynthetic || this.excludeSynthetic)
+			.activeView(other.activeView || this.activeView)
+			.keywords(other.keywords != null ? other.keywords : this.keywords)
+			.matchMode(other.matchMode != null ? other.matchMode : this.matchMode)
+			.pattern(other.pattern != null ? other.pattern : this.pattern)
+			.window(!(other.window instanceof Window.All) ? other.window : this.window)
+			.order(other.order != null ? other.order : this.order)
+			.build();
 	}
 
 	/** Default number of results per page used by {@link #keywordSearch(String)}. */
 	public static final int DEFAULT_PAGE_SIZE = 10;
 
 	/**
-	 * Returns all events with no filtering, <em>including</em> archived events. Used by
-	 * Recall Storage so the full verbatim history remains searchable after compaction. For
-	 * building the active context window use {@link #active()} instead.
+	 * Returns the whole log with no filtering, <em>including</em> the events compaction has
+	 * covered and the compaction boundaries themselves. Used by Recall Storage so the full
+	 * verbatim history remains searchable after compaction. For building the active context
+	 * window use {@link #active()} instead.
 	 */
 	public static EventFilter all() {
 		return builder().build();
 	}
 
 	/**
-	 * Returns only the active events — i.e. excludes events archived by compaction. This is
-	 * the view that should be injected into the prompt as the active context window.
+	 * Returns the active conversation: the {@link EventType#MESSAGE} events of the
+	 * {@linkplain Builder#activeView(boolean) active view}, in prompt order. This is
+	 * the view that should be injected into the prompt as the active context window, and
+	 * the input of compaction. Events of any other type record runtime state, not
+	 * conversation, and are left out.
 	 */
 	public static EventFilter active() {
-		return builder().excludeArchived(true).build();
+		return builder().activeView(true).eventTypes(Set.of(EventType.MESSAGE)).build();
 	}
 
 	/** Returns the last {@code n} events. */
 	public static EventFilter lastN(int n) {
 		return builder().lastN(n).build();
+	}
+
+	/** Returns every event logged after the given one: what happened since a client saw it. */
+	public static EventFilter after(String eventId) {
+		return builder().after(eventId).build();
 	}
 
 	/** Excludes synthetic (framework-generated) events such as compaction summaries. */
@@ -207,7 +270,8 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	/**
 	 * Returns the first page of events whose message text matches the given regular
 	 * expression. Uses {@link #DEFAULT_PAGE_SIZE}. Case sensitivity is controlled by the
-	 * caller via {@link Pattern#CASE_INSENSITIVE} on the compiled {@code pattern}.
+	 * caller via {@link Pattern#CASE_INSENSITIVE} on the compiled {@code pattern}. The
+	 * pattern is applied by the {@link SessionService}, after the store's read.
 	 *
 	 * <p>
 	 * <strong>Security:</strong> {@code pattern} must be a {@link Pattern} the calling
@@ -232,15 +296,13 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 	// Per-event predicate
 
 	/**
-	 * Returns {@code true} if the given event passes all per-event criteria in this
-	 * filter. Note: {@link #lastN}, {@link #page}, and {@link #pageSize} are applied at
-	 * the collection level by the repository, not here.
+	 * Returns {@code true} if the given event passes the per-event criteria a store
+	 * applies: the time range, the event and message types, the synthetic flag and the
+	 * keywords. The {@link #pattern()} is not among them (see {@link #matchesPattern});
+	 * the view, the window and the order are applied at the collection level.
 	 */
 	public boolean matches(SessionEvent event) {
 		if (this.excludeSynthetic && event.isSynthetic()) {
-			return false;
-		}
-		if (this.excludeArchived && event.isArchived()) {
 			return false;
 		}
 		if (this.from != null && event.getTimestamp().isBefore(this.from)) {
@@ -249,17 +311,16 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		if (this.to != null && event.getTimestamp().isAfter(this.to)) {
 			return false;
 		}
-		if (this.messageTypes != null && !this.messageTypes.contains(event.getMessageType())) {
+		if (this.eventTypes != null && !this.eventTypes.contains(event.getType())) {
 			return false;
 		}
-		if (this.keyword != null) {
-			String text = event.getMessage().getText();
-			if (text == null || !text.toLowerCase(Locale.ROOT).contains(this.keyword)) {
-				return false;
-			}
+		if (this.messageTypes != null
+				&& (!event.hasMessage() || !this.messageTypes.contains(event.getMessageType()))) {
+			return false;
 		}
+		// Keywords match message text; an event without a message has none.
 		if (this.keywords != null) {
-			String text = event.getMessage().getText();
+			String text = event.hasMessage() ? event.getMessage().getText() : null;
 			if (text == null) {
 				return false;
 			}
@@ -270,50 +331,87 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 				return false;
 			}
 		}
-		if (this.pattern != null) {
-			String text = event.getMessage().getText();
-			if (text == null || !this.pattern.matcher(text).find()) {
-				return false;
-			}
-		}
 		return true;
 	}
 
 	/**
-	 * Applies this filter to a list of events held in memory: keeps the events that
-	 * {@link #matches(SessionEvent)}, then applies the retrieval window keeping turns
-	 * whole ({@link #applyTurnAwareWindow(List)}). This is the reference implementation of the read
-	 * contract for a log held as a list; a store that can push the criteria down to a
-	 * query should do so and use this only for what it cannot express (see
-	 * {@link SessionRepository#findEvents}).
-	 * @param events the events, oldest first
-	 * @return the matching events, oldest first, never the input list itself
+	 * Returns {@code true} if the event's message text matches the {@link #pattern()}, or
+	 * the filter has none. Applied by the {@link SessionService} after the store's read.
 	 */
-	public List<SessionEvent> apply(List<SessionEvent> events) {
-		Assert.notNull(events, "events must not be null");
-		return applyTurnAwareWindow(events.stream().filter(this::matches).toList());
+	public boolean matchesPattern(SessionEvent event) {
+		if (this.pattern == null) {
+			return true;
+		}
+		String text = event.hasMessage() ? event.getMessage().getText() : null;
+		return text != null && this.pattern.matcher(text).find();
 	}
 
 	/**
-	 * Applies the retrieval window of this filter to an already filtered per-session log,
-	 * oldest first, keeping turns whole: a {@link #lastN()} window whose first event is not
-	 * a {@linkplain SessionEvent#isTurnStart() turn start} is extended back to the nearest
+	 * Applies this filter to the events of one session held in memory: with
+	 * {@link #activeView()} first reduces the log to its active view
+	 * ({@link CompactionBoundary#project(List)}), then keeps the events that
+	 * {@link #matches(SessionEvent)} (the {@link #pattern()} is left to the
+	 * {@link SessionService}), then applies the window keeping turns whole
+	 * ({@link #applyTurnAwareWindow(List)}) and the order. This is the reference
+	 * implementation of the read contract for a log held as a list; a store that can push
+	 * the criteria down to a query should do so and use this only for what it cannot
+	 * express (see {@link SessionRepository#findEvents}).
+	 * @param events the events of one session, oldest first: the whole log, or for an
+	 * active view any superset of the view that includes the newest boundary
+	 * @return the matching events, never the input list itself
+	 * @throws IllegalArgumentException if an {@link Window.After} cursor names no event
+	 */
+	public List<SessionEvent> apply(List<SessionEvent> events) {
+		Assert.notNull(events, "events must not be null");
+		List<SessionEvent> base = this.activeView ? CompactionBoundary.project(events) : events;
+		base = afterCursor(base);
+		return applyTurnAwareWindow(base.stream().filter(this::matches).toList());
+	}
+
+	/**
+	 * Cuts the events at the {@link Window.After} cursor, if this filter has one: the
+	 * events after the cursor event, in the given order. The cursor is located in the
+	 * unfiltered events, so it need not match the criteria.
+	 * @param events the events of one session, oldest first
+	 * @return the events after the cursor, or the input when the window is not a cursor
+	 * @throws IllegalArgumentException if the cursor names no event
+	 */
+	public List<SessionEvent> afterCursor(List<SessionEvent> events) {
+		if (!(this.window instanceof Window.After after)) {
+			return events;
+		}
+		for (int i = 0; i < events.size(); i++) {
+			if (after.eventId().equals(events.get(i).getId())) {
+				return events.subList(i + 1, events.size());
+			}
+		}
+		throw new IllegalArgumentException("Cursor event '" + after.eventId()
+				+ "' is not among the events read: it is unknown, or no longer in the view (compacted)");
+	}
+
+	/**
+	 * Applies the window and the order to an already filtered per-session log, oldest
+	 * first, keeping turns whole: a {@link Window.Last} window whose first event is not a
+	 * {@linkplain SessionEvent#isTurnStart() turn start} is extended back to the nearest
 	 * turn start before it, so an assistant tool call is never returned without the user
 	 * message and, by extension, the tool results of its turn. The extension is skipped
 	 * when the filter {@linkplain #hasTextCriteria() searches text} (the result is not a
 	 * prompt) and when no turn start precedes the window (a preamble of stored system
 	 * messages, or a {@link #messageTypes()} filter that excludes {@code USER}); the plain
-	 * window is returned then. Pages are always plain. This is the reference
+	 * window is returned then. Pages and cursors are always plain. This is the reference
 	 * implementation of the {@link SessionRepository#findEvents} window contract.
-	 * @param matched the filtered events of one session, oldest first
-	 * @return the windowed events
+	 * @param matched the filtered events of one session, oldest first, already cut at
+	 * the cursor for a {@link Window.After} window
+	 * @return the windowed events, in this filter's order
 	 */
 	public List<SessionEvent> applyTurnAwareWindow(List<SessionEvent> matched) {
 		Assert.notNull(matched, "matched must not be null");
-		if (this.lastN == null || hasTextCriteria() || matched.size() <= this.lastN) {
+		if (!(this.window instanceof Window.Last last) || hasTextCriteria() || matched.size() <= last.n()
+				|| (this.eventTypes != null && !this.eventTypes.contains(EventType.MESSAGE))) {
+			// A text search is not a prompt, and a window without MESSAGE events has no turn start
 			return applyWindow(matched);
 		}
-		int from = matched.size() - this.lastN;
+		int from = matched.size() - last.n();
 		if (!matched.get(from).isTurnStart()) {
 			for (int i = from - 1; i >= 0; i--) {
 				if (matched.get(i).isTurnStart()) {
@@ -322,57 +420,74 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 				}
 			}
 		}
-		return List.copyOf(matched.subList(from, matched.size()));
+		return ordered(matched.subList(from, matched.size()));
 	}
 
 	/**
-	 * Returns {@code true} when this filter searches message text: a {@link #keyword()},
-	 * {@link #keywords()} or {@link #pattern()} is set. Such a read is a search, not a
-	 * prompt, so its window is not extended to turn boundaries.
+	 * Returns {@code true} when this filter searches message text: {@link #keywords()} or
+	 * a {@link #pattern()} is set. Such a read is a search, not a prompt, so its window is
+	 * not extended to turn boundaries.
 	 */
 	public boolean hasTextCriteria() {
-		return this.keyword != null || this.keywords != null || this.pattern != null;
+		return this.keywords != null || this.pattern != null;
 	}
 
 	/**
-	 * Applies only the plain retrieval window of this filter ({@link #lastN()}, or
-	 * {@link #page()} / {@link #pageSize()}) to an already filtered list, oldest first,
-	 * without regard to turns. Used for reads across sessions, where turns do not exist;
-	 * a per-session read uses {@link #applyTurnAwareWindow(List)}. A page beyond the end
-	 * yields an empty list; a page number large enough to overflow an {@code int} offset
-	 * does too.
-	 * @param matched the filtered events, oldest first
-	 * @return the windowed events
+	 * Applies only the plain window and the order to an already filtered list, oldest
+	 * first, without regard to turns. Used for reads across sessions, where turns do not
+	 * exist; a per-session read uses {@link #applyTurnAwareWindow(List)}. A page beyond
+	 * the end yields an empty list; a page number large enough to overflow an {@code int}
+	 * offset does too.
+	 * @param matched the filtered events, oldest first, already cut at the cursor for a
+	 * {@link Window.After} window
+	 * @return the windowed events, in this filter's order
 	 */
 	public List<SessionEvent> applyWindow(List<SessionEvent> matched) {
 		Assert.notNull(matched, "matched must not be null");
-		if (this.lastN != null) {
-			if (matched.size() > this.lastN) {
-				return List.copyOf(matched.subList(matched.size() - this.lastN, matched.size()));
-			}
-			return List.copyOf(matched);
+		List<SessionEvent> windowed = matched;
+		if (this.window instanceof Window.Last last && matched.size() > last.n()) {
+			windowed = matched.subList(matched.size() - last.n(), matched.size());
 		}
-		if (this.pageSize != null) {
-			int pageNum = (this.page != null) ? this.page : 0;
+		else if (this.window instanceof Window.Page page) {
 			// long arithmetic: a large page number must not overflow into a negative index
-			long fromIdx = (long) pageNum * this.pageSize;
-			if (fromIdx >= matched.size()) {
-				return List.of();
-			}
-			return List.copyOf(matched.subList((int) fromIdx, (int) Math.min(fromIdx + this.pageSize, matched.size())));
+			long fromIdx = (long) page.page() * page.size();
+			windowed = (fromIdx >= matched.size()) ? List.of()
+					: matched.subList((int) fromIdx, (int) Math.min(fromIdx + page.size(), matched.size()));
 		}
-		return List.copyOf(matched);
+		else if (this.window instanceof Window.After after && after.limit() != null
+				&& matched.size() > after.limit()) {
+			windowed = matched.subList(0, after.limit());
+		}
+		return ordered(windowed);
+	}
+
+	/** The events in this filter's order: a copy, reversed for {@link Order#DESC}. */
+	public List<SessionEvent> ordered(List<SessionEvent> events) {
+		if (this.order == Order.DESC) {
+			List<SessionEvent> reversed = new ArrayList<>(events);
+			Collections.reverse(reversed);
+			return Collections.unmodifiableList(reversed);
+		}
+		return List.copyOf(events);
 	}
 
 	/**
-	 * Returns this filter without its retrieval window ({@link #lastN()}, {@link #page()}
-	 * and {@link #pageSize()} cleared), keeping every per-event criterion. Used to run the
-	 * same criteria over several sessions before windowing the combined result.
-	 * @return the filter without a window
+	 * Returns this filter without its window ({@link Window#ALL}), keeping every other
+	 * criterion. Used to run the same criteria over several sessions before windowing the
+	 * combined result.
 	 */
 	public EventFilter withoutWindow() {
-		return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, null, this.keyword,
-				this.keywords, this.matchMode, this.pattern, null, null, this.excludeArchived);
+		return toBuilder().window(Window.ALL).build();
+	}
+
+	/** Returns this filter without its {@link #pattern()}: what a store is asked for. */
+	public EventFilter withoutPattern() {
+		return toBuilder().pattern(null).build();
+	}
+
+	/** Returns a builder initialised with every criterion of this filter. */
+	public Builder toBuilder() {
+		return new Builder(this);
 	}
 
 	/**
@@ -388,11 +503,11 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 
 		private @Nullable Set<MessageType> messageTypes;
 
+		private @Nullable Set<EventType> eventTypes;
+
 		private boolean excludeSynthetic = false;
 
-		private @Nullable Integer lastN;
-
-		private @Nullable String keyword;
+		private boolean activeView = false;
 
 		private @Nullable List<String> keywords;
 
@@ -400,13 +515,45 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 
 		private @Nullable Pattern pattern;
 
+		private Window window = Window.ALL;
+
 		private @Nullable Integer page;
 
 		private @Nullable Integer pageSize;
 
-		private boolean excludeArchived = false;
+		private @Nullable Order order;
 
 		private Builder() {
+		}
+
+		private Builder(EventFilter source) {
+			this.from = source.from;
+			this.to = source.to;
+			this.messageTypes = source.messageTypes;
+			this.eventTypes = source.eventTypes;
+			this.excludeSynthetic = source.excludeSynthetic;
+			this.activeView = source.activeView;
+			this.keywords = source.keywords;
+			this.matchMode = source.matchMode;
+			this.pattern = source.pattern;
+			this.order = source.order;
+			if (source.window instanceof Window.Page paged) {
+				this.page = paged.page();
+				this.pageSize = paged.size();
+			}
+			else {
+				this.window = source.window;
+			}
+		}
+
+		/**
+		 * Only include events whose {@link SessionEvent#getType()} is in this set. Unset
+		 * (the default) includes every type; {@link EventFilter#active()} selects
+		 * {@link EventType#MESSAGE} only.
+		 */
+		public Builder eventTypes(@Nullable Set<EventType> eventTypes) {
+			this.eventTypes = eventTypes;
+			return this;
 		}
 
 		/** Only include events at or after this instant. */
@@ -422,7 +569,10 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		}
 
 		/**
-		 * Only include events whose {@link SessionEvent#getMessageType()} is in this set.
+		 * Only include events carrying a message whose {@link SessionEvent#getMessageType()}
+		 * is in this set: {@link EventType#MESSAGE} events and the tree markers that carry
+		 * one (see {@link EventType#canCarryMessage()}). An event without a message never
+		 * matches; add {@link #eventTypes} to narrow to {@code MESSAGE}.
 		 */
 		public Builder messageTypes(@Nullable Set<MessageType> messageTypes) {
 			this.messageTypes = messageTypes;
@@ -438,21 +588,74 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 			return this;
 		}
 
-		/**
-		 * Return at most the last {@code n} matching events (applied after all per-event
-		 * filters).
-		 */
-		public Builder lastN(@Nullable Integer lastN) {
-			this.lastN = lastN;
+		/** The retrieval window; defaults to {@link Window#ALL}. */
+		public Builder window(Window window) {
+			Assert.notNull(window, "window must not be null");
+			this.window = window;
+			this.page = null;
+			this.pageSize = null;
 			return this;
 		}
 
 		/**
-		 * Case-insensitive substring to match against {@code message.getText()}. Events
-		 * whose text is {@code null} or does not contain the keyword are excluded.
+		 * Return at most the last {@code n} matching events (applied after all per-event
+		 * filters): {@link Window#last(int)}. {@code null} clears the window.
+		 */
+		public Builder lastN(@Nullable Integer lastN) {
+			return window(lastN != null ? Window.last(lastN) : Window.ALL);
+		}
+
+		/**
+		 * Return the matching events logged after the given event, oldest first:
+		 * {@link Window#after(String)}, a cursor.
+		 */
+		public Builder after(String eventId) {
+			return window(Window.after(eventId));
+		}
+
+		/** Return at most {@code limit} matching events logged after the given event. */
+		public Builder after(String eventId, int limit) {
+			return window(Window.after(eventId, limit));
+		}
+
+		/** Page {@code page} (zero-based) of {@code size} matching events: {@link Window#page(int, int)}. */
+		public Builder page(int page, int size) {
+			return window(Window.page(page, size));
+		}
+
+		/**
+		 * Zero-indexed page number for paginated results. Applied after per-event
+		 * filtering in chronological order (oldest first), so page 0 contains the oldest
+		 * matching events. Requires {@link #pageSize(Integer)} to be set.
+		 */
+		public Builder page(@Nullable Integer page) {
+			this.page = page;
+			return this;
+		}
+
+		/**
+		 * Number of results per page. Enables pagination; {@link #page(Integer)} then
+		 * defaults to {@code 0}. Unset by default (no pagination) — the
+		 * {@link EventFilter#keywordSearch(String)}-style factories use
+		 * {@link EventFilter#DEFAULT_PAGE_SIZE}.
+		 */
+		public Builder pageSize(@Nullable Integer pageSize) {
+			this.pageSize = pageSize;
+			return this;
+		}
+
+		/** The order of the result; {@link Order#ASC} (oldest first) when unset. */
+		public Builder order(@Nullable Order order) {
+			this.order = order;
+			return this;
+		}
+
+		/**
+		 * Case-insensitive substring to match against {@code message.getText()}: a
+		 * one-term {@link #keywords(List)}. {@code null} clears the keywords.
 		 */
 		public Builder keyword(@Nullable String keyword) {
-			this.keyword = keyword;
+			this.keywords = (keyword != null) ? List.of(keyword) : null;
 			return this;
 		}
 
@@ -479,7 +682,8 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		/**
 		 * A compiled regular expression evaluated against {@code message.getText()} via
 		 * {@link Pattern#matcher(CharSequence)}{@code .find()}. Events whose text is
-		 * {@code null} or does not match are excluded.
+		 * {@code null} or does not match are excluded. Applied by the
+		 * {@link SessionService} after the store's read, before the window.
 		 *
 		 * <p>
 		 * <strong>Security:</strong> see the warning on {@link EventFilter#patternSearch(Pattern)}
@@ -492,41 +696,41 @@ public record EventFilter(@Nullable Instant from, @Nullable Instant to, @Nullabl
 		}
 
 		/**
-		 * Zero-indexed page number for paginated results. Applied after per-event
-		 * filtering in chronological order (oldest first), so page 0 contains the oldest
-		 * matching events. Requires {@link #pageSize(Integer)} to be set.
-		 */
-		public Builder page(@Nullable Integer page) {
-			this.page = page;
-			return this;
-		}
-
-		/**
-		 * Number of results per page. Enables pagination; {@link #page(Integer)} then
-		 * defaults to {@code 0}. Unset by default (no pagination) — the
-		 * {@link EventFilter#keywordSearch(String)}-style factories use
-		 * {@link EventFilter#DEFAULT_PAGE_SIZE}.
-		 */
-		public Builder pageSize(@Nullable Integer pageSize) {
-			this.pageSize = pageSize;
-			return this;
-		}
-
-		/**
-		 * When {@code true}, events archived by compaction are excluded. Used to build the
-		 * active context window; leave {@code false} (the default) for Recall Storage
+		 * When {@code true}, the filter applies to the active view of the log as defined by
+		 * its newest compaction boundary (see {@link CompactionBoundary#project(List)}):
+		 * the pinned events, the summary, the preserved events and everything appended
+		 * since, in that order. The events compaction covered are left out. Used to build
+		 * the active context window; leave {@code false} (the default) for Recall Storage
 		 * searches that must see the full history.
+		 * <p>
+		 * Compaction reads the conversation only, so a boundary names message events. An
+		 * event of another type (status, usage and the like) logged before the boundary
+		 * is therefore not in the view, while one logged after it is. Read runtime state
+		 * without this flag.
 		 */
-		public Builder excludeArchived(boolean excludeArchived) {
-			this.excludeArchived = excludeArchived;
+		public Builder activeView(boolean activeView) {
+			this.activeView = activeView;
 			return this;
 		}
 
-		/** Constructs the {@link EventFilter}. */
+		/**
+		 * Constructs the {@link EventFilter}.
+		 * @throws IllegalArgumentException if {@link #page(Integer)} is set without
+		 * {@link #pageSize(Integer)}, or a page is set together with another window
+		 */
 		public EventFilter build() {
-			return new EventFilter(this.from, this.to, this.messageTypes, this.excludeSynthetic, this.lastN,
-					this.keyword, this.keywords, this.matchMode, this.pattern, this.page, this.pageSize,
-					this.excludeArchived);
+			Window window = this.window;
+			if (this.pageSize != null) {
+				if (!(window instanceof Window.All)) {
+					throw new IllegalArgumentException("page/pageSize and another window are mutually exclusive");
+				}
+				window = Window.page(this.page != null ? this.page : 0, this.pageSize);
+			}
+			else if (this.page != null) {
+				throw new IllegalArgumentException("pageSize must be set when page is set");
+			}
+			return new EventFilter(this.from, this.to, this.messageTypes, this.eventTypes, this.excludeSynthetic,
+					this.activeView, this.keywords, this.matchMode, this.pattern, window, this.order);
 		}
 
 	}

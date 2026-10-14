@@ -26,7 +26,9 @@ how the main types fit together.
 
 | Module | Artifact | Description |
 |--------|----------|-------------|
-| **Session Management** | `spring-ai-session` | Core SPI: `Session`, `SessionEvent`, `SessionService`, `SessionRepository`, compaction framework, `SessionMemoryAdvisor` |
+| **Session Management** | `spring-ai-session` | Core SPI: `Session`, `SessionEvent`, `SessionService`, `SessionRepository`, compaction framework, recall tools; no dependency on `ChatClient` |
+| **Session ChatClient** | `spring-ai-session-chatclient` | The `ChatClient` integration: `SessionAdvisors`, `SessionMemoryAdvisor`, `SessionTurnAdvisor`, `BudgetAdvisor`, and the summarizing compaction strategy |
+| **Session Agent** | `spring-ai-session-agent` | The spring-ai-agent integration: `SessionFeature`, a `Checkpointer` over the log, `BudgetFeature`, `ToolConfirmationFeature` |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
@@ -38,8 +40,8 @@ how the main types fit together.
 
 ## Key Features
 
-- **Full history kept** — compaction archives events in place and never deletes them, so
-  the full history stays searchable
+- **Full history kept** — the event log is append-only: compaction records a boundary and
+  never changes or deletes an event, so the full history stays searchable
 - **Composable event filtering** — by message type, time range, single or multi-term
   keyword (`ANY`/`ALL`), regular expression, last-N, or pagination
 - **Four compaction strategies** out of the box:
@@ -48,7 +50,7 @@ how the main types fit together.
     - `TokenCountCompactionStrategy` — keep a token-budget-bounded suffix
     - `RecursiveSummarizationCompactionStrategy` — LLM-powered rolling summary
 - **Two compaction triggers** — turn count and token count (composable with OR semantics)
-- **Optimistic concurrency** — compare-and-swap `applyCompaction` makes compaction safe
+- **Optimistic concurrency** — a compare-and-swap `appendEvents` makes compaction safe
   under concurrent requests without locking
 - **Multi-agent** — give each sub-agent its own session, with its own memory and
   compaction; see [Multi-Agent](session-management/multi-agent.md)
@@ -79,11 +81,12 @@ repository and `SessionService` (schema auto-initialised with an embedded databa
 ```java
 @Bean
 ChatClient chatClient(ChatModel chatModel, SessionService sessionService) {
-    SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
+    SessionTurnAdvisor turn = SessionTurnAdvisor.builder(sessionService)
         .compactionTrigger(new TurnCountTrigger(20))
         .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
         .build();
-    return ChatClient.builder(chatModel).defaultAdvisors(advisor).build();
+    SessionMemoryAdvisor memory = SessionMemoryAdvisor.builder(sessionService).build();
+    return ChatClient.builder(chatModel).defaultAdvisors(turn, memory).build();
 }
 
 // Every call automatically loads history, appends messages, and compacts when needed
@@ -97,7 +100,7 @@ String answer = chatClient.prompt()
 See [Getting Started](getting-started.md) for the full setup, including manual JDBC and
 in-memory setups.
 
-**Requirements:** Java 17+, Spring AI `2.0.1+`, Spring Boot `4.1.1+`.
+**Requirements:** Java 17+, Spring AI `2.1.0-SNAPSHOT+`, Spring Boot `4.1.1+`.
 
 ---
 

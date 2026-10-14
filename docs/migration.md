@@ -1,5 +1,536 @@
 # Migration Guide
 
+## Upgrading to 0.11.0
+
+### Dependency baseline: Spring AI 2.1.0-SNAPSHOT, Spring Boot 4.1.1
+
+0.11.0 builds against Spring AI 2.1.0-SNAPSHOT and Spring Boot 4.1.1 (previously 2.0.1 / 4.1.1).
+Spring AI 2.1 is where messages carry their content as ordered `MessagePart`s, which the
+0.11.0 event log stores, and where tool calling pauses on calls that need a person's
+confirmation, which the session parks and resumes. Until Spring AI 2.1.0 is released, add the Spring snapshot
+repository to your build (see [Maven Repositories](getting-started.md#maven-repositories))
+and align your application's Spring AI BOM version accordingly.
+
+### Breaking: `SessionEvent` has a type, and not every event is a message
+
+`SessionEvent` gains `getType()` (an `EventType`: `MESSAGE`, `STATUS`, `INTERRUPT`,
+`INTERACTION`, `USAGE`, `COMPACTION`, `CHILD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED`,
+and the agent types), `hasMessage()` and `getPayload()`. A builder without `type(...)` still
+builds a `MESSAGE` event, so existing code that creates events is unchanged. What changes
+is reading: `getMessage()` and `getMessageType()` throw `IllegalStateException` for an event
+that is not a message. Code that iterates `getEvents(sessionId)` (which is
+`EventFilter.all()`) must check `hasMessage()` or filter by type, because a log can now hold
+other kinds of events. `SessionService.getMessages()` and `getActiveMessages()` already skip
+them.
+
+`EventFilter.active()` now selects the `MESSAGE` events of the active view (see the next
+section); it is the prompt view and the compaction input, and runtime events do not belong
+in either.
+`EventFilter` gets a 13th record component, `eventTypes`; code calling the canonical
+constructor must pass it (`null` for no restriction). The builder and the factories are
+unchanged.
+
+### Breaking: compaction is a projection, and the log is append-only
+
+Compaction no longer modifies the event log. Up to 0.10.0 a pass flagged events
+`archived` in place and inserted the summary turn in front of the kept window. In 0.11.0
+a pass **appends** one `COMPACTION` boundary event, whose payload is a `CompactionBoundary`
+naming by id the events the active view starts with (pinned, summary, preserved), followed
+by the summary events. Every existing event stays exactly where and what it was. The
+active view is projected from the newest boundary on every read: the events it names, in
+that order, then everything appended since. Events the boundary does not name are
+**covered**: still in the log, searchable through Recall Storage, never sent to the model.
+
+This is the model that managed-agent harnesses use (a compaction is a record in the
+transcript, not an edit of it), and it has three practical effects: a compaction is one
+cheap batch insert, a store never rewrites rows, and every compaction is observable after
+the fact (which strategy ran, what it covered, what it estimated to save).
+
+What changes in the API:
+
+- **`SessionEvent.isArchived()`, `asArchived()` and `Builder.archived(...)` are removed.**
+  An event has no compaction state. To know whether an event is in the view, read the view
+  (`EventFilter.active()`) or project it with `CompactionBoundary.project(log)`.
+- **`EventFilter.excludeArchived` is renamed `activeView`.** Same record position, same
+  builder position; `EventFilter.active()` sets it. With `activeView(true)` the filter
+  applies to the view instead of the whole log, so a `lastN`, a page or a `messageTypes`
+  selection never reaches into covered events. `EventFilter.apply(List)` now projects
+  first when the flag is set.
+- **`CompactionResult` is reshaped.** `compactedEvents()` / `archivedEvents()` /
+  `archivedEventCount()` are replaced by `coveredEvents()`, `pinnedEvents()`,
+  `preservedEvents()`, `summary()` (the new summary turn as `Message`s, empty for the window
+  strategies), `strategy()`, plus `coveredEventCount()`, `isUnchanged()`, the `unchanged()`
+  factory and `toEvents(sessionId)`. A custom strategy returns
+  what should leave the view and what should stay; it no longer builds the new window or
+  creates summary events itself, the service does.
+- **`CompactionPlan` is removed and `SessionRepository.applyCompaction` is replaced by
+  `appendEvents(sessionId, events, expectedVersion)`:** an atomic, version-checked append of
+  several events that increments the version once. A custom repository implements it
+  (validate that every event belongs to the session and has a new id, check the version,
+  append) and honours `EventFilter.activeView()` in `findEvents`: read the newest
+  `COMPACTION` event, fetch the events it names plus everything from it on, and hand them
+  to `EventFilter.apply`, which projects, filters and windows. `findEvents(sessionIds, filter)`
+  with an active view can fall back to the default per-session loop. The contract test kit
+  checks all of it; its protected `plan(...)` and `apply(...)` helpers are replaced by
+  `compact(sessionId, pinned, summary, preserved)` and `event(sessionId, message)`.
+- **`SessionEvent.METADATA_COMPACTION_ID`** is set on every summary event to the id of its
+  boundary.
+
+What changes in behaviour:
+
+- **The view has an order of its own.** Before, every kept event stayed at its log position
+  and the summary was inserted in front of the kept window. Now the view is pinned events
+  (the latest stored system message, and for the window strategies the earlier summary
+  turns), then the summary, then the preserved events, then everything appended since. For
+  a session without a stored system message the two orders are the same. With one, the
+  system message is now first in the view, which is where `SessionMemoryAdvisor` put it
+  anyway.
+- **A pass that needs no cut writes nothing.** Superseded stored system messages used to be
+  archived on every pass; now the next pass that cuts covers them, wherever they sit, and
+  they stay in the view until then. `SessionMemoryAdvisor` uses only the latest one, so the
+  prompt is unchanged. `TurnWindowCompactionStrategy`'s preamble is pinned rather than
+  preserved.
+- **Logs written by 0.10.0 keep working.** The JDBC repository no longer writes the
+  `archived` column but still reads it: a session without a boundary excludes rows flagged
+  `archived` from its view, so a session compacted by 0.10.0 keeps the view it had until
+  its first 0.11.0 compaction, whose boundary then takes over. The column can be dropped
+  once no such session remains. The in-memory repository holds nothing across versions.
+
+### Breaking: scope and ownership leave the session model
+
+`Session.userId` modelled an application concern and authorized nothing: the service never
+compared the caller with the owner. It is gone. Who a session belongs to is now an
+attribute in its metadata, resolved from the caller, indexed by the repository and
+enforced by an authorization layer in front of the service, the way Spring Session and
+Spring Security divide the work. See [Scope and Security](session-management/scope-and-security.md).
+
+| Before | After |
+|---|---|
+| `Session.userId()`, `Session.builder().userId(...)`, `CreateSessionRequest.builder().userId(...)` (required) | removed; `metadata` carries `SessionAttributes.PRINCIPAL_NAME` (`"principalName"`). `SessionAttributes.principalName(session)` reads it; `Session.builder().metadata(key, value)` is new |
+| `SessionRepository.findByUserId(userId)`, `SessionService.findByUserId(userId)` | `findByIndex(name, value)`: the sessions whose metadata holds `value` under `name`. The principal is indexed by every store; JDBC indexes other keys when told to (`indexedAttributes`) |
+| `findEventsByUserId(userId, filter)` on the repository and the service | `findEvents(Collection<String> sessionIds, EventFilter filter)`; the caller chooses the sessions, through `findByIndex` or a `SessionSelector` |
+| `CrossSessionRecallTools.builder(sessionService, userId)` | `builder(sessionService, SessionSelector)`, with `SessionSelector.principal(name)` for one principal's root sessions |
+| `SessionMemoryAdvisor.USER_ID_CONTEXT_KEY`, `Builder.defaultUserId(...)`, the advisor's ownership check | removed. The session a request creates gets its scope from the service's `SessionScopeResolver`; `SESSION_METADATA_CONTEXT_KEY` passes other creation metadata. Authorization is the `AuthorizingSessionService`'s job |
+| — | new `SessionScopeResolver` (`none()`, `fixed(Map)`; `DefaultSessionService.builder().scopeResolver(...)`), `SessionAttributes`, `SessionSelector` (`principal`, `byIndex`, `of`) |
+| — | JDBC: `JdbcSessionRepository.builder().indexedAttributes(Set)`, `getIndexedAttributes()`, `MAX_INDEXED_VALUE_LENGTH` (512: an indexed value and a lookup value are both cut to their first 512 characters, so longer values match by prefix); property `spring.ai.session.repository.jdbc.indexed-attributes` |
+| — | new module `spring-ai-session-security` (in the BOM): `SecurityContextScopeResolver`, `PrincipalSessionAuthorizationManager`, `AuthorizingSessionService`; auto-configured when Spring Security is present, off with `spring.ai.session.security.enabled=false`. The auto-configured `SessionService` bean is then an `AuthorizingSessionService`, so inject it as `SessionService`, not `DefaultSessionService` |
+
+What to do:
+
+- **Creating sessions.** Drop `.userId(...)`. With Spring Security and the security module
+  nothing replaces it: the principal is resolved. Otherwise configure a
+  `SessionScopeResolver`, or set `.metadata(SessionAttributes.PRINCIPAL_NAME, ...)` on the
+  request.
+- **Looking sessions up.** `findByUserId(x)` becomes
+  `findByIndex(SessionAttributes.PRINCIPAL_NAME, x)`; `findEventsByUserId(x, filter)`
+  becomes `findEvents(ids, filter)` with the ids from that lookup, or
+  `SessionSelector.principal(x).select(service)`.
+- **Authorization.** If you relied on the advisor's `USER_ID_CONTEXT_KEY` check, add the
+  security module: the check it did is now made on every service call, for every caller,
+  not only when the key was passed.
+- **Custom repositories** implement `findByIndex(name, value)` and may override
+  `findEvents(Collection, EventFilter)`; the contract test kit's `newSession(principalName)`
+  helper now stores the principal in the metadata, and `principalSession(id, principalName)`
+  builds such a session.
+- **Streaming with the security module** is limited in this release; see the
+  [streaming note](session-management/scope-and-security.md#with-spring-security). The JDBC schema adds `AI_SESSION_INDEX`
+  (see below).
+
+**Sessions written before 0.11.0** keep their owner: the JDBC row mapper reads `user_id` as
+the principal when the metadata has none, the column is still written with the principal
+name (a database that declares it `NOT NULL` keeps working), and the schema script copies
+`user_id` into `AI_SESSION_INDEX` once (`INSERT … SELECT … WHERE NOT EXISTS`, safe to
+re-run). Databases managed outside the bundled script need the new table and that copy.
+
+### New: session trees for sub-agents
+
+`SessionService.createChild(parentId, request)` (and `createChild(parentId, agentName)`)
+creates a session that belongs to the parent's tree, what Claude Managed Agents calls a
+thread. `Session` gains two fields for it:
+`parentSessionId()` (`null` on a root) and `rootSessionId()` (the root of the tree; a
+root's own id on a root, so it is never `null`), with `isRoot()` and `isChild()`. The
+child inherits the parent's principal and expiry (and any key named in
+`DefaultSessionService.builder().inheritedAttributes(...)`) and may not diverge from them,
+carries `SessionAttributes.AGENT_NAME` when given, and appends a `CHILD_CREATED` marker
+to the parent's log. The depth is limited to one level by default (`maxTreeDepth`).
+`findChildren(parentId)` lists a session's direct children and `findTree(rootId)` the root
+with every child of its tree; `SessionRepository` gains `findByParentSessionId` and
+`findByRootSessionId` for them. `SessionTreeEvents` builds the `CHILD_CREATED`,
+`MESSAGE_SENT` and `MESSAGE_RECEIVED` markers; the two message markers carry the exchanged
+message next to their payload, so `hasMessage()` is true for them too
+(`EventType.canCarryMessage()`), text searches find their text, and `isTurnStart()` is
+false for them. See [Multi-Agent](session-management/multi-agent.md).
+
+Two behaviour changes come with it:
+
+- **`delete(sessionId)` cascades to the session's children.** A session created before
+  0.11.0 has no children, so nothing changes for it.
+- **`SessionSelector.principal(name)` selects root sessions only**, so
+  `CrossSessionRecallTools.builder(service, SessionSelector.principal("alice"))` no longer searches sub-agent sessions;
+  `SessionSelector.principalWithChildren(name)` does.
+
+The JDBC `AI_SESSION` table gains the `parent_session_id` and `root_session_id` columns
+(see the schema section below). `AuthorizingSessionService.createChild` requires the
+caller to be granted the parent, and narrows `findChildren` and `findTree` like any
+listing. The metadata convention the 0.10 multi-agent guide suggested (`parentSessionId`
+and `agent` keys set by hand) is replaced by the API: those keys are plain metadata now,
+so a session written that way stays a root, and `findChildren`, the cascade and the
+selectors leave it alone.
+
+### New: session status, turns and archive
+
+`Session` gains `status()` (`SessionStatus.IDLE`, `RUNNING`, `TERMINATED`), `stopReason()`
+(`StopReason.END_TURN`, `REQUIRES_ACTION`, `BUDGET_REACHED`, `INTERRUPTED`, `ERROR`),
+`archivedAt()` and `isArchived()`. `SessionService` gains `startTurn(id)`, a compare-and-set
+from `IDLE` to `RUNNING`; `endTurn(id, stopReason)`; `archive(id)`, which cascades to the
+children, stamps `archivedAt` and makes the session read-only; and `aggregateStatus(rootId)`.
+Each transition appends a `STATUS` event, built and read with `SessionStatusEvents`.
+`SessionRepository` gains `updateStatus(id, expected, expectedRunId, status, runId,
+stopReason, archivedAt)`, the compare-and-set behind them; a custom repository checks the
+run only when `expectedRunId` is given, and keeps the run on `save`. `AuthorizingSessionService` guards the four calls.
+
+Behaviour changes:
+
+- **The new `SessionTurnAdvisor` tracks the turn** (see the `ChatClient` section below).
+- **An archived session rejects `appendEvent`, `startTurn`, `createChild` and `compact`**
+  with `IllegalStateException`; reads keep working.
+- **`SessionSelector.principal` and `principalWithChildren` leave archived sessions out**;
+  `byIndex` includes them.
+
+The JDBC `AI_SESSION` table gains `status`, `stop_reason` and `archived_at`; a row written
+before reads as an idle root (see the schema section below).
+
+### New: tool confirmation
+
+Spring AI's tool calling pauses on tool calls that need a person's confirmation: a tool
+marked `@Tool(requiresConfirmation = true)`, or one a `ToolCallConfirmationPolicy` on the
+`ToolCallingManager` names. The `SessionTurnAdvisor` makes the pause durable. It parks the
+turn on the paused reply (`endTurn(id, REQUIRES_ACTION, eventIds)` naming the assistant
+event and the question) and resumes it on the next request, whose
+`TOOL_CALL_DECISIONS_CONTEXT_KEY` carries a `ToolCallDecision` per call that waits. The
+decisions are recorded as the answer to the parked question, the paused calls run from the
+log through the loop's `ToolCallingManager` (allowed calls with the request's tools, denied
+ones answered with their message), and the model continues.
+`SessionService.endTurn(id, stopReason, eventIds)` and `SessionStatusEvents.eventIds(event)`
+are new; `endTurn(id, stopReason)` is now a default method. Nothing changes without the
+advisor. See [Tool confirmation](chat-client/chat-client.md#tool-confirmation).
+
+If you used the 0.11.0 snapshots, the session's own gate is gone; Spring AI's tool calling
+decides which calls wait, and the turn advisor parks and resumes:
+
+| Before | Now |
+|---|---|
+| `ToolConfirmationPolicy` and its `eligibilityChecker()` on the `ToolCallingAdvisor` | `@Tool(requiresConfirmation = true)`, or a `ToolCallConfirmationPolicy` on the `ToolCallingManager` |
+| `ToolConfirmationAdvisor` | `SessionTurnAdvisor` with `toolCallingManager(...)`, the loop's own manager |
+| `ToolConfirmation.allow` / `deny` | `ToolCallDecision.allow` / `deny` |
+| `ToolConfirmationAdvisor.TOOL_CONFIRMATION_CONTEXT_KEY` (`"tool_confirmations"`) | `SessionTurnAdvisor.TOOL_CALL_DECISIONS_CONTEXT_KEY` (`"tool_call_decisions"`) |
+| `ToolConfirmation.asAnswer` / `fromAnswer` | `ToolConfirmations.asAnswer` / `fromAnswer` |
+
+The question now holds every call of the paused reply and the ids that wait
+(`{toolCalls, awaiting}`), and a decision's message is stored under `message`, not
+`denyMessage`.
+
+One small behaviour change: a request without a user or tool message no longer stores the
+empty user message `Prompt.getLastUserOrToolResponseMessage()` fabricates.
+
+### Breaking: `EventFilter` has one window, and a pattern is the service's job
+
+`EventFilter` is slimmer (#65). The retrieval window is one value, `window()`, a sealed
+`EventFilter.Window`: `Window.ALL`, `Window.last(n)`, `Window.page(page, size)` or the new
+`Window.after(eventId[, limit])` cursor. The record accessors `lastN()`, `page()` and
+`pageSize()` are gone; the builder keeps `lastN(n)`, `page(p)`/`pageSize(s)` and adds
+`page(p, size)`, `after(eventId[, limit])`, `window(Window)` and `order(Order)`. `keyword` is
+folded into `keywords`: `Builder.keyword(String)` sets a one-term list and the `keyword()`
+accessor is gone. A `pattern` is no longer part of the `SessionRepository` contract:
+`EventFilter.matches` does not evaluate it, stores ignore it, and `SessionService.getEvents`
+/ `findEvents` apply it after the read (`matchesPattern`) and window the matches. Results
+can be ordered newest first with `order(Order.DESC)`; `EventFilter.ordered(List)` applies
+it. `JdbcSessionRepositoryDialect.getKeywordFilterFragment()` is removed and
+`getKeywordPredicateFragment()` is abstract: a custom dialect returns the predicate without
+the leading `AND`. The default reads are unchanged: `getEvents(id)` and `getMessages(id)`
+return the whole log, `getActiveMessages(id)` the active view.
+
+### New: cursor reads, a live stream, and the ids of what the advisor stored
+
+`EventFilter.after(eventId)` reads what was logged after an event the client has seen;
+`SessionService.subscribe(sessionId)` is a `Flux<SessionEvent>` of the events appended from
+then on, with no replay; the two reconcile by event id. `SessionMemoryAdvisor` sets
+`REQUEST_EVENT_ID_CONTEXT_KEY` and `RESPONSE_EVENT_IDS_CONTEXT_KEY` on the context, the
+ids of the events it stored for the request's message and the reply (#20).
+`AuthorizingSessionService` guards `subscribe`. See
+[Event Filtering](session-management/event-filtering.md#cursor-reads) and
+[Live events](session-management/concepts.md#live-events).
+
+### Breaking: the `ChatClient` integration is its own module
+
+`spring-ai-session` no longer depends on `spring-ai-client-chat`. `SessionMemoryAdvisor`,
+`BudgetAdvisor`, the event id generators and
+`RecursiveSummarizationCompactionStrategy` moved to the new `spring-ai-session-chatclient`
+module, in the BOM and in the JDBC starter; packages are unchanged, so a `ChatClient`
+application adds that dependency and changes no import. The core keeps the model, the
+service, the repositories, the other compaction strategies and triggers, and the recall tools
+(`SessionEventTools`, `CrossSessionRecallTools`), which are plain tool callbacks.
+`SessionEventTools.SESSION_ID_CONTEXT_KEY` keeps its value, `chat_memory_conversation_id`.
+The summarizing strategy keeps its `org.springframework.ai.session.compaction` package, which
+the two modules therefore share; an application on the Java module path would have to merge
+them, which is not supported.
+
+### Breaking: a `SessionTurnAdvisor` runs the turn and compacts
+
+The turn moved out of `SessionMemoryAdvisor`, which runs inside the tool-calling loop and so
+never saw the turn's final response: a loop that ended on a `returnDirect` tool or a
+breached tool-call limit left the session `RUNNING`, and the next call was rejected. The new
+`SessionTurnAdvisor` (order `HIGHEST_PRECEDENCE + 200`) wraps the loop: it creates the
+session on first use, calls `startTurn` before the loop and `endTurn` once the call returns
+(`END_TURN`, `ERROR` when it fails, `INTERRUPTED` when a stream is cancelled), and compacts
+once per turn. Two concurrent `ChatClient` calls on the same session therefore no longer
+interleave: the second fails with `IllegalStateException`. A turn left running by a crashed
+process is ended with `endTurn(id, StopReason.INTERRUPTED)`.
+
+- `compactionTrigger` and `compactionStrategy` move from the `SessionMemoryAdvisor` builder
+  to the `SessionTurnAdvisor` builder; `trackStatus` goes. Without the turn advisor the
+  memory advisor keeps the history and leaves the status alone, as in 0.10.
+- Tool confirmation and the `BudgetAdvisor` need the turn advisor.
+
+```java
+ChatClient.builder(chatModel)
+    .defaultAdvisors(
+        SessionTurnAdvisor.builder(sessionService)
+            .compactionTrigger(new TurnCountTrigger(20))
+            .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
+            .build(),
+        SessionMemoryAdvisor.builder(sessionService).build())
+    .build();
+```
+
+### Breaking: the memory advisor's read filter selects a prompt's history
+
+The `EventFilter` given to `SessionMemoryAdvisor.builder().eventFilter(...)` or per request
+with `EVENT_FILTER_CONTEXT_KEY` must select a prompt's history: the active view, all of it
+or its last N events, optionally by `messageTypes` or with `excludeSynthetic`. A time
+range, event types, keywords or a pattern, a page or a cursor window, and `DESC` order are
+rejected with an `IllegalArgumentException`: they describe a search, and some (a page,
+newest-first order) made a broken prompt. Search the log with `SessionService.getEvents`
+instead.
+
+### Breaking: tool calls and tool results are always stored
+
+`SessionMemoryAdvisor` stores an assistant reply with tool calls and the tool results that
+answer it whatever the `MessageFilter` says; the filter decides for every other message.
+Either half alone makes a prompt every provider rejects, and parking, resuming and
+interrupting a turn read them back from the log. A filter such as
+`MessageFilter.byMessageType(USER, ASSISTANT)` no longer keeps tool traffic out of the
+log; to keep it out of the prompt, hide it on read with an `EventFilter`'s `messageTypes`,
+whose read guard drops the calls left without their results. The warnings about
+overriding the filter for a tool response are gone.
+
+### New: run ids and run-scoped event ids
+
+`SessionTurnAdvisor.RUN_ID_CONTEXT_KEY` names the run a `ChatClient` call belongs to, its
+idempotency key (`SessionAdvisors.session(sessionId, runId)`). The turn records it, and the
+memory advisor's new default id generator, `RunScopedSessionEventIdGenerator`, derives each
+event's id from its position in the run, so a replay of the call writes nothing twice.
+Without a run id the ids stay random, as before. `IdempotentSessionEventIdGenerator` is
+deprecated: it derives ids from the message's content, so identical messages collide. When
+nothing was stored for a request, `REQUEST_EVENT_ID_CONTEXT_KEY` is now absent instead of
+`null`. See [Idempotent session-event ids](chat-client/chat-client.md#idempotent-session-event-ids).
+
+### New: the results of a `returnDirect` tool and of a breached limit are stored
+
+A tool-calling loop that ended on a `returnDirect` tool or a breached tool call limit left
+the reply's tool calls without results in the log, since no model round followed to store
+them. The `SessionTurnAdvisor` now stores them: the direct results, or the results of the
+calls that ran, the breach and a note for the calls that never ran.
+
+### New: asynchronous compaction
+
+`SessionTurnAdvisor.builder(...).asyncCompaction(true)`, or `asyncCompaction(true)` on
+`SessionAdvisors`, compacts after the call returns, on the advisor's scheduler, instead of
+before: a summarizing strategy no longer delays the reply. For a `call()` it runs with the
+caller's thread-local context, such as the security context. The advisor runs one compaction per
+session at a time, and one that a new turn's writes overtake is skipped and retried after
+that turn. The default stays synchronous.
+
+### New: `SessionAlreadyExistsException`
+
+`SessionService.create` and `createChild` reject an id that is already taken with a
+`SessionAlreadyExistsException`, which names the id (`getSessionId()`). It extends
+`IllegalStateException`, so code that catches that keeps working; catch the new type to
+tell a lost create race from any other failure, as the advisors and `SessionFeature` now do.
+
+### New: `SessionAdvisors`
+
+`SessionAdvisors.builder(sessionService)...build()` returns the session advisors as a
+`List<Advisor>` for `defaultAdvisors(...)`: the `SessionTurnAdvisor`, the
+`SessionMemoryAdvisor` and, with a `budgetPolicy`, the `BudgetAdvisor`, each at its default
+order. Shared settings (`agent`, `scheduler`, `compaction`, `toolCallingManager`) go on the
+builder, and `memory(b -> ...)` customizes the memory advisor. `SessionAdvisors.session(id)`
+and `SessionAdvisors.decide(id, decisions)` fill a request's advisor context. See
+[Setup](chat-client/chat-client.md#setup).
+
+### New: `interrupt`, and the gate as an interaction
+
+`SessionService.interrupt(id, reason)` records an `INTERRUPT` event (`InterruptEvents`) and
+ends the running turn with `INTERRUPTED`; it is the first-class form of the manual
+`endTurn(id, INTERRUPTED)`. A running `ChatClient` call stops at its next step with a
+`TurnInterruptedException`, and the tool calls it stops are answered in the log. The parked turn is a service protocol: `park(id, interaction,
+relatedEventIds)` records the question and ends the turn with `REQUIRES_ACTION` naming the
+related events and the question, `pendingInteraction(id)` finds it, and `resume(id, runId,
+answer)` starts the turn and records the answer. Tool confirmation, the agent
+runtime's interrupts and the agent's tool gate all go through them. `Interaction` has a
+`kind` (`toolConfirmation`, `interrupt`, or your own). `BudgetGuard` is the budget check both
+`BudgetAdvisor` and `BudgetFeature` run.
+
+### Breaking: `TOOL_CONFIRMATION` is an `INTERACTION`, `USAGE` is the completed model call
+
+`EventType.TOOL_CONFIRMATION` and `ToolConfirmationEvents` are gone: a tool confirmation is an
+`INTERACTION` question of kind `toolConfirmation` whose answer is the decisions, written and
+read with `ToolConfirmations.asAnswer` and `fromAnswer`. In an agent run, a completed model
+call is one `USAGE` event carrying the model, the path and the message count; `MODEL_CALL`
+events record the `started` and `failed` phases only. `ToolConfirmationFeature` takes Spring AI's
+`ToolCallConfirmationPolicy`, and optionally the agent's tools so the policy sees their
+metadata.
+
+### New: `spring-ai-session-agent`
+
+A new module keeps a spring-ai-agent run in a session tree: `SessionFeature` (the run as a
+turn, the main conversation in the root session, nested contexts as child sessions, the
+agent's events as typed log events, an interruption as a parked turn), `SessionCheckpointer`
+(the log as the checkpoint store), `BudgetFeature` and `ToolConfirmationFeature`. It depends
+on `spring-ai-agent` 2.1.0-SNAPSHOT. See [spring-ai-agent Integration](agent/spring-ai-agent.md).
+
+### Breaking: `EventType` is a class, and three value types moved to the core package
+
+`EventType` is no longer an enum. It is a final class whose well-known types are the same
+constants (`EventType.MESSAGE`, `STATUS`, …), compared by name, so every caller that uses the
+constants compiles unchanged. `EventType.valueOf(name)` is `EventType.of(name)`, which also
+accepts an application's own name; `values()` and `ordinal()` are gone, and a `switch` over the
+constants becomes `if`/`else` or a map. The JDBC `event_type` column already stores the name,
+so nothing migrates. New well-known types: `INTERACTION`, `MODEL_CALL`, `TOOL_CALL`, `NODE`,
+`CHECKPOINT`.
+
+`Budget`, `BudgetPolicy` and `BudgetReachedException` moved from
+`org.springframework.ai.session.advisor` to `org.springframework.ai.session`: they are value
+types the advisors and the agent features share. Update the imports.
+
+### New: run ids on turns, interaction events, the agent on the child marker
+
+- `SessionService.startTurn(id, runId)` names the run a turn belongs to; both `STATUS` events
+  of the turn carry it (`SessionStatusEvents.runId(event)`), and so does the session while the
+  turn runs (`Session.runId()`, the JDBC `run_id` column). `startTurn(id)` is now a default
+  method.
+- `SessionService.endTurn(id, runId, stopReason, eventIds)` and
+  `park(id, runId, question, relatedEventIds)` end only that run's turn. The
+  `SessionTurnAdvisor` always gives its turn a run, the caller's or a made-up one, and
+  `SessionFeature` uses the agent's run, so neither ever ends a turn another run started.
+- `InteractionEvents` and `Interaction` record a question a turn parks on and its answer
+  (`EventType.INTERACTION`), the general form of a tool confirmation.
+- `SessionTreeEvents.childCreated` and the message markers carry the child's agent version
+  and model next to its name when the child has them.
+
+### New: agent attributes
+
+The `SessionAttributes.AGENT_NAME`, `AGENT_VERSION` and `AGENT_MODEL` attributes label the
+agent a session runs; `SessionAttributes.agentName(session)`, `agentVersion(session)` and
+`agentModel(session)` read them back. Set them with the create request's metadata,
+`SessionService.createChild(parentId, agentName)`, or, for the sessions a `ChatClient`
+creates, `SESSION_METADATA_CONTEXT_KEY`; nothing changes without them. (The 0.11.0
+snapshots had an `AgentSnapshot` type and `agent(...)` builder options for the same three
+attributes; they are gone.)
+
+### New: usage and budget
+
+`SessionMemoryAdvisor` now records every model call's token usage as a `USAGE` event
+(`UsageEvents`, read back as a `TokenUsage`); `recordUsage(false)` turns it off.
+`SessionService.usage(id)` and `aggregateUsage(rootId)` sum them for a session and a tree,
+and `AuthorizingSessionService` guards both. A new `BudgetAdvisor`, ordered inside the
+memory advisor, refuses a call with `BudgetReachedException` and ends the turn with
+`BUDGET_REACHED` once the tree's usage has reached the `Budget` its `BudgetPolicy` gives
+the root. Nothing is enforced without the advisor. See
+[Budget](chat-client/chat-client.md#budget).
+
+### Renames and small API changes
+
+- `EventFilter.compactedView` is `activeView` (record accessor, builder method and
+  `EventFilter.active()` both), and `EventFilter.toBuilder()` copies a filter; `merge` and
+  `withoutWindow` are unchanged in behaviour (see the `EventFilter` section above for the
+  window itself).
+- `RecursiveSummarizationCompactionStrategy.Builder.maxEventsToKeep(...)` is `maxEvents(...)`, the
+  name the sliding window already used, and `DEFAULT_MAX_EVENTS_TO_KEEP` is `DEFAULT_MAX_EVENTS`.
+- `CompactionResult.keptEvents()`, `CompactionRequest.currentEventCount()` and
+  `CompactionBoundary.namedEventIds()` are removed; `CompactionResult.toEvents(sessionId)` builds the
+  boundary and summary events `SessionService.compact` appends.
+- `CrossSessionRecallTools.builder(sessionService, principalName)` is removed; use
+  `builder(sessionService, SessionSelector.principal(principalName))`.
+- `Session.Builder.metadata(Map)` now adds the entries to the ones already set, like
+  `CreateSessionRequest.Builder.metadata(Map)`, instead of replacing the map.
+- New properties `spring.ai.session.max-tree-depth` (default `1`) and
+  `spring.ai.session.inherited-attributes`.
+
+### Breaking: `SessionEventCodec` encodes events, not messages
+
+Custom `SessionRepository` implementations that use the shared codec: `encode(Message)` and
+`EncodedMessage` are replaced by `encode(SessionEvent)` returning an `EncodedEvent`
+(`type`, `messageType`, `text`, `payload`), and `decode(EncodedEvent)` returns a
+`SessionEvent.Builder` holding the decoded type and content. For a message event the
+payload is JSON of the message's Spring AI 2.1 `MessagePart`s and metadata, so media, tool
+calls, tool results and signed reasoning now round-trip (this closes #53 and #46). The old
+`decode(EncodedMessage)` stays, deprecated, to read what earlier versions wrote.
+
+### Breaking: the JDBC schema changes once for 0.11.0
+
+`AI_SESSION` gains the session-tree columns `parent_session_id` and `root_session_id` (each
+indexed), the status columns `status`, `run_id`, `stop_reason` and `archived_at`, and the
+`AI_SESSION_INDEX` table for indexed metadata attributes; `user_id` is kept and still written
+on every save. `AI_SESSION_EVENT` gains `event_type` and `payload`, and allows a
+`NULL` `message_type` (an event that is not a message). `message_data` is no longer written but
+is still read, so existing rows load unchanged; the same goes for `archived`, which bounds the
+view of a session without a boundary and must stay until that read is removed.
+
+**H2 and PostgreSQL:** the bundled script upgrades an existing 0.10 database by itself
+(`ALTER TABLE … ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, one-off backfills that
+are safe to re-run), so `initialize-schema: always` is all that is needed. **MySQL** has no
+`ADD COLUMN IF NOT EXISTS`, so apply the statements below once, in this order, before starting
+0.11.0 with the bundled script; MariaDB users can use the H2/PostgreSQL form.
+
+```sql
+-- MySQL, in order. (PostgreSQL and H2: the bundled script runs the equivalent itself.)
+ALTER TABLE AI_SESSION ADD COLUMN parent_session_id VARCHAR(255);
+ALTER TABLE AI_SESSION ADD COLUMN root_session_id VARCHAR(255);
+ALTER TABLE AI_SESSION MODIFY user_id VARCHAR(255) NOT NULL DEFAULT '';
+ALTER TABLE AI_SESSION ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'IDLE';
+ALTER TABLE AI_SESSION ADD COLUMN run_id VARCHAR(255);
+ALTER TABLE AI_SESSION ADD COLUMN stop_reason VARCHAR(32);
+ALTER TABLE AI_SESSION ADD COLUMN archived_at DATETIME(6);
+CREATE INDEX idx_ai_session_parent_session_id ON AI_SESSION (parent_session_id);
+CREATE INDEX idx_ai_session_root_session_id ON AI_SESSION (root_session_id);
+UPDATE AI_SESSION SET root_session_id = id WHERE root_session_id IS NULL;   -- existing sessions are roots
+
+ALTER TABLE AI_SESSION_EVENT ADD COLUMN event_type VARCHAR(32) NOT NULL DEFAULT 'MESSAGE';
+ALTER TABLE AI_SESSION_EVENT ADD COLUMN payload LONGTEXT;
+ALTER TABLE AI_SESSION_EVENT MODIFY message_type VARCHAR(20) NULL;
+
+CREATE TABLE AI_SESSION_INDEX (
+    session_id VARCHAR(255) NOT NULL,
+    attr_name  VARCHAR(255) NOT NULL,
+    attr_value VARCHAR(512) NOT NULL,
+    PRIMARY KEY (session_id, attr_name),
+    INDEX idx_ai_session_index_name_value (attr_name, attr_value),
+    CONSTRAINT fk_ai_session_index_session
+        FOREIGN KEY (session_id) REFERENCES AI_SESSION (id) ON DELETE CASCADE
+);
+-- Once: the owner of existing sessions becomes their principal attribute
+INSERT INTO AI_SESSION_INDEX (session_id, attr_name, attr_value)
+SELECT s.id, 'principalName', s.user_id FROM AI_SESSION s
+WHERE s.user_id <> '' AND NOT EXISTS (SELECT 1 FROM AI_SESSION_INDEX i
+                                      WHERE i.session_id = s.id AND i.attr_name = 'principalName');
+```
+
+The `user_id` index of 0.10 is no longer created by the bundled scripts; an existing one is
+harmless and may be dropped.
+
+See the bundled `schema-{h2,postgresql,mysql}.sql` for the full DDL per dialect.
+
 ## Upgrading to 0.10.0
 
 ### Breaking: branch-based multi-agent isolation removed
@@ -45,7 +576,7 @@ compaction settings, and pass only the task in and the result back. See
   `EventFilter` to search summaries.
 - **Every `USER` event starts a turn.** Turn counting (`TurnCountTrigger`) and every
   strategy's turn boundaries now use all non-synthetic `USER` events, and the event-count
-  strategies (`maxEvents`, `maxEventsToKeep`) count all real events. Events that were
+  strategies (`maxEvents`) count all real events. Events that were
   stored on a branch before the upgrade become ordinary events: every reader sees them,
   and their `USER` events now count as turns and turn boundaries. Sessions with branched
   history may therefore be compacted sooner after the upgrade.

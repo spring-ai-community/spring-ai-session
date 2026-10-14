@@ -14,14 +14,26 @@ The event log is stored separately in the repository and fetched on demand.
 | Field | Description |
 |-------|-------------|
 | `id` | Unique session identifier |
-| `userId` | Owning user or agent — required, used for isolation |
 | `createdAt` | Creation timestamp |
-| `expiresAt` | Expiry instant. Sessions created through `SessionService.create` always get one: the request's `timeToLive`, or the service's default (60 days, configurable). `null` (no expiry) is only possible for a `Session` built directly with `Session.builder().expiresAt(null)`. |
-| `metadata` | Arbitrary key/value pairs (model info, tags, etc.) |
+| `expiresAt` | Expiry instant. Sessions created through `SessionService.create` always get one: the request's `timeToLive`, or the service's default (60 days, configurable); a child takes its parent's. `null` (no expiry) is only possible for a `Session` built directly with `Session.builder().expiresAt(null)`, and for the children of such a session. |
+| `parentSessionId` | The session a child was created from; `null` for a root session. Set by `SessionService.createChild` only. |
+| `rootSessionId` | The root of the session's tree: the session's own id for a root, the tree's root for a child. Never `null`, so the whole tree shares one key. |
+| `status` | The session's own `SessionStatus`: `IDLE` between turns, `RUNNING` while a turn is in progress, `TERMINATED` once archived. See [Status, turns and archive](#status-turns-and-archive). |
+| `stopReason` | Why the last turn ended (`END_TURN`, `REQUIRES_ACTION`, `BUDGET_REACHED`, `INTERRUPTED`, `ERROR`); `null` while running or before the first turn ended. |
+| `archivedAt` | When the session was archived; `null` while it is not. `isArchived()` is `status == TERMINATED`. |
+| `metadata` | Arbitrary key/value pairs: the scope attributes (`SessionAttributes.PRINCIPAL_NAME` for the owning principal), model info, tags, etc. |
+
+A session has no owner field. Who it belongs to is a metadata attribute, filled by a
+`SessionScopeResolver` and looked up with `findByIndex(name, value)`; see
+[Scope and Security](scope-and-security.md). A session created with
+`SessionService.createChild` is a **child** of its parent (`isChild()`): it names the
+parent and the tree's root, inherits the parent's principal and expiry, and is deleted with
+the parent; `findChildren(parentId)` and `findTree(rootId)` walk the tree. See
+[Multi-Agent](multi-agent.md).
 
 Keeping `Session` metadata-only means it can be passed across boundaries cheaply and stays
-immutable: every event mutation goes through dedicated repository methods (`appendEvent`,
-`applyCompaction`), and compaction strategies receive the event list as an explicit
+immutable: every event write goes through dedicated repository methods (`appendEvent`,
+`appendEvents`), and compaction strategies receive the event list as an explicit
 parameter.
 
 Sessions are created through `SessionService`, which is the primary API for the entire
@@ -35,7 +47,7 @@ SessionService service = DefaultSessionService.builder()
 Session session = service.create(
     CreateSessionRequest.builder()
         .id("my-session-id")           // optional; a UUID is generated when omitted
-        .userId("alice")
+        .metadata(SessionAttributes.PRINCIPAL_NAME, "alice") // or let a SessionScopeResolver fill it
         .timeToLive(Duration.ofHours(2)) // optional; defaults to 60 days
         .metadata("agentType", "research-assistant")
         .build()
@@ -46,33 +58,75 @@ Session session = service.create(
 
 ## SessionEvent
 
-`SessionEvent` is an immutable value object that wraps a Spring AI `Message` type. It adds only
-what `Message` intentionally omits: identity, ownership, ordering, and framework flags.
+`SessionEvent` is an immutable value object with an `EventType`. A `MESSAGE` event wraps a Spring AI
+`Message` and adds only what `Message` intentionally omits: identity, ownership, ordering, and
+framework flags. Every other event type records runtime state in the same log and carries its data
+in a `payload` map instead of a message; the two tree message markers carry both, the message
+that crossed between parent and child and the payload naming the child (`EventType.canCarryMessage()`).
 
 | Field | Description |
 |-------|-------------|
 | `id` | Unique identity per event (UUID by default) |
 | `sessionId` | Ownership / isolation |
 | `timestamp` | Chronological ordering (`Instant.now()` by default) |
-| `message` | The Spring AI message — no duplication of content |
-| `metadata` | Framework flags such as `METADATA_SYNTHETIC` and `METADATA_COMPACTION_SOURCE` |
-| `archived` | `true` once compaction has moved the event out of the active window; it stays in the log and remains searchable (see [Event lifecycle](#event-lifecycle)) |
+| `type` | What the event records; `MESSAGE` (the default) for a conversation message |
+| `message` | The Spring AI message of a `MESSAGE` event, or the message a `MESSAGE_SENT` / `MESSAGE_RECEIVED` marker records — no duplication of content. `getMessage()` throws for an event without one; test with `hasMessage()` first |
+| `payload` | The JSON-serializable data of an event that is not a message; empty for a message event. A tree marker names its child here |
+| `metadata` | Framework flags such as `METADATA_SYNTHETIC`, `METADATA_COMPACTION_SOURCE` and `METADATA_COMPACTION_ID` |
+
+An event is appended once and never changed. Compaction does not flag it: it appends a
+`COMPACTION` event that defines the active view from then on (see
+[Event lifecycle](#event-lifecycle)).
+
+### Event types
+
+| `EventType` | Records | Message |
+|---|---|---|
+| `MESSAGE` | A conversation message. The only type that takes part in prompt assembly and compaction | yes |
+| `STATUS` | A status change of the session: `RUNNING` when a turn starts, `IDLE` with a stop reason when it ends, `TERMINATED` on archive. `SessionStatusEvents` builds and reads them | no |
+| `INTERRUPT` | A caller interrupted the running turn: `SessionService.interrupt(id, reason)` records it and ends the turn with `INTERRUPTED`; `InterruptEvents` reads it | no |
+| `USAGE` | One completed model call: its token usage, the model and, in an agent run, where it was made and how many messages it sent. `UsageEvents` builds and reads them; `SessionService.usage` sums them; see [Usage and budget](#usage-and-budget) | no |
+| `COMPACTION` | A compaction boundary: which earlier events are pinned, which summary events stand in for the covered ones, and which recent events are preserved. The newest one defines the active view. Its payload is a `CompactionBoundary` | no |
+| `INTERACTION` | A question a turn parked on, of a kind (`toolConfirmation`, `interrupt`, or an application's own), or its answer. `InteractionEvents` builds and reads them; `SessionService.park` records one and ends the turn with `REQUIRES_ACTION` naming it, `resume` records the answer and starts the turn | no |
+| `MODEL_CALL`, `TOOL_CALL`, `NODE`, `CHECKPOINT` | The steps of an agent runtime's run: a model call, a tool call, a graph node, a point to resume from. Reserved names for the spring-ai-agent integration; the session core defines no producer | no |
+| `CHILD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED` | The lifecycle of a delegated child session and the messages exchanged with it. The payload names the child; the two message markers also carry the message that crossed the boundary, as a user message (the task) or an assistant message (the answer). Only `MESSAGE` events start turns and enter the prompt, but text searches find a marker's message | no |
+
+`EventType` is open: a type is its name, the table lists the well-known ones, and an
+application or an agent runtime defines its own with `EventType.of("MY_APP.PROGRESS")`
+(upper case, digits, underscores and dots). Every store keeps the name, a filter by type
+works for any of them, and only `MESSAGE` events and the two message markers take part in
+prompt assembly and compaction.
+
+`EventFilter.active()` returns the active conversation: the `MESSAGE` events of the compacted
+view. `EventFilter.all()` returns every event of every type, boundaries included; use
+`EventFilter.builder().eventTypes(...)` to select types. `SessionService.getMessages()` and
+`getActiveMessages()` skip events that are not messages.
+
+```java
+// A runtime event: no message, a payload instead
+SessionEvent idle = SessionEvent.builder()
+    .sessionId(sessionId)
+    .type(EventType.STATUS)
+    .payload("status", "IDLE")
+    .payload("stopReason", "END_TURN")
+    .build();
+```
 
 ### Message types
 
 | Message type | `SessionEvent.isSynthetic()` | Meaning | Compaction |
 |---|---|---|---|
-| `UserMessage` | `false` | Real user input. It starts a [turn](#turn) | Archived with its turn |
-| `AssistantMessage` (no tool calls) | `false` | Agent response | Archived with its turn |
-| `AssistantMessage` (with tool calls) | `false` | Agent tool invocation | Archived with its turn, never separated from its tool results |
-| `ToolResponseMessage` | `false` | Tool output | Archived with its turn |
-| `SystemMessage` | `false` | A stored system prompt: configuration, not conversation. Storing one is opt-in | The latest one is kept; earlier ones are archived. Never summarized. See [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins) |
-| `UserMessage` | `true` | Synthetic shadow prompt opening a summary turn | Kept by the sliding-window, turn-window and token-count strategies. Archived by the next recursive summary, which replaces it |
+| `UserMessage` | `false` | Real user input. It starts a [turn](#turn) | Covered with its turn |
+| `AssistantMessage` (no tool calls) | `false` | Agent response | Covered with its turn |
+| `AssistantMessage` (with tool calls) | `false` | Agent tool invocation | Covered with its turn, never separated from its tool results |
+| `ToolResponseMessage` | `false` | Tool output | Covered with its turn |
+| `SystemMessage` | `false` | A stored system prompt: configuration, not conversation. Storing one is opt-in | The latest one is pinned first in the view; earlier ones are covered. Never summarized. See [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins) |
+| `UserMessage` | `true` | Synthetic shadow prompt opening a summary turn | Pinned by the sliding-window, turn-window and token-count strategies. Covered by the next recursive summary, which replaces it |
 | `AssistantMessage` | `true` | Synthetic summary text closing a summary turn | As above. Its text is fed to the next recursive summary as the prior summary |
 | `SystemMessage` | `true` | Legacy summary format from earlier versions | As above. Still read as a prior summary by the recursive strategy |
 
 With `RecursiveSummarizationCompactionStrategy`, real events other than system messages
-are summarized before they are archived.
+are summarized before they are covered.
 
 ### Building events
 
@@ -100,7 +154,8 @@ SessionEvent deterministic = SessionEvent.builder()
 ```
 
 Builder defaults: `id` is a random UUID, `timestamp` is `Instant.now()`, `metadata` is
-empty. Only `sessionId` and `message` are required.
+empty. For a message event only `sessionId` and `message` are required; any other
+type needs `type` and may carry a `payload`.
 
 ---
 
@@ -132,8 +187,8 @@ it does not inflate the count used by `TurnCountTrigger`.
 
 ## Synthetic Summary Turn
 
-When `RecursiveSummarizationCompactionStrategy` compacts a session it replaces archived
-events with two synthetic events that form a coherent conversation turn:
+When `RecursiveSummarizationCompactionStrategy` compacts a session it stands two synthetic
+events, forming a coherent conversation turn, in for the events it covers:
 
 ```
 [USER  / synthetic] "Summarize the conversation we had so far."
@@ -148,10 +203,10 @@ models always see a valid user↔assistant alternation.
 All compaction strategies set synthetic events and stored system messages aside before
 processing real events (for system messages, see
 [System Messages](system-messages.md#compaction-the-latest-stored-system-message-wins)).
-The sliding-window, turn-window and token-count strategies keep synthetic events unchanged,
-where they are in the log. `RecursiveSummarizationCompactionStrategy` instead folds the previous
-summary into the new one and **replaces** it: the superseded synthetic events are archived
-in place, like the real events they summarized.
+The sliding-window, turn-window and token-count strategies pin the earlier summary turns at
+the front of the view. `RecursiveSummarizationCompactionStrategy` instead folds the previous
+summary into the new one and **replaces** it: the superseded synthetic events are covered,
+like the real events they summarized, and stay in the log.
 
 Build a synthetic summary turn explicitly:
 
@@ -193,8 +248,14 @@ classDiagram
         <<interface>>
         +create(request) Session
         +findById(id) Session
+        +findByIndex(name, value) List
+        +createChild(parentId, request) Session
+        +findChildren(parentId) List
+        +findTree(rootId) List
+        +delete(id)  «cascades to children»
         +appendEvent(event)
         +getEvents(id, filter) List
+        +findEvents(ids, filter) List
         +getActiveMessages(id) List
         +compact(id, trigger, strategy) CompactionResult
         +deleteExpiredSessions(before) int
@@ -205,19 +266,19 @@ classDiagram
         +save(session) Session
         +saveIfAbsent(session) boolean
         +findById(id) Session
+        +findByIndex(name, value) List
         +deleteExpiredSessions(before) int
         +appendEvent(event)
         +findEvents(id, filter) List
-        +findEventsByUserId(userId, filter) List
+        +findEvents(ids, filter) List
         +getEventVersion(id) long
-        +applyCompaction(id, plan, version) boolean
+        +appendEvents(id, events, version) boolean
     }
     class InMemorySessionRepository
     class JdbcSessionRepository
 
     class Session {
         id
-        userId
         createdAt
         expiresAt
         metadata
@@ -226,9 +287,10 @@ classDiagram
         id
         sessionId
         timestamp
+        type
         message
+        payload
         metadata
-        archived
         +isSynthetic() boolean
     }
     class Message {
@@ -254,57 +316,66 @@ classDiagram
 
 ### Event lifecycle
 
-An event is appended once and never edited. Its content never changes; only its state
-does:
+The log is append-only: an event is appended once and never edited, moved or flagged. What
+changes over time is not the event but the **view**, the part of the log that is sent to
+the model. Compaction appends a `COMPACTION` boundary event that names, by id, the events
+the view starts with; everything appended after the boundary is in the view too, and
+everything else before it is **covered**:
 
 ```mermaid
 stateDiagram-v2
     direction LR
-    [*] --> Active : appendEvent
-    Active --> Archived : compaction archives it
-    Active --> Deleted : session deleted or expired
-    Archived --> Deleted : session deleted or expired
+    [*] --> InView : appendEvent
+    InView --> Covered : a boundary is appended that does not name it
+    InView --> Deleted : session deleted or expired
+    Covered --> Deleted : session deleted or expired
     Deleted --> [*]
 
-    note right of Active : sent to the model (EventFilter.active)
-    note right of Archived : kept and searchable, not sent to the model
+    note right of InView : sent to the model (EventFilter.active)
+    note right of Covered : kept and searchable, not sent to the model
 ```
 
-- **Active:** part of the active context window. Appending an event with an id that
+- **In the view:** part of the active context window. Appending an event with an id that
   already exists is an idempotent replay and changes nothing.
-- **Archived:** compaction moved it out of the active window, for example an old turn, a
-  stored system message superseded by a newer one, or a synthetic summary that a newer
-  summary replaces. The latest stored system message always stays active.
+- **Covered:** the newest boundary does not name it, for example an old turn, a stored
+  system message superseded by a newer one, or a synthetic summary that a newer summary
+  replaces. The latest stored system message is always named (pinned). A later boundary
+  only ever names events from the view it compacted, so a covered event stays covered.
 - **Deleted:** gone from the log. This only happens when the whole session is deleted
   (`delete`, or `deleteExpiredSessions` for expired sessions). Compaction never deletes.
 
-**Archiving instead of deleting**
+**The view is a projection**
 
-Compaction marks the real events it removes from the active window as archived
-(`SessionEvent.isArchived()`) via `applyCompaction`, so the full verbatim history stays in
-the log. What an integration sends to the model is the `EventFilter.active()` view, while
+A read with `EventFilter.activeView()` (which `EventFilter.active()` sets) returns the
+events the newest boundary names, in its order (pinned, summary, preserved), followed by
+everything appended since; `CompactionBoundary.project(log)` is the reference
+implementation. What an integration sends to the model is that view, while
 [Recall Storage](../recall-memory/recall-storage.md) searches (`EventFilter.keywordSearch(...)`) span the
-whole log, archived events included. This makes the MemGPT recall pattern work: the agent
+whole log, covered events included. This makes the MemGPT recall pattern work: the agent
 can surface any prior exchange after it has been compacted out of context. A replaced
-synthetic summary is archived too, so the log also shows what the model was told before
+synthetic summary is covered too, so the log also shows what the model was told before
 each pass. The Recall Storage tools leave synthetic events out of their results by default,
 because a summary only paraphrases real events that are still in the log.
 
-In the JDBC repository, newly archived events are flagged with an in-place `UPDATE`.
-Compaction never reorders the log: only when a summary is inserted is the part of the log
-after it re-inserted, so the archived history before that point (normally all of it) is
-never re-read or re-written.
+The view is the conversation. Compaction reads message events only, so a boundary names
+message events: a `STATUS` or `USAGE` event logged before the boundary is not in the view,
+while one logged after it is. Read runtime state from the log, with `eventTypes` and
+without `activeView`.
+
+Nothing is ever rewritten. In the JDBC repository a compaction is one batch insert, and a
+view read is one query for the rows the boundary names plus the rows from the boundary on.
+The boundary record is also what makes a compaction observable after the fact: it says
+which strategy ran, how many events it covered and what it estimated to save.
 
 ### Optimistic concurrency
 
 `SessionRepository.getEventVersion(sessionId)` is a monotonically increasing counter,
 incremented on every `appendEvent` that appends a new event and on every successful
-`applyCompaction` call. `DefaultSessionService.compact` reads it before fetching the
-active events, turns the strategy's result into a `CompactionPlan` (which events to
-archive, which new events to insert before which existing event) and
-passes both to `applyCompaction(sessionId, plan, expectedVersion)`. If another writer
-changed the log in between, this compare-and-swap (CAS) returns `false`, and the caller
-treats it as a no-op rather than retrying. Durable implementations should map it to a
+`appendEvents` call. `DefaultSessionService.compact` reads it before fetching the view,
+builds the summary events and the boundary from the strategy's result, and passes them to
+`appendEvents(sessionId, events, expectedVersion)`. If another writer changed the log in
+between, this compare-and-swap (CAS) returns `false`, and the caller treats it as a no-op
+rather than retrying. Durable implementations should map it to a
 database-level optimistic-lock column, as the JDBC repository does; a Redis
 implementation, for example, would use `WATCH`.
 
@@ -313,8 +384,7 @@ implementation, for example, would use `WATCH`.
 A retried `appendEvent` call for an id that was already committed is a no-op, not an
 error or a duplicate, and does not increment the event-log version.
 `InMemorySessionRepository` checks the session's events for the id before appending.
-`JdbcSessionRepository` inserts and treats a primary-key violation on the event `id` as a
-replay.
+`JdbcSessionRepository` looks the id up first and inserts only when it is new.
 
 In JDBC the event `id` is the primary key of the whole `AI_SESSION_EVENT` table, not just
 of one session. Reusing an id that already belongs to a *different* session throws
@@ -340,28 +410,31 @@ backend has to reimplement it. Core ships three helpers for this, and a test kit
 checks the whole contract.
 
 **Reads push the filter down.** `findEvents(sessionId, filter)` must not read the whole
-log for a `lastN` or a page. Evaluate `excludeArchived`, `excludeSynthetic`,
-`messageTypes`, the time range, `lastN`, `page`/`pageSize` and, where the store can, the
-keywords in the query itself. `EventFilter.apply(List)` is the reference implementation of
-the read contract for a log held as a list; use it only for what the store cannot express,
-as the JDBC repository does for `pattern` (a Java regex cannot be translated to portable
-SQL). A `lastN` window must keep turns whole: when its oldest event is not a `USER` event,
+log for a window. Evaluate `excludeSynthetic`, `eventTypes`, `messageTypes`, the time
+range, the `window` (last, page or an `after` cursor) and the keywords in the query itself.
+`EventFilter.apply(List)` is the reference implementation of the read contract for a log
+held as a list; use it only for what the store cannot express. A `pattern` is not the
+store's concern: the service applies it after the read. An `activeView` read is the exception: the view is bounded by compaction, so fetch
+the rows the newest boundary names plus the rows from the boundary on and let
+`EventFilter.apply` project, filter and window them, as the JDBC repository does. A `lastN` window must keep turns whole: when its oldest event is not a `USER` event,
 extend it back to the nearest preceding one among the matching events, unless the filter
 searches text or no such event exists (`EventFilter.applyTurnAwareWindow` spells out the
 rule; the JDBC repository does it with one bounded extra query). The contract kit checks
-this on every store. `findEventsByUserId(userId, filter)` has a default that loops over
-the user's sessions and windows the union in memory; a store that can join sessions and
-events should override it with one sorted, paged query.
+this on every store. `findEvents(sessionIds, filter)` has a default that loops over the
+given sessions and windows the union in memory; a store that can query several sessions
+at once should override it with one sorted, paged query. `findByIndex(name, value)` is the
+one scoped lookup: every store indexes `SessionAttributes.PRINCIPAL_NAME`.
 
-**Messages have one persisted shape.** `SessionEventCodec` encodes a `Message` into its
-type, text and a JSON `data` payload (tool calls or tool responses), and decodes it back.
-Stores that keep columns or fields use it so every backend stores the same thing.
+**Events have one persisted shape.** `SessionEventCodec` encodes a `SessionEvent` into
+its event type, message type, text and a JSON payload (the message parts, or the payload
+of a non-message event), and decodes it back. Stores that keep columns or fields use it so
+every backend stores the same thing.
 
-**Compaction is a plan.** `applyCompaction(sessionId, plan, expectedVersion)` receives a
-`CompactionPlan` with two parts: `archiveIds` to flag archived in place, and `inserts`,
-each a group of new events that goes immediately before an existing anchor event, or at
-the end when the anchor is `null`. Existing events never move and are never removed. `CompactionPlan.applyTo(log)` is the reference merge for a log
-held as a list; list-based stores can call it directly.
+**Compaction is an append.** `appendEvents(sessionId, events, expectedVersion)` appends a
+`COMPACTION` boundary event and its summary events in one version-checked write. Existing
+events never move, change or disappear; the boundary names the view by id, and
+`CompactionBoundary.project(log)` is the reference projection for a log held as a list,
+which `EventFilter.apply` already uses.
 
 **Run the contract tests.** The `spring-ai-session-test` artifact contains
 `AbstractSessionRepositoryContractTests`, the suite the built-in in-memory, H2, PostgreSQL
@@ -387,15 +460,16 @@ class MySessionRepositoryContractTests extends AbstractSessionRepositoryContract
 ```
 
 It covers idempotent append, the version rules, `saveIfAbsent` under concurrent creates,
-expiry cleanup, every filter criterion and window, and every compaction rule (archive in
-place, insert before an anchor, append, stale version, unknown ids).
+expiry cleanup, every filter criterion and window, and every compaction rule (an atomic
+append under a stale version, rejected ids, and the view a boundary defines, across chained
+boundaries).
 
 ---
 
 ## Session Lifecycle
 
 A session from creation to cleanup, driven by any integration: your own agent loop, or
-`SessionMemoryAdvisor`, which performs the per-turn steps automatically for `ChatClient`
+`SessionTurnAdvisor` and `SessionMemoryAdvisor`, which perform the per-turn steps automatically for `ChatClient`
 (see [ChatClient Integration](../chat-client/chat-client.md)).
 
 ```mermaid
@@ -415,15 +489,15 @@ sequenceDiagram
         App->>Svc: getActiveMessages(id)
         Svc->>Repo: findEvents(id, EventFilter.active())
         Repo-->>Svc: active events
-        Svc-->>App: active window (archived events excluded)
+        Svc-->>App: the view (covered events excluded)
         App->>LLM: system prompt (supplied per request) + active window + user message
         LLM-->>App: reply
         App->>Svc: appendMessage(id, user message), appendMessage(id, reply)
         Svc->>Repo: appendEvent(...)
         opt the compaction trigger fires
             App->>Svc: compact(id, trigger, strategy)
-            Svc->>Repo: getEventVersion, findEvents, applyCompaction(plan) (CAS)
-            Note over Repo: old events archived, still searchable
+            Svc->>Repo: getEventVersion, findEvents, appendEvents(boundary + summary) (CAS)
+            Note over Repo: old events covered, still in the log and searchable
         end
     end
 
@@ -435,11 +509,7 @@ sequenceDiagram
 
 ```java
 // 1. Create (service built as in the Session section above)
-Session session = service.create(
-    CreateSessionRequest.builder()
-        .userId("alice")
-        .build()
-);
+Session session = service.create(CreateSessionRequest.builder().build());
 
 // 2. Append events (shorthand wraps a Message in a SessionEvent automatically)
 service.appendMessage(session.id(), new UserMessage("What is Spring AI?"));
@@ -448,7 +518,7 @@ service.appendMessage(session.id(), new AssistantMessage("Spring AI is..."));
 // 3. Retrieve the active context window as a Message list (for passing to an LLM)
 List<Message> history = service.getActiveMessages(session.id());
 
-//    ...or the full recorded history, including events archived by compaction
+//    ...or the full recorded history, including events covered by compaction
 List<Message> fullHistory = service.getMessages(session.id());
 
 // 4. Retrieve as SessionEvent list (for filtering, inspection, compaction)
@@ -462,6 +532,167 @@ int removed = service.deleteExpiredSessions(Instant.now());
 ```
 
 Deleted sessions are removed from the repository entirely — there is no tombstone state.
+
+### Status, turns and archive
+
+A session records what it is doing. A **turn** is one model call including its tool loop:
+`startTurn(id)` puts the session in `RUNNING` and `endTurn(id, stopReason)` back in `IDLE`,
+each appending a `STATUS` event so the log tells when every turn started and how it ended.
+`startTurn(id, runId)` names the run the turn belongs to, an agent runtime's run id, on both
+status events (`SessionStatusEvents.runId(event)`) and on the session while the turn runs
+(`Session.runId()`), so the log tells which run produced which events and a re-attempt of
+the same run reads as one. `endTurn(id, runId, stopReason, eventIds)` and
+`park(id, runId, question, relatedEventIds)` end only that run's turn: the compare-and-set
+checks the status and the run together, so a run whose turn was interrupted, and another
+run then started, never ends the other run's turn.
+`SessionTurnAdvisor` does both around every `ChatClient` call (see
+[ChatClient Integration](../chat-client/chat-client.md#what-the-advisor-does)). The start is
+a compare-and-set from `IDLE`, so two concurrent calls cannot run turns on one session at
+the same time: the second gets an `IllegalStateException`. A caller interrupts a running
+turn with `interrupt(id, reason)`, which records an `INTERRUPT` event and ends the turn with
+`INTERRUPTED`; it is also how a turn a crashed process left running is ended. A `ChatClient`
+call that runs the turn stops at its next step (see
+[Interrupting a running call](../chat-client/chat-client.md#interrupting-a-running-call)).
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE : create / createChild
+    IDLE --> RUNNING : startTurn (compare-and-set)
+    RUNNING --> IDLE : endTurn(stopReason)
+    IDLE --> TERMINATED : archive (cascades to children)
+    TERMINATED --> [*] : delete
+    IDLE --> [*] : delete
+    note right of RUNNING
+        a second startTurn fails;
+        the advisor ends a failed call with ERROR
+    end note
+    note right of TERMINATED
+        read-only: no events, turns or children;
+        history stays readable until delete
+    end note
+```
+
+`archive(id)` puts an idle session and its children in `TERMINATED`, stamps `archivedAt`
+and appends a `STATUS` event; from then on the session accepts no events, turns or
+children, while its history stays readable until it is deleted. A running session, or one
+with a running child, cannot be archived: interrupt or wait first. Archived sessions are
+still returned by `findByIndex`, `findChildren` and `findTree`, but the `SessionSelector`
+factories for a principal leave them out.
+
+`aggregateStatus(rootId)` is the status of a tree as a whole, never stored: `RUNNING` while
+any member runs a turn, otherwise the root's own status.
+
+### Interactions: a parked turn, in general
+
+Tool confirmation below is one kind of **interaction**: a question the turn parks
+on, answered later, possibly on another node. `park(id, interaction, relatedEventIds)` records
+the question (its kind, where in the run it was asked, the question as JSON, the type of the
+answer) and ends the turn with `REQUIRES_ACTION` naming the related events and the question;
+`pendingInteraction(id)` finds the question a session waits on; `resume(id, runId, answer)`
+starts the turn, its compare-and-set making the resumption exclusive, and records the answer.
+Tool confirmation and the agent runtime's interrupts both go through these two calls,
+so every parked turn reads the same way in the log whichever integration parked it: for a tool
+confirmation the question's kind is `toolConfirmation`, its payload the paused calls and the
+ids that wait, and the answer the decisions (`ToolConfirmations` writes and reads both).
+
+### Tool confirmation
+
+Some tools should not run until a person has seen the call. Spring AI's tool calling names
+them: a tool marked `@Tool(requiresConfirmation = true)`, or a `ToolCallConfirmationPolicy`
+on the `ToolCallingManager` (`ToolCallConfirmationPolicy.forTools("bash", "delete_file")`, or
+any predicate on the call). When the model asks for such a call, the tool-calling loop
+pauses before any call of the reply runs, and the session **parks** the turn: the assistant
+message with the calls is stored, the session goes `IDLE` with
+`stopReason = REQUIRES_ACTION`, and the `STATUS` event names the event the caller has to
+answer (`SessionStatusEvents.eventIds(event)`). The session stays idle for as long as it
+takes, can be archived meanwhile, and the decisions can arrive in a later request or on
+another node, because everything needed is in the log.
+
+A decision is Spring AI's `ToolCallDecision`: `ToolCallDecision.allow(toolCallId)` or
+`ToolCallDecision.deny(toolCallId, "why")`. The next request on the session carries one per
+call that waits and no new user text. The `SessionTurnAdvisor` resumes the turn, records the
+decisions as the answer, runs the paused calls from the log with them through the
+`ToolCallingManager` (an allowed call runs with the tools the request carries, a denied one
+answers the model with its message), and sends the tool results on; `SessionMemoryAdvisor`
+stores them like any tool result, and the model continues where the turn was parked. A
+resumption that fails ends the turn with `ERROR`; when no call had run, deciding again
+retries, and once one had, the calls are answered with the failure so none runs twice. See
+[ChatClient Integration](../chat-client/chat-client.md#tool-confirmation) for the wiring.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App
+    participant Turn as SessionTurnAdvisor
+    participant Loop as ToolCallingAdvisor
+    participant SMA as SessionMemoryAdvisor
+    participant Log as Session log
+    App->>Turn: "book VX205"
+    Turn->>Log: STATUS RUNNING
+    Turn->>Loop: request
+    Loop->>SMA: round 1
+    SMA->>Log: user message, assistant message with the tool call
+    Loop-->>Turn: paused reply, ids that wait
+    Turn->>Log: INTERACTION question, STATUS IDLE with stop reason REQUIRES_ACTION
+    Turn-->>App: reply with the paused tool call
+    Note over App: shows the call, waits for a person
+    App->>Turn: ToolCallDecision.allow(callId)
+    Turn->>Log: STATUS RUNNING, INTERACTION answered
+    Turn->>Turn: runs the paused call with the request's tools
+    Turn->>Loop: request: [tool results]
+    Loop->>SMA: round 1
+    SMA->>Log: tool results, assistant: "Booked."
+    Turn->>Log: STATUS IDLE with stop reason END_TURN
+```
+
+### Agent attributes
+
+Three well-known attributes label the agent a session runs, for listings, session trees
+and a UI: `SessionAttributes.AGENT_NAME`, `AGENT_VERSION` (the version of its definition)
+and `AGENT_MODEL`. They are plain session metadata, set at creation and read back with
+`SessionAttributes.agentName(session)`, `agentVersion(session)` and `agentModel(session)`.
+They label the agent; they do not store its definition. Set them with the create
+request's metadata, `createChild(parentId, agentName)` for a child named after its agent,
+or, for the sessions a `ChatClient` creates on first use, `SESSION_METADATA_CONTEXT_KEY`
+as a default advisor parameter (see [ChatClient Integration](../chat-client/chat-client.md)).
+A child's agent is its own, never inherited. Index `agentName` (see the JDBC page) to find
+every session an agent runs.
+
+### Live events
+
+`subscribe(sessionId)` returns a `Flux<SessionEvent>` of the events appended to a session
+from then on, in append order, as the service appends them: messages, status changes,
+usage, markers and compaction boundaries alike. It is a live stream with no replay, and it
+never completes on its own; dispose the subscription when done. The session must exist, so a
+subscription is authorized like any other read. The stream sees the appends
+made through this service instance, so on more than one node a session written elsewhere is
+read with a cursor instead.
+
+Reads and the stream are reconciled by event id, the way an agent runtime's clients
+reconcile its history and its event stream: subscribe first, read
+`EventFilter.after(lastSeenEventId)` to fill the gap, and skip the live events whose ids
+the read returned. See [Cursor reads](event-filtering.md#cursor-reads). `SessionMemoryAdvisor`
+also names the events it stored on the advisor context, so a caller holding a
+`ChatClientResponse` can correlate what it sent and received with the log without the
+stream (see [Context keys](../chat-client/chat-client.md#context-keys)).
+
+### Usage and budget
+
+`SessionMemoryAdvisor` records every model call's token usage as a `USAGE` event
+(prompt, completion and total tokens, the provider's cache read and write counts when it
+reports them, and the model). A streamed reply records the three token counts and the
+model, not the cache counts: Spring AI's stream aggregator does not carry them. A session's
+usage is the sum of its events, never stored on its own: `usage(sessionId)` returns a `TokenUsage`, and `aggregateUsage(rootId)` adds the
+children of a tree, the way an agent runtime sums its threads into the session.
+
+A **budget** is a limit on a tree's total tokens. `BudgetAdvisor` checks it before every
+model call, including every round of a tool loop: once the tree's usage has reached the
+budget its `BudgetPolicy` gives the root (`BudgetPolicy.fixed(Budget.ofTotalTokens(n))`,
+`fromMetadata("budget")`, or your own), the running turn ends with
+`stopReason = BUDGET_REACHED` and the call is refused with a `BudgetReachedException`.
+The call that takes the usage over the budget completes; the next one is refused, and so
+is every request after it until the policy returns a higher budget. See
+[ChatClient Integration](../chat-client/chat-client.md#budget) for the wiring.
 
 ### Expiry cleanup
 

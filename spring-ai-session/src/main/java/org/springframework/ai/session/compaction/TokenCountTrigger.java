@@ -28,7 +28,7 @@ import org.springframework.util.Assert;
  * budget are expressed in the same units and can be calibrated against each other.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  * @see TokenCountCompactionStrategy
  */
 public final class TokenCountTrigger implements CompactionTrigger {

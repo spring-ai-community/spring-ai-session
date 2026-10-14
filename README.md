@@ -20,7 +20,9 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 
 | Module | Artifact | Description |
 |--------|----------|-------------|
-| **Session Management** | `spring-ai-session` | `Session`, `SessionEvent`, `SessionService`, `SessionRepository` SPI, compaction framework, `SessionMemoryAdvisor` |
+| **Session Management** | `spring-ai-session` | `Session`, `SessionEvent`, `SessionService`, `SessionRepository` SPI, compaction framework, recall tools; no dependency on `ChatClient` |
+| **Session ChatClient** | `spring-ai-session-chatclient` | The `ChatClient` integration: `SessionAdvisors`, `SessionMemoryAdvisor`, `SessionTurnAdvisor`, `BudgetAdvisor`, and the summarizing compaction strategy |
+| **Session Agent** | `spring-ai-session-agent` | The spring-ai-agent integration: `SessionFeature`, a `Checkpointer` over the log, `BudgetFeature`, `ToolConfirmationFeature` |
 | **Session JDBC** | `spring-ai-session-jdbc` | JDBC-backed `SessionRepository` for PostgreSQL, MySQL, MariaDB, and H2 |
 | **Session Auto-configuration** | `spring-ai-autoconfigure-session` | Spring Boot auto-configuration for `DefaultSessionService` (repository-agnostic) |
 | **Session JDBC Auto-configuration** | `spring-ai-autoconfigure-session-jdbc` | Spring Boot auto-configuration for the JDBC repository |
@@ -49,10 +51,10 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 **2. Add a module dependency:**
 
 ```xml
-<!-- Core only (in-memory repository) -->
+<!-- The ChatClient integration (brings the core, in-memory repository) -->
 <dependency>
     <groupId>org.springaicommunity</groupId>
-    <artifactId>spring-ai-session</artifactId>
+    <artifactId>spring-ai-session-chatclient</artifactId>
 </dependency>
 
 <!-- Or JDBC starter (Spring Boot, recommended) -->
@@ -62,19 +64,20 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 </dependency>
 ```
 
-**3. Wire a `SessionMemoryAdvisor` into your `ChatClient`:**
+**3. Wire the session advisors into your `ChatClient`:**
 
 ```java
 SessionService sessionService = DefaultSessionService.builder().sessionRepository(InMemorySessionRepository.builder().build()).build();
 
-SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
-    .defaultUserId("alice")
-    .compactionTrigger(new TurnCountTrigger(20))
-    .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
-    .build();
-
 ChatClient client = ChatClient.builder(chatModel)
-    .defaultAdvisors(advisor)
+    .defaultAdvisors(
+        // The turn: status, and compaction once it has ended
+        SessionTurnAdvisor.builder(sessionService)
+            .compactionTrigger(new TurnCountTrigger(20))
+            .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
+            .build(),
+        // Each model call: history in, messages and usage stored
+        SessionMemoryAdvisor.builder(sessionService).build())
     .build();
 
 // Every call automatically loads history, appends messages, and compacts when needed
@@ -98,7 +101,7 @@ Full reference documentation: **[spring-ai-community.github.io/spring-ai-session
 ## Requirements
 
 - Java 17+
-- Spring AI `2.0.1+`
+- Spring AI `2.1.0-SNAPSHOT+`
 - Spring Boot `4.1.1+`
 - Maven 3.6+
 

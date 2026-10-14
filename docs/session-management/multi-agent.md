@@ -21,10 +21,33 @@ engineering advice to give every sub-agent the minimum context it needs.
 
 ## Session per sub-agent
 
+A sub-agent's session is a **child** of the orchestrator's session: a session of its own,
+with its own log and compaction, that belongs to the parent's tree. A child session is
+what Claude Managed Agents calls a thread.
+`SessionService.createChild(parentId, agentName)`, or `createChild(parentId, request)` with
+the agent's version and model as metadata, creates it and enforces the rules that keep the
+tree sound:
+
+- the child names its parent (`Session.parentSessionId()`) and the tree's root
+  (`Session.rootSessionId()`, the root's own id on a root session), and carries its
+  [agent attributes](concepts.md#agent-attributes) when given;
+- it **inherits** the parent's principal (and any other attribute the service is told to
+  pass down, `DefaultSessionService.builder().inheritedAttributes(...)`) and the parent's
+  expiry, and may not diverge from them;
+- the tree has a **depth limit**, one level by default (`maxTreeDepth`), so a child of
+  a child is rejected;
+- a `CHILD_CREATED` marker is appended to the parent's log, so the parent's history shows
+  that a delegation happened without copying the child's events;
+- **delete and archive cascade down**: deleting the parent deletes its children and their
+  events, archiving it archives them; either on a child leaves the parent alone;
+- the tree has a **status**: each session records its own turns, and
+  `aggregateStatus(rootId)` is `RUNNING` while any member runs a turn, so an orchestrator
+  knows whether a delegation is still in flight.
+
 The orchestrator exposes the sub-agent as a tool. When it is called, the tool:
 
 1. derives the sub-agent's session id from the orchestrator's session id;
-2. creates that session on first use, linked to the parent through metadata;
+2. creates that child on first use;
 3. calls the sub-agent's own `ChatClient`, which has its own `SessionMemoryAdvisor` and
    compaction settings;
 4. returns only the sub-agent's final answer to the orchestrator.
@@ -32,23 +55,18 @@ The orchestrator exposes the sub-agent as a tool. When it is called, the tool:
 ```java
 public class ResearcherTool {
 
-    // Metadata convention linking a sub-agent session to its parent
-    public static final String PARENT_SESSION_ID = "parentSessionId";
-
-    public static final String AGENT = "agent";
-
     private final SessionService sessionService;
 
     private final ChatClient researcher;
 
     public ResearcherTool(SessionService sessionService, ChatClient.Builder chatClientBuilder) {
         this.sessionService = sessionService;
-        // The sub-agent has its own memory advisor, with compaction sized for its own model
+        // The sub-agent has its own session advisors, with compaction sized for its own model
         this.researcher = chatClientBuilder.defaultSystem("You are a researcher. Cite every source.")
-            .defaultAdvisors(SessionMemoryAdvisor.builder(sessionService)
+            .defaultAdvisors(SessionTurnAdvisor.builder(sessionService)
                 .compactionTrigger(new TurnCountTrigger(10))
                 .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(20).build())
-                .build())
+                .build(), SessionMemoryAdvisor.builder(sessionService).build())
             .build();
     }
 
@@ -63,16 +81,14 @@ public class ResearcherTool {
         String childId = parentId + ":researcher";
 
         if (this.sessionService.findById(childId) == null) {
-            Session parent = this.sessionService.findById(parentId);
             try {
-                this.sessionService.create(CreateSessionRequest.builder()
+                this.sessionService.createChild(parentId, CreateSessionRequest.builder()
                     .id(childId)
-                    .userId(parent.userId())
-                    .metadata(PARENT_SESSION_ID, parentId)
-                    .metadata(AGENT, "researcher")
+                    .metadata(SessionAttributes.AGENT_NAME, "researcher")
+                    .metadata(SessionAttributes.AGENT_MODEL, "claude-sonnet-5-5")
                     .build());
             }
-            catch (IllegalStateException alreadyCreated) {
+            catch (SessionAlreadyExistsException alreadyCreated) {
                 // a concurrent delegation created it first
             }
         }
@@ -101,15 +117,40 @@ orchestrator.prompt()
     .content();
 ```
 
-To find a conversation's sub-agent sessions, filter the user's sessions on the metadata
-key:
+To find a conversation's children:
 
 ```java
-List<Session> children = sessionService.findByUserId(userId)
-    .stream()
-    .filter(s -> parentId.equals(s.metadata().get(ResearcherTool.PARENT_SESSION_ID)))
-    .toList();
+List<Session> children = sessionService.findChildren(parentId);   // direct children, oldest first
+List<Session> tree = sessionService.findTree(rootId);           // the root and every child of its tree
+String agentName = SessionAttributes.agentName(children.get(0)); // also agentVersion, agentModel
 ```
+
+The links are columns of the JDBC repository's `AI_SESSION` table, each with its own
+index, so these are plain lookups there; the in-memory repository scans its sessions.
+
+**Markers on the parent's log.** `createChild` records `CHILD_CREATED`; an agent runtime
+can record `MESSAGE_SENT` and `MESSAGE_RECEIVED` when it hands a task to a child and
+gets the answer back:
+
+```java
+Session child = sessionService.createChild(parentId, "researcher");
+sessionService.appendEvent(SessionTreeEvents.messageSent(child, task));             // task: a UserMessage or a String
+String answer = this.researcher.prompt()
+    .user(task)
+    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, child.id()))
+    .call()
+    .content();                                                                   // the child's own log fills here
+sessionService.appendEvent(SessionTreeEvents.messageReceived(child, answer));       // answer: an AssistantMessage or a String
+```
+
+The marker is logged on the child's parent; its payload names the child and its agent. The event also carries the message that
+crossed the boundary, with all its parts (text, media, tool results), in the role it has on
+the child's log: the task as a user message, the answer as an assistant message. This
+mirrors the `content[]` of a managed-agent runtime's thread messages, so nothing is
+flattened to text. The markers are not conversation: the active view and the prompt skip
+them, and a marker never starts a turn. A text search on the parent does find what was
+exchanged, so "what did the researcher say" works without opening the child. Together the
+markers give a reader of the parent's history the condensed story of the delegation.
 
 **Stable or per-task session ids.**
 - **Stable id** (`parentId + ":researcher"`): the sub-agent remembers its earlier tasks in
@@ -125,16 +166,17 @@ List<Session> children = sessionService.findByUserId(userId)
 - each sub-agent has its own audit trail, searchable with
   [Recall Storage](../recall-memory/recall-storage.md);
 - parallel sub-agents never contend for the same session's
-  [optimistic-concurrency version](concepts.md#optimistic-concurrency).
+  [optimistic-concurrency version](concepts.md#optimistic-concurrency);
+- with the [security module](scope-and-security.md), a child is granted to whoever is
+  granted its parent, since it inherits the principal.
 
 **Things to know:**
-- **Parent link.** The link between parent and child sessions is only the metadata
-  convention above, not a library API. Finding a parent's children means scanning
-  `findByUserId`.
-- **Lifecycle.** Sub-agent sessions are not deleted with the parent. Give them the same
-  time to live as the parent (`CreateSessionRequest.builder().timeToLive(...)`), or delete
-  them yourself.
-- **Recall.** [Cross-Session Recall](../recall-memory/cross-session-recall.md) searches
-  every session of a user, including sub-agent sessions.
-- **Timeline.** There is no single merged timeline of a multi-agent run. Merge the sessions'
-  events by timestamp if you need one.
+- **Lifecycle.** Children are deleted with their parent and take the parent's expiry at
+  creation. Extending the parent's time to live later does not extend its children; extend
+  them too, or give the root enough time up front.
+- **Recall.** [Cross-Session Recall](../recall-memory/cross-session-recall.md) bound with
+  `SessionSelector.principal(...)` searches a principal's root sessions only; use
+  `SessionSelector.principalWithChildren(...)` to include sub-agent sessions.
+- **Timeline.** There is no single merged timeline of a multi-agent run. The parent's
+  markers tell the story in brief; merge the sessions' events by timestamp if you need
+  the whole.

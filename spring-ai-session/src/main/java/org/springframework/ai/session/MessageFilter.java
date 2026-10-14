@@ -33,6 +33,9 @@ import org.springframework.util.CollectionUtils;
  * selects which <em>stored</em> events are loaded into the next prompt, while a
  * {@code MessageFilter} decides whether a message is stored at all. A message rejected by
  * this filter is never persisted and therefore never replayed on later requests.
+ * {@code SessionMemoryAdvisor} stores tool calls and tool results whatever the filter
+ * says, since either half alone is unusable; hide them on read with an
+ * {@link EventFilter}'s {@code messageTypes} instead.
  *
  * <p>
  * Filters can consider the message type as well as the message content, and compose via
@@ -44,8 +47,7 @@ import org.springframework.util.CollectionUtils;
  * }</pre>
  *
  * @author Sukhrob Tokhirov
- * @since 2.0.0
- * @see org.springframework.ai.session.advisor.SessionMemoryAdvisor.Builder#messageFilter(MessageFilter)
+ * @since 0.6.0
  */
 @FunctionalInterface
 public interface MessageFilter {
@@ -93,7 +95,7 @@ public interface MessageFilter {
 	 *
 	 * <p>
 	 * This is the default filter of
-	 * {@link org.springframework.ai.session.advisor.SessionMemoryAdvisor}.
+	 * {@code SessionMemoryAdvisor}.
 	 */
 	static MessageFilter skipEmptyMessages() {
 		return message -> !(message instanceof AssistantMessage am

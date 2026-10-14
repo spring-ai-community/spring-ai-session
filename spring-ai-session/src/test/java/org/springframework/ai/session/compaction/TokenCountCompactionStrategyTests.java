@@ -21,28 +21,30 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.content.MediaContent;
-import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.tokenizer.TokenCountEstimator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.assistant;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.covered;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.events;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.kept;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.request;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.summaryTurn;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.system;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.toolTurn;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.turn;
+import static org.springframework.ai.session.compaction.CompactionTestSupport.user;
 
 /**
  * Tests for {@link TokenCountCompactionStrategy}.
  */
 class TokenCountCompactionStrategyTests {
 
-	private static final String SESSION_ID = "test-session";
-
-	/**
-	 * Deterministic estimator: each character counts as one token.
-	 */
+	/** Deterministic estimator: each character of the formatted event counts as one token. */
 	private static final TokenCountEstimator CHAR_ESTIMATOR = new TokenCountEstimator() {
 		@Override
 		public int estimate(String text) {
@@ -60,352 +62,151 @@ class TokenCountCompactionStrategyTests {
 		}
 	};
 
+	private static TokenCountCompactionStrategy maxTokens(int maxTokens) {
+		return TokenCountCompactionStrategy.builder().maxTokens(maxTokens).tokenCountEstimator(CHAR_ESTIMATOR).build();
+	}
+
 	@Test
 	void noOpWhenAllEventsFitWithinBudget() {
-		// budget = 100 tokens, events are tiny
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(100)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
-		CompactionRequest request = requestWith(turn("hi", "hello"));
+		CompactionResult result = maxTokens(100).compact(request(turn("hi", "hello")));
 
-		CompactionResult result = strategy.compact(request);
-
-		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.archivedEventCount()).isEqualTo(0);
-		assertThat(result.compactedEvents()).hasSize(2);
+		assertThat(result.isUnchanged()).isTrue();
 	}
 
 	@Test
-	void archivesEventsExceedingBudget() {
-		// CHAR_ESTIMATOR counts formatted-text characters (formatEvent output), not raw
-		// getText() lengths. "User: u1"(8) + "Assistant: a1"(13) = 21 per turn.
-		// Budget = 25 → turn2 fits (21 ≤ 25) but turn1+turn2 does not (42 > 25).
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(25)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
-		CompactionRequest request = requestWith(turn("u1", "a1"), turn("u2", "a2"));
+	void noOpWhenAllEventsFitEvenIfTheViewStartsMidTurn() {
+		// Snapping the cut to the first user message must not cover a preamble when
+		// nothing needs to leave the view
+		CompactionResult result = maxTokens(100)
+			.compact(request(events(List.of(assistant("welcome")), turn("hi", "hello"))));
 
-		CompactionResult result = strategy.compact(request);
-
-		assertThat(result.compactedEvents()).hasSize(2);
-		assertThat(result.compactedEvents().get(0).getMessage().getText()).isEqualTo("u2");
-		assertThat(result.compactedEvents().get(1).getMessage().getText()).isEqualTo("a2");
-		assertThat(result.archivedEvents()).hasSize(2);
+		assertThat(result.isUnchanged()).isTrue();
 	}
 
-	/**
-	 * Verifies that scanning stops at the first oversize event so the kept window is a
-	 * contiguous suffix, not a sparse selection of individually-fitting events.
-	 * <p>
-	 * Formatted costs: "User: u2"(8) fits in budget 10; "Assistant: a1_very_large_text_here"(34)
-	 * would exceed it → scan stops. Kept: [u2]. Archived: [u1, a1_huge]. u2 is a USER
-	 * event so no turn-boundary snap is needed.
-	 */
+	@Test
+	void coversEventsExceedingBudget() {
+		// "User: u1"(8) + "Assistant: a1"(13) = 21 per turn. Budget 25: turn2 fits, both don't.
+		CompactionResult result = maxTokens(25).compact(request(events(turn("u1", "a1"), turn("u2", "a2"))));
+
+		assertThat(kept(result)).containsExactly("u2", "a2");
+		assertThat(covered(result)).containsExactly("u1", "a1");
+		assertThat(result.strategy()).isEqualTo("token-count");
+	}
+
 	@Test
 	void stopsAtFirstOversizeEventKeepsContiguousSuffix() {
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(10)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
+		// "User: u2"(8) fits in 10; "Assistant: a1_very_large_text_here"(34) stops the scan
+		List<SessionEvent> view = List.of(user("u1"), assistant("a1_very_large_text_here"), user("u2"));
 
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build()); // 8 tokens
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new AssistantMessage("a1_very_large_text_here"))
-			.build()); // 34 tokens — stops scan
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u2")).build()); // 8 tokens
+		CompactionResult result = maxTokens(10).compact(request(view));
 
-		CompactionResult result = strategy.compact(requestWith(events));
-
-		assertThat(result.compactedEvents()).hasSize(1);
-		assertThat(result.compactedEvents().get(0).getMessage().getText()).isEqualTo("u2");
-		assertThat(result.archivedEvents()).hasSize(2);
-		assertThat(result.archivedEvents().get(0).getMessage().getText()).isEqualTo("u1");
-		assertThat(result.archivedEvents().get(1).getMessage().getText()).isEqualTo("a1_very_large_text_here");
+		assertThat(kept(result)).containsExactly("u2");
+		assertThat(covered(result)).containsExactly("u1", "a1_very_large_text_here");
 	}
 
-	/**
-	 * The kept window must never begin with an ASSISTANT event — if the contiguous suffix
-	 * starts on a non-USER event the turn-boundary snap advances to the next USER message
-	 * (or produces an empty kept set).
-	 * <p>
-	 * Events: u1(2) + a1(2) + u2_longtxt(10) + a2(2). Budget = 4 tokens. Backwards scan:
-	 * a2(2) fits (used=2); u2_longtxt(10) → 12 &gt; 4, stop. Raw kept = [a2]. Snap: a2 is
-	 * ASSISTANT, no USER follows → kept becomes empty.
-	 */
 	@Test
-	void neverKeepsPartialTurn_snapsToTurnBoundary() {
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(4)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
+	void neverKeepsPartialTurnAndKeepsTheOversizeLastTurn() {
+		// The raw cut lands on a2 and snaps past the end; the last turn is kept anyway
+		List<SessionEvent> view = List.of(user("u1"), assistant("a1"), user("u2_longtxt"), assistant("a2"));
 
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u1")).build()); // 2
-																											// tokens
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a1")).build()); // 2
-																												// tokens
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("u2_longtxt")).build()); // 10
-																													// tokens
-																													// —
-																													// stops
-																													// scan
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("a2")).build()); // 2
-																												// tokens
+		CompactionResult result = maxTokens(4).compact(request(view));
 
-		CompactionResult result = strategy.compact(requestWith(events));
-
-		// The raw cut lands on the orphaned assistant reply a2 and snaps past the end; the
-		// last turn (u2_longtxt, a2) is kept even though it exceeds the budget, so the
-		// active window is never emptied and never starts mid-turn.
-		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("u1", "a1");
-		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
-			.containsExactly("u2_longtxt", "a2");
+		assertThat(covered(result)).containsExactly("u1", "a1");
+		assertThat(kept(result)).containsExactly("u2_longtxt", "a2");
 	}
 
 	@Test
 	void keptWindowAlwaysStartsAtUserMessage() {
-		// Force a situation where the raw budget cut lands inside turn2 (at an assistant
-		// message). The strategy must snap forward to the start of the next turn.
-		// Turn1: "aaaa"(4) user + "bbbb"(4) assistant = 8 tokens
-		// Turn2: "cccc"(4) user + "dddd"(4) assistant = 8 tokens
-		// Turn3: "eeee"(4) user + "ffff"(4) assistant = 8 tokens
-		// Budget = 6 tokens → only "ffff"(4) fits + "eeee"(4) = 8 > 6, so only ffff(4)
-		// fits
-		// Raw cutIndex = 6 - 1 = 5 → real[5] = ffff (ASSISTANT)
-		// Snap: real[5]=ASSISTANT, real[6] doesn't exist → cutIndex becomes 6 (past end)
-		// Result: no real events kept (all archived), only synthetics (none here)
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(6)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
-		CompactionRequest request = requestWith(turn("aaaa", "bbbb"), turn("cccc", "dddd"), turn("eeee", "ffff"));
+		CompactionResult result = maxTokens(6)
+			.compact(request(events(turn("aaaa", "bbbb"), turn("cccc", "dddd"), turn("eeee", "ffff"))));
 
-		CompactionResult result = strategy.compact(request);
-
-		// The compacted list must not start with an ASSISTANT event
-		if (!result.compactedEvents().isEmpty()) {
-			SessionEvent first = result.compactedEvents().get(0);
-			boolean isSyntheticOrUser = first.isSynthetic()
-					|| first.getMessage() instanceof org.springframework.ai.chat.messages.UserMessage;
-			assertThat(isSyntheticOrUser).isTrue();
-		}
+		SessionEvent first = result.preservedEvents().get(0);
+		assertThat(first.isSynthetic() || first.getMessage() instanceof UserMessage).isTrue();
 	}
 
 	@Test
-	void syntheticEventsAreAlwaysPreservedAndPlacedFirst() {
-		// Budget so small no real event fits
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(1)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
+	void aPriorSummaryIsPinnedFirstEvenWhenItAloneExceedsTheBudget() {
+		CompactionResult result = maxTokens(1)
+			.compact(request(events(summaryTurn("summary"), turn("hello", "world"), turn("yo", "ok"))));
 
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new UserMessage("Summarize the conversation we had so far."))
-			.metadata(SessionEvent.METADATA_SYNTHETIC, true)
-			.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, "test")
-			.build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(new AssistantMessage("summary"))
-			.metadata(SessionEvent.METADATA_SYNTHETIC, true)
-			.metadata(SessionEvent.METADATA_COMPACTION_SOURCE, "test")
-			.build());
-		events.addAll(turn("hello", "world"));
-
-		CompactionResult result = strategy.compact(requestWith(events));
-
-		// Summary turn: get(0)=USER shadow prompt, get(1)=ASSISTANT summary text
-		assertThat(result.compactedEvents().get(0).isSynthetic()).isTrue();
-		assertThat(result.compactedEvents().get(1).isSynthetic()).isTrue();
-		assertThat(result.compactedEvents().get(1).getMessage().getText()).isEqualTo("summary");
+		assertThat(result.pinnedEvents()).hasSize(2).allMatch(SessionEvent::isSynthetic);
+		assertThat(kept(result)).containsExactly("Summarize the conversation we had so far.", "summary", "yo", "ok");
+		assertThat(covered(result)).containsExactly("hello", "world");
 	}
 
 	@Test
 	void maxTokensZeroIsRejected() {
-		assertThatThrownBy(() -> TokenCountCompactionStrategy.builder().maxTokens(0).tokenCountEstimator(CHAR_ESTIMATOR).build())
+		assertThatThrownBy(() -> TokenCountCompactionStrategy.builder().maxTokens(0).build())
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("maxTokens must be greater than 0");
 	}
 
 	@Test
 	void nullRequestIsRejected() {
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(100)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
-		assertThatThrownBy(() -> strategy.compact(null)).isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> maxTokens(100).compact(null)).isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test
 	void emptySessionReturnsUnchanged() {
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(100)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
-		CompactionResult result = strategy.compact(requestWith(List.of()));
-
-		assertThat(result.compactedEvents()).isEmpty();
-		assertThat(result.archivedEvents()).isEmpty();
+		assertThat(maxTokens(100).compact(request(List.of())).isUnchanged()).isTrue();
 	}
-
-	// --- tool call / tool response token counting ---
 
 	@Test
 	void toolEventsCountTowardBudget() {
-		// Budget = 40 chars (CHAR_ESTIMATOR: 1 char = 1 token).
-		// Formatted tool-call and tool-response texts are ~45-55 chars each, which
-		// pushes the total over the 40-token limit and forces archiving turn 1.
-		// Before the fix, both events returned null from getText() and cost 0 tokens,
-		// so the entire session was kept without archiving anything.
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(40)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
+		CompactionResult result = maxTokens(40)
+			.compact(request(events(toolTurn("What's the weather?"), turn("Thanks", "You're welcome"))));
 
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(
-				SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("What's the weather?")).build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(AssistantMessage.builder()
-				.toolCalls(List
-					.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{\"location\":\"Paris\"}")))
-				.build())
-			.build());
-		events.add(SessionEvent.builder()
-			.sessionId(SESSION_ID)
-			.message(ToolResponseMessage.builder()
-				.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "{\"temp\":\"22C\"}")))
-				.build())
-			.build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage("Thanks")).build());
-		events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("You're welcome")).build());
-
-		CompactionResult result = strategy.compact(requestWith(events));
-
-		assertThat(result.archivedEvents()).isNotEmpty();
+		assertThat(result.coveredEvents()).isNotEmpty();
 		assertThat(result.tokensEstimatedSaved()).isGreaterThan(0);
 	}
 
 	@Test
-	void oversizeLastTurnIsKeptInsteadOfArchivingEverything() {
-		// Turn 1: "User: hi" (8) + "Assistant: ok" (13) = 21 tokens.
-		// Turn 2 alone exceeds the 30-token budget.
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(30)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
-		CompactionRequest request = requestWith(turn("hi", "ok"), turn("big question", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
+	void oversizeLastTurnIsKeptInsteadOfCoveringEverything() {
+		String big = "x".repeat(100);
+		CompactionResult result = maxTokens(30).compact(request(events(turn("hi", "ok"), turn("big question", big))));
 
-		CompactionResult result = strategy.compact(request);
-
-		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("hi", "ok");
-		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
-			.containsExactly("big question", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+		assertThat(covered(result)).containsExactly("hi", "ok");
+		assertThat(kept(result)).containsExactly("big question", big);
 	}
 
 	@Test
 	void singleOversizeTurnIsNotCompacted() {
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(30)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
-		CompactionRequest request = requestWith(turn("big question", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
-
-		CompactionResult result = strategy.compact(request);
-
-		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.compactedEvents()).hasSize(2);
+		assertThat(maxTokens(30).compact(request(turn("big question", "x".repeat(100)))).isUnchanged()).isTrue();
 	}
 
 	@Test
-	void storedSystemMessageIsKeptFirstAndItsTokensComeOffTheBudget() {
-		// "System: sys" = 11 tokens; each turn = "User: xx" (8) + "Assistant: ok" (13) = 21.
-		// Without the system message both turns (42) fit in 45. With it, 45 - 11 = 34
-		// remains, so the older turn must be archived.
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(45)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(system("sys"));
-		events.addAll(turn("hi", "ok"));
-		events.addAll(turn("yo", "ok"));
+	void storedSystemMessageIsPinnedFirstAndItsTokensComeOffTheBudget() {
+		// "System: sys" = 11 tokens; each turn = 21. Without the system message both
+		// turns (42) fit in 45; with it only 34 remain, so the older turn is covered.
+		List<SessionEvent> view = events(List.of(system("sys")), turn("hi", "ok"), turn("yo", "ok"));
 
-		CompactionResult result = strategy.compact(requestWith(events));
+		CompactionResult result = maxTokens(45).compact(request(view));
 
-		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("hi", "ok");
-		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
-			.containsExactly("sys", "yo", "ok");
+		assertThat(covered(result)).containsExactly("hi", "ok");
+		assertThat(kept(result)).containsExactly("sys", "yo", "ok");
 	}
 
 	@Test
 	void pinnedSystemMessageOverTheBudgetStillKeepsTheNewestTurn() {
-		// A system prompt larger than maxTokens leaves no budget for the conversation: the
-		// newest turn must still be kept (retainLastTurn), never the whole conversation
-		// archived.
-		TokenCountCompactionStrategy strategy = TokenCountCompactionStrategy.builder()
-			.maxTokens(40)
-			.tokenCountEstimator(CHAR_ESTIMATOR)
-			.build();
-		List<SessionEvent> events = new ArrayList<>();
-		events.add(system("a system prompt that is longer than the whole token budget"));
-		events.addAll(turn("q1", "r1"));
-		events.addAll(turn("q2", "r2"));
+		List<SessionEvent> view = events(List.of(system("a system prompt that is longer than the whole token budget")),
+				turn("q1", "r1"), turn("q2", "r2"));
 
-		CompactionResult result = strategy.compact(requestWith(events));
+		CompactionResult result = maxTokens(40).compact(request(view));
 
-		assertThat(result.archivedEvents()).extracting(e -> e.getMessage().getText()).containsExactly("q1", "r1");
-		assertThat(result.compactedEvents()).extracting(e -> e.getMessage().getText())
-			.containsExactly("a system prompt that is longer than the whole token budget", "q2", "r2");
-	}
-
-	// --- helpers ---
-
-	private SessionEvent system(String text) {
-		return SessionEvent.builder().sessionId(SESSION_ID).message(new SystemMessage(text)).build();
-	}
-
-
-	private List<SessionEvent> turn(String userText, String assistantText) {
-		return List.of(SessionEvent.builder().sessionId(SESSION_ID).message(new UserMessage(userText)).build(),
-				SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage(assistantText)).build());
+		assertThat(covered(result)).containsExactly("q1", "r1");
+		assertThat(kept(result)).containsExactly("a system prompt that is longer than the whole token budget", "q2",
+				"r2");
 	}
 
 	@Test
-	void compactionWithoutUserMessageArchivesNothing() {
-		// No USER event at all (e.g. only assistant and tool steps), so there is no turn
-		// boundary to cut at: nothing may be archived.
-		List<SessionEvent> events = new ArrayList<>();
+	void compactionWithoutUserMessageCoversNothing() {
+		List<SessionEvent> view = new ArrayList<>();
 		for (int i = 1; i <= 6; i++) {
-			events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("step " + i)).build());
-			events.add(SessionEvent.builder().sessionId(SESSION_ID).message(new AssistantMessage("answer " + i)).build());
+			view.add(assistant("step " + i));
+			view.add(assistant("answer " + i));
 		}
 
-		CompactionResult result = TokenCountCompactionStrategy.builder().maxTokens(10).tokenCountEstimator(CHAR_ESTIMATOR).build().compact(requestWith(events));
-
-		assertThat(result.archivedEvents()).isEmpty();
-		assertThat(result.compactedEvents()).containsExactlyElementsOf(events);
-	}
-
-	@SafeVarargs
-	private CompactionRequest requestWith(List<SessionEvent>... turns) {
-		List<SessionEvent> all = new ArrayList<>();
-		for (List<SessionEvent> turn : turns) {
-			all.addAll(turn);
-		}
-		return requestWith(all);
-	}
-
-	private CompactionRequest requestWith(List<SessionEvent> events) {
-		Session session = Session.builder().id(SESSION_ID).userId("test-user").build();
-		return CompactionRequest.of(session, new ArrayList<>(events));
+		assertThat(maxTokens(10).compact(request(view)).isUnchanged()).isTrue();
 	}
 
 }

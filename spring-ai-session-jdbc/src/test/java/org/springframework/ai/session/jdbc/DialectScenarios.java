@@ -35,10 +35,12 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -65,7 +67,7 @@ final class DialectScenarios {
 		try {
 			Instant instant = Instant.parse("2026-03-08T06:30:00.123456Z");
 			String sessionId = UUID.randomUUID().toString();
-			repository.save(Session.builder().id(sessionId).userId("user-tz").createdAt(instant).expiresAt(instant).build());
+			repository.save(Session.builder().id(sessionId).metadata(SessionAttributes.PRINCIPAL_NAME, "user-tz").createdAt(instant).expiresAt(instant).build());
 			repository.appendEvent(SessionEvent.builder()
 				.sessionId(sessionId)
 				.timestamp(instant)
@@ -94,53 +96,51 @@ final class DialectScenarios {
 
 	private static String newSession(JdbcSessionRepository repository) {
 		String sessionId = UUID.randomUUID().toString();
-		repository.save(Session.builder().id(sessionId).userId("user-like").build());
+		repository.save(Session.builder().id(sessionId).metadata(SessionAttributes.PRINCIPAL_NAME, "user-like").build());
 		return sessionId;
 	}
 
 	/**
-	 * Three recursive summarization passes never reorder the log: archived events are
-	 * flagged in place, a kept system message stays where it was stored, and each summary
-	 * goes right before the kept window while the replaced one is archived in place. Pass 3 archives a superseded system message that
-	 * sits after the inserted summary, which exercises the re-inserted tail.
+	 * Three recursive summarization passes only append: each pass adds a boundary and its
+	 * summary, the earlier log stays byte-for-byte, and the view projected in SQL from the
+	 * newest boundary pins the latest stored system message first.
 	 */
-	static void repeatedRecursiveSummarizationNeverReordersTheLog(JdbcSessionRepository repository) {
+	static void repeatedRecursiveSummarizationOnlyAppendsAndProjectsTheView(JdbcSessionRepository repository) {
 		ChatClient chatClient = mock(ChatClient.class, Answers.RETURNS_DEEP_STUBS);
 		given(chatClient.prompt().system(anyString()).user(anyString()).call().content()).willReturn("summary 1",
 				"summary 2", "summary 3");
 		RecursiveSummarizationCompactionStrategy strategy = RecursiveSummarizationCompactionStrategy
 			.builder(chatClient)
-			.maxEventsToKeep(4)
+			.maxEvents(4)
 			.build();
 		SessionService service = DefaultSessionService.builder()
 			.sessionRepository(repository)
 			.allowSystemMessages(true)
 			.build();
-		String id = service.create(CreateSessionRequest.builder().userId("user-order").build()).id();
+		String id = service.create(CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "user-order").build()).id();
 
 		appendAll(service, id, "u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5", "a5");
 		service.compact(id, request -> true, strategy);
-		assertThat(labels(service.getEvents(id))).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "Σ?",
-				"Σ:summary 1", "u4", "a4", "u5", "a5");
+		List<String> afterPass1 = labels(service.getEvents(id));
+		assertThat(afterPass1).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "u4", "a4", "u5", "a5",
+				"⊥", "Σ?", "Σ:summary 1");
 		assertThat(labels(service.getEvents(id, EventFilter.active()))).containsExactly("sys-1", "Σ?",
 				"Σ:summary 1", "u4", "a4", "u5", "a5");
-
 		appendAll(service, id, "u6", "a6", "u7", "a7");
 		service.compact(id, request -> true, strategy);
-		assertThat(labels(service.getEvents(id))).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "Σ?",
-				"Σ:summary 1", "u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7");
-
+		List<String> afterPass2 = labels(service.getEvents(id));
+		assertThat(afterPass2).startsWith(afterPass1.toArray(String[]::new))
+			.endsWith("u6", "a6", "u7", "a7", "⊥", "Σ?", "Σ:summary 2");
+		assertThat(labels(service.getEvents(id, EventFilter.active()))).containsExactly("sys-1", "Σ?",
+				"Σ:summary 2", "u6", "a6", "u7", "a7");
 		appendAll(service, id, "u8", "sys-2", "a8", "u9", "sys-3", "a9");
 		service.compact(id, request -> true, strategy);
 		List<SessionEvent> log = service.getEvents(id);
-		assertThat(labels(log)).containsExactly("u1", "sys-1", "a1", "u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1",
-				"u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2", "u6", "a6", "u7", "a7", "Σ?", "Σ:summary 3", "u8",
-				"sys-2", "a8", "u9", "sys-3", "a9");
-		assertThat(labels(log.stream().filter(SessionEvent::isArchived).toList())).containsExactly("u1", "sys-1",
-				"a1", "u2", "a2", "u3", "a3", "Σ?", "Σ:summary 1", "u4", "a4", "u5", "a5", "Σ?", "Σ:summary 2",
-				"u6", "a6", "u7", "a7", "sys-2");
-		assertThat(labels(service.getEvents(id, EventFilter.active()))).containsExactly("Σ?", "Σ:summary 3", "u8",
-				"a8", "u9", "sys-3", "a9");
+		assertThat(labels(log)).startsWith(afterPass2.toArray(String[]::new))
+			.endsWith("u8", "sys-2", "a8", "u9", "sys-3", "a9", "⊥", "Σ?", "Σ:summary 3");
+		// sys-2 is superseded by sys-3 and covered even though it sits in the kept window
+		assertThat(labels(service.getEvents(id, EventFilter.active()))).containsExactly("sys-3", "Σ?",
+				"Σ:summary 3", "u8", "a8", "u9", "a9");
 	}
 
 	/**
@@ -179,6 +179,9 @@ final class DialectScenarios {
 	/** The text, "Σ?" for a synthetic shadow prompt and "Σ:text" for a synthetic summary. */
 	private static List<String> labels(List<SessionEvent> events) {
 		return events.stream().map(e -> {
+			if (e.getType() == EventType.COMPACTION) {
+				return "⊥";
+			}
 			if (!e.isSynthetic()) {
 				return e.getMessage().getText();
 			}

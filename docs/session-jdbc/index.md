@@ -9,13 +9,14 @@ and H2 out of the box.
 ## Tables
 
 ```
-AI_SESSION          — session metadata (id, user_id, TTL, metadata JSON, event_version)
+AI_SESSION          — session metadata (id, tree links, status, TTL, metadata JSON, event_version)
+AI_SESSION_INDEX    — indexed metadata attributes (session_id, attr_name, attr_value), FK → AI_SESSION
 AI_SESSION_EVENT    — event log (FK → AI_SESSION, ON DELETE CASCADE)
 ```
 
-`AI_SESSION_EVENT` rows are ordered by a monotonic `seq` column (insertion order) and carry
-`synthetic` and `archived` flags. Compaction archives events in place rather than deleting
-them, so the full history stays searchable.
+`AI_SESSION_EVENT` rows are ordered by a monotonic `seq` column (insertion order). The log
+is append-only: compaction appends a `COMPACTION` boundary row that names the active view
+by event id, and never updates or deletes a row, so the full history stays searchable.
 
 ---
 
@@ -99,7 +100,7 @@ JdbcSessionRepository.builder()
 // Create a session
 Session session = sessions.save(Session.builder()
     .id(UUID.randomUUID().toString())
-    .userId("alice")
+    .metadata(SessionAttributes.PRINCIPAL_NAME, "alice")
     .build());
 
 // Append a message event
@@ -118,42 +119,71 @@ List<SessionEvent> events = sessions.findEvents(session.id(), EventFilter.builde
 
 ## Design notes
 
-**Message serialisation** — each `SessionEvent`'s wrapped `Message` is stored in three
-columns: `message_type` (enum name), `message_content` (plain text), and `message_data`
-(JSON for tool calls and tool responses). This avoids Jackson polymorphism on Spring AI
-message types.
+**Event serialisation** — each `SessionEvent` is stored in four columns: `event_type` (the
+`EventType` name), `message_type` (the `MessageType` name of an event that carries a message, a
+message event or a tree marker, else `NULL`), `message_content` (the plain text of that
+message, kept as its own column so keyword searches run in SQL) and `payload` (JSON). For an
+event with a message the payload holds the message's ordered Spring AI `MessagePart`s and its
+metadata, serialised with the parts' own polymorphic JSON, so media, tool calls, tool results
+and provider-signed reasoning all survive a round trip; a tree marker stores its own payload
+in the same object. For any other event type it holds `SessionEvent.getPayload()`. Rows
+written before 0.11.0 keep their tool calls or tool responses in `message_data` and are
+still read.
 
 **Optimistic concurrency** — the `event_version` column on `AI_SESSION` is incremented on
-every `appendEvent` that appends a new event and every successful `applyCompaction` call.
-`applyCompaction` claims the version slot with `UPDATE … WHERE event_version = ?` before
-modifying the event log, so concurrent compactions cannot both succeed.
+every `appendEvent` that appends a new event and every successful `appendEvents` call.
+`appendEvents` claims the version slot with `UPDATE … WHERE event_version = ?` before
+inserting, so two concurrent compactions cannot both land a boundary.
 
-**Cross-session search** — `findEventsByUserId` is one query that joins `AI_SESSION` and
-`AI_SESSION_EVENT`, filters, sorts by timestamp and applies the page in the database.
+**Active view** — a read with `EventFilter.activeView()` (what `EventFilter.active()`
+sets) first selects the session's newest `COMPACTION` row, then fetches in one query the
+rows that boundary names plus every row from the boundary on, ordered by `seq`, and lets
+`EventFilter.apply` put them in view order, filter and window them. The view is bounded by
+compaction, so it is read whole. A session without a boundary is read whole too, minus
+rows a 0.10 compaction flagged `archived`; that column is no longer written.
+
+**Indexed attributes** — on every save the repository copies the metadata entries whose
+keys are configured as indexed (`JdbcSessionRepository.builder().indexedAttributes(...)`,
+always including the principal, `JdbcSessionRepository.DEFAULT_INDEXED_ATTRIBUTES`) into
+`AI_SESSION_INDEX`, one row per attribute, on the first 512 characters of the value.
+`findByIndex(name, value)` is one query over that table joined to `AI_SESSION`. The links
+of a session tree are not attributes but the `parent_session_id` and `root_session_id`
+columns of `AI_SESSION`, each with its own index, so `findByParentSessionId` and
+`findByRootSessionId` are plain lookups; a row written before 0.11.0 has `NULL` links,
+reads as a root and is found as its own tree even before the backfill ran. The `user_id` column of 0.10 is no longer
+part of the model: it is still written with the principal name (so a database that
+declares it `NOT NULL` keeps working), a row whose metadata has no principal is read with
+`user_id` as its principal, and the schema script copies `user_id` into the index once.
+
+**Cross-session search** — `findEvents(sessionIds, filter)` is one query over the given
+sessions (`session_id IN (...)`) that filters, sorts by timestamp and applies the page in
+the database.
 
 **`synthetic` column** — stored as a dedicated `BOOLEAN` column (not only in the metadata
 JSON blob) so `EventFilter.excludeSynthetic()` translates to a SQL predicate instead of
 an in-process scan.
 
-**`EventFilter.keyword()`/`keywords()`** translate to `LOWER(...) LIKE ? ESCAPE '!'`
-predicates — one for `keyword`, one per term for `keywords`, joined with `AND`/`OR` per
-`matchMode`. Terms are always bound as JDBC parameters, and `%`, `_` and `!` are escaped so
-they match literally, as in the in-memory repository.
+**`EventFilter.keywords()`** translate to `LOWER(...) LIKE ? ESCAPE '!'` predicates, one
+per term, joined with `AND`/`OR` per `matchMode`; the dialect supplies the predicate
+(`getKeywordPredicateFragment()`). Terms are always bound as JDBC parameters, and `%`, `_`
+and `!` are escaped so they match literally, as in the in-memory repository.
 
-**`EventFilter.lastN()` keeps turns whole with at most one extra query.** The newest N
-rows come from `ORDER BY seq DESC LIMIT ?`. When that window is full, its oldest row is
-not a `USER` event and the filter neither searches text nor hides `USER` events, a second
-query fetches the rows between the nearest preceding matching `USER` event and the window
-(`seq >= (SELECT MAX(seq) … WHERE message_type = 'USER' AND seq < ?)`), bounded by one
+**The window is pushed down.** A `last` window is `ORDER BY seq DESC LIMIT ?`, a page is
+`LIMIT ? OFFSET ?`, and an `after` cursor is `seq > (SELECT seq … WHERE id = ?)` with an
+optional `LIMIT`; an unknown cursor is detected with one existence check and reported as
+`IllegalArgumentException`. `DESC` order reverses the windowed rows in Java.
+
+**A `last` window keeps turns whole with at most one extra query.** When the window is
+full, its oldest row is not a `USER` event and the filter neither searches text nor hides
+`USER` events, a second query fetches the rows between the nearest preceding matching
+`USER` event and the window
+(`seq >= (SELECT MAX(seq) … WHERE event_type = 'MESSAGE' AND message_type = 'USER' AND seq < ?)`), bounded by one
 turn and served by the `(session_id, seq)` index. Cross-session reads use a plain `LIMIT`.
 
-**`EventFilter.pattern()` falls back to in-memory filtering.** Java regex cannot be
-translated to portable SQL — each database has its own regex dialect, none a superset of
-Java's (backreferences, lookaround, named groups). When `pattern` is set, every other
-criterion is still pushed down to SQL, but pagination (`lastN`/`page`/`pageSize`) is
-deferred: the SQL-filtered rows are fetched, re-checked with `EventFilter.matches()` in
-Java, and paginated afterward, as `InMemorySessionRepository` does. Expect a `pattern`
-query to scan more history than an equivalent `keyword`/`keywords` query.
+**`EventFilter.pattern()` is not evaluated in SQL.** Java regex cannot be translated to
+portable SQL — each database has its own regex dialect, none a superset of Java's. The
+repository ignores a pattern; `SessionService` reads without it and applies it in Java
+before the window (see [Patterns](../session-management/event-filtering.md#patterns)).
 
 ---
 

@@ -27,7 +27,7 @@ import org.springframework.boot.jdbc.init.PropertiesBasedDataSourceScriptDatabas
  * Performs database initialization for the JDBC Session Repository.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 class JdbcSessionRepositorySchemaInitializer
 		extends PropertiesBasedDataSourceScriptDatabaseInitializer<JdbcSessionRepositoryProperties> {

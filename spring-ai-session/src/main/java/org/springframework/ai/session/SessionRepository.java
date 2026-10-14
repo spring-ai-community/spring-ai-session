@@ -18,22 +18,22 @@ package org.springframework.ai.session;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
-import org.springframework.ai.session.compaction.CompactionPlan;
-
 /**
  * Persistence contract for {@link Session} objects and their event logs.
  *
  * <p>
- * Implementations must be thread-safe. Events are stored separately from session metadata
- * and are mutated via dedicated methods to keep session metadata immutable.
+ * Implementations must be thread-safe. Events are stored separately from session metadata.
+ * The event log is append-only: nothing ever updates, moves or removes an event, and
+ * compaction is recorded by appending (see {@link #appendEvents}).
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 public interface SessionRepository {
 
@@ -41,8 +41,9 @@ public interface SessionRepository {
 
 	/**
 	 * Persists session metadata (create or update). If the session already exists its
-	 * event log and its original {@link Session#createdAt()} are preserved; the other
-	 * metadata fields are replaced.
+	 * event log, its original {@link Session#createdAt()} and its run
+	 * ({@link Session#runId()}) are preserved; the other metadata fields are replaced. A
+	 * new session is stored without a run: only {@link #updateStatus} sets one.
 	 * @return the saved session
 	 */
 	Session save(Session session);
@@ -54,7 +55,8 @@ public interface SessionRepository {
 	 * otherwise silently take over the first caller's session).
 	 * <p>
 	 * Implementations must perform the check and the insert atomically (e.g. a
-	 * primary-key-guarded {@code INSERT}, or a compare-and-set put).
+	 * primary-key-guarded {@code INSERT}, or a compare-and-set put). The session is stored
+	 * without a run, as with {@link #save}.
 	 * @return {@code true} if the session was inserted, {@code false} if a session with
 	 * the same id already exists (the existing session is left untouched)
 	 */
@@ -62,7 +64,53 @@ public interface SessionRepository {
 
 	@Nullable Session findById(String sessionId);
 
-	List<Session> findByUserId(String userId);
+	/**
+	 * Returns the sessions whose {@link Session#metadata() metadata} holds {@code value}
+	 * under {@code name}, in a stable store-defined order (creation time, then id).
+	 * <p>
+	 * This is the one scoped lookup of the store, in the shape of Spring Session's
+	 * {@code findByIndexNameAndIndexValue}: the store indexes attributes, it has no notion
+	 * of ownership. Every store indexes {@link SessionAttributes#PRINCIPAL_NAME}; a store
+	 * that cannot index every key documents which other keys it answers for.
+	 * @param name the metadata key
+	 * @param value the value, compared as a string
+	 */
+	List<Session> findByIndex(String name, String value);
+
+	/**
+	 * Returns the children created directly from the given session, oldest first (creation
+	 * time, then id): the sessions whose {@link Session#parentSessionId()} is the id.
+	 */
+	List<Session> findByParentSessionId(String parentSessionId);
+
+	/**
+	 * Returns every session of the tree rooted at the given id, the root itself included
+	 * when it exists, oldest first: the sessions whose {@link Session#rootSessionId()} is
+	 * the id.
+	 */
+	List<Session> findByRootSessionId(String rootSessionId);
+
+	/**
+	 * Changes the session's status atomically, only if its current status is
+	 * {@code expected} and, when {@code expectedRunId} is given, its current run is that
+	 * one: the compare-and-set that keeps two concurrent turns from both starting, a turn
+	 * from ending another run's turn, and an archive from landing on a running session. On
+	 * success the status, the run, the stop reason and the archive time are replaced as
+	 * given (a {@code null} clears the field); nothing else about the session changes.
+	 * @param sessionId the session
+	 * @param expected the status the session must have for the change to apply
+	 * @param expectedRunId the run the session must have, or {@code null} for any
+	 * @param status the new status
+	 * @param runId the run to record ({@link Session#runId()}), or {@code null} to clear it
+	 * @param stopReason the stop reason to record, or {@code null} to clear it
+	 * @param archivedAt the archive time to record, or {@code null} to clear it
+	 * @return {@code true} when the status was changed, {@code false} when the session
+	 * does not exist, its status is not {@code expected} or its run is not
+	 * {@code expectedRunId}
+	 */
+	boolean updateStatus(String sessionId, SessionStatus expected, @Nullable String expectedRunId,
+			SessionStatus status, @Nullable String runId, @Nullable StopReason stopReason,
+			@Nullable Instant archivedAt);
 
 	/**
 	 * Deletes the session with the given ID.
@@ -105,50 +153,48 @@ public interface SessionRepository {
 	void appendEvent(SessionEvent event);
 
 	/**
-	 * Atomically applies a compaction plan to the session's event log using an optimistic
-	 * compare-and-swap. The plan is applied only if the current event-log version equals
-	 * {@code expectedVersion}; otherwise the call is a no-op and returns {@code false}
-	 * (another writer mutated the log between the caller's read and this write).
+	 * Atomically appends several events to the session's event log, in order, using an
+	 * optimistic compare-and-swap: the events are appended only if the current event-log
+	 * version equals {@code expectedVersion}; otherwise nothing is written and
+	 * {@code false} is returned (another writer changed the log between the caller's read
+	 * and this write). On success the version is incremented once, whatever the number of
+	 * events.
 	 *
 	 * <p>
-	 * Archived events are <em>retained</em> in the log (soft-deleted via
-	 * {@link SessionEvent#isArchived()}) so they remain searchable by the Recall Storage
-	 * tools. Compaction never removes or reorders existing events. On success:
-	 * <ul>
-	 * <li>the events in {@link CompactionPlan#archiveIds()} are flagged archived <em>in
-	 * place</em>;</li>
-	 * <li>each {@link CompactionPlan.Insert} group is inserted immediately before its
-	 * anchor event, or appended at the end of the log when the anchor is {@code null};</li>
-	 * <li>every other event stays where it is.</li>
-	 * </ul>
-	 * {@link CompactionPlan#applyTo(List)} is the reference implementation of these rules
-	 * for a log held as a list.
+	 * This is how compaction is recorded: {@link SessionService#compact} appends one
+	 * {@link EventType#COMPACTION} boundary event followed by its summary events. The log is
+	 * append-only; compaction never flags, moves or removes an existing event. The boundary
+	 * defines the active view from then on (see
+	 * {@link org.springframework.ai.session.compaction.CompactionBoundary#project(List)}),
+	 * and the version check keeps two concurrent compactions from both landing.
 	 *
 	 * <p>
 	 * Callers should read {@link #getEventVersion} <em>before</em> reading events via
 	 * {@link #findEvents}, then pass that version here. If this method returns
-	 * {@code false} the caller should treat the compaction as a no-op — the concurrent
-	 * writer already handled the session.
-	 * @param sessionId the session whose log is being compacted
-	 * @param plan the plan; its archive ids and anchor ids must be in the session's log,
-	 * otherwise implementations reject the whole call with
-	 * {@link IllegalArgumentException} and change nothing
+	 * {@code false} the caller should treat the write as not done — the concurrent writer
+	 * already handled the session.
+	 * @param sessionId the session whose log is appended to; every event must belong to it
+	 * @param events the events, in the order they are appended; at least one, and their
+	 * ids must be new
 	 * @param expectedVersion the event-log version the caller observed
-	 * @return {@code true} when the plan was applied, {@code false} on a version mismatch
-	 * @throws IllegalArgumentException if the session does not exist
+	 * @return {@code true} when the events were appended, {@code false} on a version
+	 * mismatch
+	 * @throws IllegalArgumentException if the session does not exist, {@code events} is
+	 * empty, an event belongs to another session, or an event id is already in the log or
+	 * appears twice in the batch
 	 */
-	boolean applyCompaction(String sessionId, CompactionPlan plan, long expectedVersion);
+	boolean appendEvents(String sessionId, List<SessionEvent> events, long expectedVersion);
 
 	/**
 	 * Returns the current event-log version for the given session. The version is
 	 * incremented atomically on every {@link #appendEvent} call that actually appends a
-	 * new event, and on every successful {@link #applyCompaction} call (an idempotent
-	 * replay of an already-applied {@link #appendEvent} does not increment it). Returns
-	 * {@code 0} when the session does not exist or has no events yet.
+	 * new event, and on every successful {@link #appendEvents} call (an idempotent replay
+	 * of an already-applied {@link #appendEvent} does not increment it). Returns {@code 0}
+	 * when the session does not exist or has no events yet.
 	 * <p>
 	 * Read this <em>before</em> calling {@link #findEvents} to obtain a version that is
 	 * guaranteed to be ≤ the version of the events you subsequently read, which is the
-	 * safe ordering for passing to {@link #applyCompaction(String, CompactionPlan, long)}.
+	 * safe ordering for passing to {@link #appendEvents(String, List, long)}.
 	 */
 	long getEventVersion(String sessionId);
 
@@ -156,28 +202,43 @@ public interface SessionRepository {
 	 * Returns events for the given session that match the provided filter. Events are
 	 * always returned in chronological order (oldest first).
 	 * <p>
-	 * <strong>Windows keep turns whole.</strong> If {@link EventFilter#lastN()} is set,
-	 * the most recent N matching events are returned, extended back to the start of the
-	 * turn the window lands in (the nearest preceding {@link SessionEvent#isTurnStart()
-	 * USER event} among the matching events), so a tool call is never returned without
-	 * its results. The extension is skipped when the filter
-	 * {@link EventFilter#hasTextCriteria() searches text} and when no turn start precedes
-	 * the window. Pages are plain. {@link EventFilter#applyTurnAwareWindow(List)} is the
-	 * reference implementation; {@code JdbcSessionRepository} pushes it down as one
-	 * bounded extra query when the window lands mid-turn.
+	 * <strong>Windows keep turns whole.</strong> With an {@link EventFilter.Window.Last}
+	 * window the most recent N matching events are returned, extended back to the start
+	 * of the turn the window lands in (the nearest preceding
+	 * {@link SessionEvent#isTurnStart() USER event} among the matching events), so a tool
+	 * call is never returned without its results. The extension is skipped when the
+	 * filter {@link EventFilter#hasTextCriteria() searches text} and when no turn start
+	 * precedes the window. Pages and {@link EventFilter.Window.After cursors} are plain;
+	 * a cursor that names no event of the session throws
+	 * {@link IllegalArgumentException}. {@link EventFilter#applyTurnAwareWindow(List)} is
+	 * the reference implementation; {@code JdbcSessionRepository} pushes it down as one
+	 * bounded extra query when the window lands mid-turn. {@link EventFilter#order()}
+	 * applies to the windowed result.
 	 * <p>
-	 * <strong>Push the filter down.</strong> The cost of a read must not grow with the
-	 * size of the whole log: an implementation is expected to evaluate
-	 * {@link EventFilter#excludeArchived()}, {@link EventFilter#excludeSynthetic()},
-	 * {@link EventFilter#messageTypes()}, the time range, {@link EventFilter#lastN()},
-	 * {@link EventFilter#page()} / {@link EventFilter#pageSize()} and, where the store
-	 * can, the keywords in its query, and to fall back to {@link EventFilter#apply(List)}
-	 * only for what the store cannot express (a {@link EventFilter#pattern()}, typically),
-	 * as {@code JdbcSessionRepository} does.
+	 * <strong>The active view.</strong> With {@link EventFilter#activeView()} the
+	 * filter applies to the active view of the log rather than the whole log: the events
+	 * named by the newest {@link EventType#COMPACTION} boundary (pinned, summary,
+	 * preserved, in that order) and everything appended after it. A log without a boundary
+	 * is its own view.
+	 * {@link org.springframework.ai.session.compaction.CompactionBoundary#project(List)} is
+	 * the reference implementation; a store may fetch only the view's rows (the named ids
+	 * and the rows from the boundary on) and hand them to {@link EventFilter#apply(List)},
+	 * as {@code JdbcSessionRepository} does. The view is bounded by compaction, so it is
+	 * read whole and windowed in memory.
+	 * <p>
+	 * <strong>Push the filter down.</strong> For a read of the whole log the cost must not
+	 * grow with its size: an implementation is expected to evaluate
+	 * {@link EventFilter#excludeSynthetic()}, {@link EventFilter#eventTypes()},
+	 * {@link EventFilter#messageTypes()}, the time range, the {@link EventFilter#window()}
+	 * and the {@link EventFilter#keywords()} in its query, and to fall back to
+	 * {@link EventFilter#apply(List)} only for what the store cannot express, as
+	 * {@code JdbcSessionRepository} does. A {@link EventFilter#pattern()} is not part of
+	 * this contract: a store may ignore it, and {@link SessionService} applies it after
+	 * the read.
 	 * <p>
 	 * <strong>Existence contract:</strong> returns an empty list when the session does
 	 * not exist, rather than throwing. This differs from {@link #appendEvent} and
-	 * {@link #applyCompaction}, which throw {@link IllegalArgumentException} for unknown
+	 * {@link #appendEvents}, which throw {@link IllegalArgumentException} for unknown
 	 * sessions. The silent-empty behaviour allows callers to query event history without
 	 * first checking whether the session exists (the "read before write" pattern used by
 	 * {@code SessionMemoryAdvisor}).
@@ -185,24 +246,29 @@ public interface SessionRepository {
 	List<SessionEvent> findEvents(String sessionId, EventFilter filter);
 
 	/**
-	 * Returns the events of <em>every</em> session of the given user that match the
-	 * filter, ordered by timestamp across sessions (ties broken in a stable, store-defined
-	 * order), with the filter's {@link EventFilter#lastN()} or page applied to that
-	 * combined order as a plain window (turns do not exist across sessions).
+	 * Returns the events of the given sessions that match the filter, ordered by timestamp
+	 * across sessions (ties broken in a stable, store-defined order), with the filter's
+	 * window applied to that combined order as a plain window (turns do not exist across
+	 * sessions); an {@link EventFilter.Window.After} cursor is per session and throws
+	 * {@link IllegalArgumentException} here. The caller chooses the sessions, typically
+	 * through {@link #findByIndex} or a {@link SessionSelector}.
 	 * <p>
-	 * The default runs the filter without its window over each session of the user,
-	 * sorts the union and applies the window in memory, which costs the total number of
-	 * matches on every call. Stores that can join sessions and events should override it
-	 * with a single sorted, paged query.
-	 * @param userId the user whose sessions are searched
+	 * The default runs the filter without its window over each session, sorts the union
+	 * and applies the window in memory, which costs the total number of matches on every
+	 * call. Stores that can query several sessions at once should override it with a
+	 * single sorted, paged query.
+	 * @param sessionIds the sessions to search; an unknown id contributes nothing
 	 * @param filter the filter; its window applies to the combined result
-	 * @return the matching events, oldest first
+	 * @return the matching events, oldest first; empty when {@code sessionIds} is empty
 	 */
-	default List<SessionEvent> findEventsByUserId(String userId, EventFilter filter) {
+	default List<SessionEvent> findEvents(Collection<String> sessionIds, EventFilter filter) {
+		if (filter.window() instanceof EventFilter.Window.After) {
+			throw new IllegalArgumentException("a cursor window is per session; read one session at a time");
+		}
 		EventFilter perSession = filter.withoutWindow();
 		List<SessionEvent> matches = new ArrayList<>();
-		for (Session session : findByUserId(userId)) {
-			matches.addAll(findEvents(session.id(), perSession));
+		for (String sessionId : sessionIds) {
+			matches.addAll(findEvents(sessionId, perSession));
 		}
 		matches.sort(Comparator.comparing(SessionEvent::getTimestamp).thenComparing(SessionEvent::getId));
 		return filter.applyWindow(matches);

@@ -18,7 +18,9 @@ package org.springaicommunity.session.autoconfigure;
 
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.SessionRepository;
+import org.springframework.ai.session.SessionScopeResolver;
 import org.springframework.ai.session.SessionService;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -30,17 +32,19 @@ import org.springframework.context.annotation.Bean;
  * Auto-configuration for {@link DefaultSessionService}.
  *
  * <p>
- * Creates a {@link DefaultSessionService} bean whenever a single (or primary)
- * {@link SessionRepository} bean is present in the application context and no {@link SessionService} bean has been
- * declared by the application. This applies regardless of which {@link SessionRepository}
- * implementation is in use — in-memory, JDBC, Redis, etc.
+ * Creates a {@link SessionService} bean, a {@link DefaultSessionService} wrapped by every
+ * {@link SessionServiceDecorator} bean in order, whenever a single (or primary)
+ * {@link SessionRepository} bean is present in the application context and no
+ * {@link SessionService} bean has been declared by the application. This applies
+ * regardless of which {@link SessionRepository} implementation is in use — in-memory,
+ * JDBC, Redis, etc.
  *
  * <p>
  * The auto-configuration is ordered after the JDBC repository auto-configuration so that
  * the repository bean is guaranteed to be available when this configuration runs.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  */
 @AutoConfiguration(
 		afterName = "org.springaicommunity.session.jdbc.autoconfigure.JdbcSessionRepositoryAutoConfiguration")
@@ -51,12 +55,20 @@ import org.springframework.context.annotation.Bean;
 public class SessionServiceAutoConfiguration {
 
 	@Bean
-	DefaultSessionService sessionService(SessionRepository sessionRepository, SessionServiceProperties properties) {
-		return DefaultSessionService.builder()
+	SessionService sessionService(SessionRepository sessionRepository, SessionServiceProperties properties,
+			ObjectProvider<SessionScopeResolver> scopeResolver, ObjectProvider<SessionServiceDecorator> decorators) {
+		SessionService service = DefaultSessionService.builder()
 			.sessionRepository(sessionRepository)
 			.defaultTimeToLive(properties.getTimeToLive())
 			.allowSystemMessages(properties.isAllowSystemMessages())
+			.maxTreeDepth(properties.getMaxTreeDepth())
+			.inheritedAttributes(properties.getInheritedAttributes())
+			.scopeResolver(scopeResolver.getIfAvailable(SessionScopeResolver::none))
 			.build();
+		for (SessionServiceDecorator decorator : decorators.orderedStream().toList()) {
+			service = decorator.decorate(service);
+		}
+		return service;
 	}
 
 }

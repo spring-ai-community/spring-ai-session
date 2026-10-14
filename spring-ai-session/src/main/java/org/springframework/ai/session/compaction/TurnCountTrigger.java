@@ -30,11 +30,11 @@ import org.springframework.util.Assert;
  *
  * <p>
  * Pair with {@link TurnWindowCompactionStrategy} or
- * {@link RecursiveSummarizationCompactionStrategy} to keep the threshold and the
+ * {@code RecursiveSummarizationCompactionStrategy} to keep the threshold and the
  * compaction unit consistent.
  *
  * @author Christian Tzolov
- * @since 2.0.0
+ * @since 0.1.0
  * @see TurnWindowCompactionStrategy
  */
 public final class TurnCountTrigger implements CompactionTrigger {
