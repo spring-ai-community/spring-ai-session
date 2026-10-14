@@ -302,6 +302,16 @@ ChatClient.builder(chatModel)
     .build();
 ```
 
+### Breaking: the memory advisor's read filter selects a prompt's history
+
+The `EventFilter` given to `SessionMemoryAdvisor.builder().eventFilter(...)` or per request
+with `EVENT_FILTER_CONTEXT_KEY` must select a prompt's history: the active view, all of it
+or its last N events, optionally by `messageTypes` or with `excludeSynthetic`. A time
+range, event types, keywords or a pattern, a page or a cursor window, and `DESC` order are
+rejected with an `IllegalArgumentException`: they describe a search, and some (a page,
+newest-first order) made a broken prompt. Search the log with `SessionService.getEvents`
+instead.
+
 ### Breaking: tool calls and tool results are always stored
 
 `SessionMemoryAdvisor` stores an assistant reply with tool calls and the tool results that

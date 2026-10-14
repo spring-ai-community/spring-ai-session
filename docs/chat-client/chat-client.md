@@ -283,10 +283,17 @@ String response = client.prompt()
 
 `EventFilter.merge()` semantics: every non-null field from the request filter replaces
 the corresponding field from the advisor default; the two boolean flags, `excludeSynthetic`
-and `activeView`, are OR-ed so either side can opt in. A request-level window (`lastN`, a
-page or a cursor) replaces the advisor's window as a whole (see
+and `activeView`, are OR-ed so either side can opt in. A request-level `lastN` window
+replaces the advisor's window (see
 [Merging filters](../session-management/event-filtering.md#merging-filters)). A `null` value for
 `EVENT_FILTER_CONTEXT_KEY` is ignored.
+
+The filter, on the advisor or per request, selects a prompt's history: the active view,
+all of it or its last N events, optionally only some `messageTypes` or without synthetic
+events (`excludeSynthetic`). A time range, event types, keywords or a pattern, a page or a
+cursor window, and newest-first order describe a search, not a prompt: the advisor
+rejects them with an `IllegalArgumentException`, a per-request filter before anything is
+stored. Search the log with `SessionService.getEvents` instead.
 
 ---
 

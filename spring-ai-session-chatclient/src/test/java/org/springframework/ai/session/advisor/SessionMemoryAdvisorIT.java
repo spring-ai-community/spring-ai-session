@@ -17,6 +17,7 @@
 package org.springframework.ai.session.advisor;
 
 import java.net.URI;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -529,6 +530,39 @@ class SessionMemoryAdvisorIT {
 		List<String> texts = modified.prompt().getInstructions().stream().map(Message::getText).toList();
 		assertThat(texts).contains("msg2", "reply2");
 		assertThat(texts).doesNotContain("msg1", "reply1");
+	}
+
+	@Test
+	void theReadFilterSelectsAPromptsHistoryNotASearch() {
+		// Accepted: the active view, all of it or its last N events, by message type
+		SessionMemoryAdvisor.builder(this.sessionService)
+			.eventFilter(EventFilter.lastN(10)
+				.toBuilder()
+				.messageTypes(Set.of(MessageType.USER, MessageType.ASSISTANT))
+				.excludeSynthetic(true)
+				.build())
+			.build();
+
+		// Rejected on the builder: what describes a search, not a prompt
+		for (EventFilter search : List.of(EventFilter.keywordSearch("weather"), EventFilter.after("e1"),
+				EventFilter.builder().page(0, 10).build(), EventFilter.builder().from(Instant.EPOCH).build(),
+				EventFilter.builder().eventTypes(Set.of(EventType.USAGE)).build(),
+				EventFilter.builder().order(EventFilter.Order.DESC).build())) {
+			assertThatThrownBy(() -> SessionMemoryAdvisor.builder(this.sessionService).eventFilter(search))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("selects a prompt's history");
+		}
+
+		// Rejected per request, before anything is stored
+		ChatClientRequest paged = ChatClientRequest.builder()
+			.prompt(new Prompt(List.of(new UserMessage("Hi"))))
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId,
+					SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, EventFilter.builder().page(1, 5).build()))
+			.build();
+		assertThatThrownBy(() -> this.advisor.before(paged, mock(AdvisorChain.class)))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("a page window");
+		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
 	}
 
 	@Test

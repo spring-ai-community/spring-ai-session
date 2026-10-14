@@ -51,6 +51,7 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.content.MediaContent;
 import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.MessageFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
@@ -172,7 +173,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	/**
 	 * Context key for a per-request {@link EventFilter} that is merged over the
 	 * advisor's configured filter (see {@link EventFilter#merge(EventFilter)}). The value
-	 * must be an {@code EventFilter}. Set via:
+	 * must be an {@code EventFilter} that selects a prompt's history (see
+	 * {@link Builder#eventFilter(EventFilter)}). Set via:
 	 * {@code .advisors(a -> a.param(SessionMemoryAdvisor.EVENT_FILTER_CONTEXT_KEY, EventFilter.lastN(10)))}
 	 */
 	public static final String EVENT_FILTER_CONTEXT_KEY = "chat_memory_event_filter_id";
@@ -553,7 +555,40 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			throw new IllegalArgumentException("Advisor context value for '" + EVENT_FILTER_CONTEXT_KEY
 					+ "' must be an EventFilter but was " + requestFilterValue.getClass().getName());
 		}
-		return this.eventFilter.merge(requestEventFilter);
+		return this.eventFilter.merge(requirePromptHistory(requestEventFilter,
+				"The per-request filter '" + EVENT_FILTER_CONTEXT_KEY + "'"));
+	}
+
+	/**
+	 * The filter, when it selects a prompt's history: the active view, all of it or its
+	 * newest N events, optionally by message type or without synthetic events.
+	 */
+	static EventFilter requirePromptHistory(EventFilter filter, String what) {
+		List<String> unsupported = new ArrayList<>();
+		if (filter.from() != null || filter.to() != null) {
+			unsupported.add("a time range");
+		}
+		if (filter.eventTypes() != null && !filter.eventTypes().equals(Set.of(EventType.MESSAGE))) {
+			unsupported.add("event types");
+		}
+		if (filter.keywords() != null || filter.pattern() != null) {
+			unsupported.add("a text search");
+		}
+		if (filter.window() instanceof EventFilter.Window.Page) {
+			unsupported.add("a page window");
+		}
+		else if (filter.window() instanceof EventFilter.Window.After) {
+			unsupported.add("a cursor window");
+		}
+		if (filter.order() == EventFilter.Order.DESC) {
+			unsupported.add("newest-first order");
+		}
+		if (!unsupported.isEmpty()) {
+			throw new IllegalArgumentException(what + " selects a prompt's history: all of the active view or its "
+					+ "last N events, optionally by message type; it has " + String.join(", ", unsupported)
+					+ ". Search the log with SessionService.getEvents instead");
+		}
+		return filter;
 	}
 
 	/**
@@ -673,11 +708,19 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		/**
 		 * Filter applied when loading the session's event history to inject into the
-		 * prompt. Defaults to {@link EventFilter#all()} (all events).
+		 * prompt. Defaults to {@link EventFilter#all()} (all events). It selects a
+		 * prompt's history: the active view (always), all of it or its newest
+		 * {@link EventFilter#lastN(int) N events}, optionally only some
+		 * {@link EventFilter#messageTypes() message types} or without synthetic events.
+		 * A time range, event types, a text search, a page or cursor window or
+		 * newest-first order describe a search, not a prompt, and are rejected; search
+		 * the log with {@code SessionService.getEvents} instead.
+		 * @throws IllegalArgumentException if the filter does not select a prompt's
+		 * history
 		 */
 		public Builder eventFilter(EventFilter eventFilter) {
 			Assert.notNull(eventFilter, "eventFilter must not be null");
-			this.eventFilter = eventFilter;
+			this.eventFilter = requirePromptHistory(eventFilter, "The eventFilter of the SessionMemoryAdvisor");
 			return this;
 		}
 
