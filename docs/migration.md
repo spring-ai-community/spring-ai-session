@@ -302,6 +302,17 @@ ChatClient.builder(chatModel)
     .build();
 ```
 
+### New: run ids and run-scoped event ids
+
+`SessionTurnAdvisor.RUN_ID_CONTEXT_KEY` names the run a `ChatClient` call belongs to, its
+idempotency key (`SessionAdvisors.session(sessionId, runId)`). The turn records it, and the
+memory advisor's new default id generator, `RunScopedSessionEventIdGenerator`, derives each
+event's id from its position in the run, so a replay of the call writes nothing twice.
+Without a run id the ids stay random, as before. `IdempotentSessionEventIdGenerator` is
+deprecated: it derives ids from the message's content, so identical messages collide. When
+nothing was stored for a request, `REQUEST_EVENT_ID_CONTEXT_KEY` is now absent instead of
+`null`. See [Idempotent session-event ids](chat-client/chat-client.md#idempotent-session-event-ids).
+
 ### New: `SessionAdvisors`
 
 `SessionAdvisors.builder(sessionService)...build()` returns the session advisors as a

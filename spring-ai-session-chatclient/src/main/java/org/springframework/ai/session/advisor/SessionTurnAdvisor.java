@@ -131,10 +131,25 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 	public static final String TOOL_CALL_DECISIONS_CONTEXT_KEY = "tool_call_decisions";
 
 	/**
+	 * Context key for the run a call belongs to: the caller's idempotency key for one
+	 * {@code ChatClient} call, a {@code String}. A retry of the call uses the same run id,
+	 * a new call a new one; the call that resumes a parked turn may keep the run id of the
+	 * call it resumes. The turn records it ({@link SessionService#startTurn(String,
+	 * String)}), and the {@link RunScopedSessionEventIdGenerator} derives event ids from it.
+	 */
+	public static final String RUN_ID_CONTEXT_KEY = "session_run_id";
+
+	/**
 	 * Context key that marks a request as part of a turn this advisor runs, so the
 	 * {@link SessionMemoryAdvisor} can stop the loop when the turn was interrupted.
 	 */
 	static final String TURN_CONTEXT_KEY = "chat_memory_session_turn";
+
+	/** Context key for the turn's round counter, which the memory advisor advances. */
+	static final String ROUND_CONTEXT_KEY = "chat_memory_session_round";
+
+	/** Context key for how the turn began: a new call or a resumption. */
+	static final String PHASE_CONTEXT_KEY = "chat_memory_session_phase";
 
 	private static final Logger logger = LoggerFactory.getLogger(SessionTurnAdvisor.class);
 
@@ -231,15 +246,56 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 		List<ToolCallDecision> decisions = decisions(request.context());
 		SessionContexts.findOrCreate(this.sessionService, sessionId, request.context(), this.agent);
 		if (decisions.isEmpty()) {
-			this.sessionService.startTurn(sessionId);
-			return new Start(inTurn(request), null);
+			this.sessionService.startTurn(sessionId, runId(request.context()));
+			return new Start(inTurn(request, "start"), null);
 		}
-		Start resumed = resume(request, sessionId, decisions);
-		return (resumed.response() != null) ? resumed : new Start(inTurn(resumed.request()), null);
+		return resume(request, sessionId, decisions);
 	}
 
-	private static ChatClientRequest inTurn(ChatClientRequest request) {
-		return request.mutate().context(TURN_CONTEXT_KEY, Boolean.TRUE).build();
+	/**
+	 * Marks the request as part of the turn, with a round counter every round of the tool
+	 * loop shares: the loop copies the context of the request into each round.
+	 */
+	private static ChatClientRequest inTurn(ChatClientRequest request, String phase) {
+		return request.mutate()
+			.context(TURN_CONTEXT_KEY, Boolean.TRUE)
+			.context(PHASE_CONTEXT_KEY, phase)
+			.context(ROUND_CONTEXT_KEY, new AtomicInteger())
+			.build();
+	}
+
+	/**
+	 * How the turn began: {@code start} for a new call, {@code resume-<question event id>}
+	 * for a resumption, so a call and its resumption under one run id get their own event
+	 * ids; {@code null} outside a turn this advisor runs.
+	 */
+	static @Nullable String phase(Map<String, @Nullable Object> context) {
+		return (context.get(PHASE_CONTEXT_KEY) instanceof String phase) ? phase : null;
+	}
+
+	/** The run the call belongs to, or {@code null} when the caller gave none. */
+	static @Nullable String runId(Map<String, @Nullable Object> context) {
+		Object runId = context.get(RUN_ID_CONTEXT_KEY);
+		if (runId == null) {
+			return null;
+		}
+		if (!(runId instanceof String id) || id.isBlank()) {
+			throw new IllegalArgumentException(
+					"Advisor context value for '" + RUN_ID_CONTEXT_KEY + "' must be a non-blank String but was " + runId);
+		}
+		return id;
+	}
+
+	/** The current round of the turn, or {@code null} outside a turn this advisor runs. */
+	static @Nullable Integer round(Map<String, @Nullable Object> context) {
+		return (context.get(ROUND_CONTEXT_KEY) instanceof AtomicInteger round) ? round.get() : null;
+	}
+
+	/** Starts the next round of the turn; a no-op outside a turn this advisor runs. */
+	static void nextRound(Map<String, @Nullable Object> context) {
+		if (context.get(ROUND_CONTEXT_KEY) instanceof AtomicInteger round) {
+			round.incrementAndGet();
+		}
 	}
 
 	/** Whether the request or response belongs to a turn a {@link SessionTurnAdvisor} runs. */
@@ -253,22 +309,23 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 			throw new IllegalArgumentException("A request that decides on tool calls of session '" + sessionId
 					+ "' carries no new user message; send the text in the next turn");
 		}
-		Interaction question = waitingQuestion(sessionId);
+		SessionEvent asked = waitingQuestion(sessionId);
+		Interaction question = InteractionEvents.interaction(asked);
+		Assert.state(question != null, "redundant check that should never fail, but here to help NullAway");
 		// The reply comes from the log, never from the caller
 		AssistantMessage reply = ToolConfirmations.reply(question);
 		ToolCallDecisions decisions = ToolConfirmations.complete(question, given);
 		requireTools(sessionId, reply, decisions, request.prompt().getOptions());
 
 		// Starts the turn; the compare-and-set makes the resumption exclusive
-		this.sessionService.resume(sessionId, null, ToolConfirmations.asAnswer(decisions));
+		this.sessionService.resume(sessionId, runId(request.context()), ToolConfirmations.asAnswer(decisions));
 		AtomicInteger ran = new AtomicInteger();
-		List<Message> turn = List.of();
 		try {
-			turn = currentTurn(sessionId);
+			List<Message> turn = currentTurn(sessionId);
 			ToolExecutionResult result = this.toolCallingManager.executeToolCalls(
 					new Prompt(turn, counting(request.prompt().getOptions(), ran)),
 					ChatResponse.builder().generations(List.of(new Generation(reply))).build(), decisions);
-			ToolResponseMessage results = withStoredIds(toolResults(result), reply, turn);
+			ToolResponseMessage results = toolResults(result);
 			if (result.returnDirect()) {
 				this.sessionService.appendMessage(sessionId, results);
 				finish(sessionId);
@@ -283,12 +340,13 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 			List<Message> withResults = new ArrayList<>(messages.size() + 1);
 			withResults.add(results);
 			withResults.addAll(messages);
-			return new Start(request.mutate().prompt(request.prompt().mutate().messages(withResults).build()).build(),
+			return new Start(inTurn(request.mutate().prompt(request.prompt().mutate().messages(withResults).build()).build(),
+					"resume-" + asked.getId()),
 					null);
 		}
 		catch (RuntimeException ex) {
 			if (ran.get() > 0) {
-				answerFailed(sessionId, reply, turn, ex);
+				answerFailed(sessionId, reply, ex);
 			}
 			end(sessionId, StopReason.ERROR);
 			throw ex;
@@ -315,15 +373,14 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 	 * had run: the calls are no longer open, so deciding again cannot run one twice, and
 	 * the model learns what happened in the next turn.
 	 */
-	private void answerFailed(String sessionId, AssistantMessage reply, List<Message> turn, RuntimeException cause) {
+	private void answerFailed(String sessionId, AssistantMessage reply, RuntimeException cause) {
 		String message = "The tool calls failed after some of them ran: " + cause.getMessage();
 		List<ToolResponseMessage.ToolResponse> responses = reply.getToolCalls()
 			.stream()
 			.map(toolCall -> new ToolResponseMessage.ToolResponse(toolCall.id(), toolCall.name(), message))
 			.toList();
 		try {
-			this.sessionService.appendMessage(sessionId,
-					withStoredIds(ToolResponseMessage.builder().responses(responses).build(), reply, turn));
+			this.sessionService.appendMessage(sessionId, ToolResponseMessage.builder().responses(responses).build());
 		}
 		catch (RuntimeException ex) {
 			cause.addSuppressed(ex);
@@ -335,7 +392,7 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 	 * failed before any call ran answered the question, but left the calls unanswered in
 	 * the log: they can be decided on again.
 	 */
-	private Interaction waitingQuestion(String sessionId) {
+	private SessionEvent waitingQuestion(String sessionId) {
 		SessionEvent pending = this.sessionService.pendingInteraction(sessionId);
 		if (pending == null) {
 			SessionEvent newest = newestConversationEvent(sessionId);
@@ -355,10 +412,10 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 			}
 		}
 		Interaction question = (pending != null) ? InteractionEvents.interaction(pending) : null;
-		if (question == null || !Interaction.KIND_TOOL_CONFIRMATION.equals(question.kind())) {
+		if (pending == null || question == null || !Interaction.KIND_TOOL_CONFIRMATION.equals(question.kind())) {
 			throw new IllegalArgumentException("Session '" + sessionId + "' is not waiting on a tool call decision");
 		}
-		return question;
+		return pending;
 	}
 
 	/** The same calls in the same order, whatever their ids. */
@@ -380,8 +437,10 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 	/** An allowed call runs with a tool of the request; checked before anything is recorded. */
 	private static void requireTools(String sessionId, AssistantMessage reply, ToolCallDecisions decisions,
 			@Nullable ChatOptions options) {
-		for (AssistantMessage.ToolCall toolCall : reply.getToolCalls()) {
-			ToolCallDecision decision = decisions.decisionOn(toolCall.id());
+		List<String> keys = ToolCallDecisions.toolCallKeys(reply);
+		for (int i = 0; i < keys.size(); i++) {
+			AssistantMessage.ToolCall toolCall = reply.getToolCalls().get(i);
+			ToolCallDecision decision = decisions.decisionOn(keys.get(i));
 			if (decision == null || !decision.allowed()) {
 				continue;
 			}
@@ -391,7 +450,7 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 						.anyMatch(callback -> callback.getToolDefinition().name().equals(toolCall.name()));
 			if (!carried) {
 				throw new IllegalArgumentException("The request must carry the tool '" + toolCall.name()
-						+ "' to run the allowed call '" + toolCall.id() + "' of session '" + sessionId + "'");
+						+ "' to run the allowed call '" + keys.get(i) + "' of session '" + sessionId + "'");
 			}
 		}
 	}
@@ -506,30 +565,6 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 			return results;
 		}
 		throw new IllegalStateException("The tool calling manager returned no tool results");
-	}
-
-	/**
-	 * The results under the ids of the calls the log holds. A model that gives its calls no
-	 * ids gets some from the manager when the loop pauses, after the memory advisor stored
-	 * the reply; the manager keeps the order of the calls, so the stored call at the same
-	 * place is the one a result answers.
-	 */
-	private static ToolResponseMessage withStoredIds(ToolResponseMessage results, AssistantMessage reply,
-			List<Message> turn) {
-		if (turn.isEmpty() || !(turn.get(turn.size() - 1) instanceof AssistantMessage stored)
-				|| !sameCalls(reply, stored) || stored.getToolCalls().equals(reply.getToolCalls())) {
-			return results;
-		}
-		Map<String, String> storedIds = new HashMap<>();
-		for (int i = 0; i < reply.getToolCalls().size(); i++) {
-			storedIds.put(reply.getToolCalls().get(i).id(), stored.getToolCalls().get(i).id());
-		}
-		List<ToolResponseMessage.ToolResponse> responses = results.getResponses()
-			.stream()
-			.map(response -> new ToolResponseMessage.ToolResponse(
-					storedIds.getOrDefault(response.id(), response.id()), response.name(), response.responseData()))
-			.toList();
-		return ToolResponseMessage.builder().responses(responses).metadata(results.getMetadata()).build();
 	}
 
 	private static List<ToolCallDecision> decisions(Map<String, @Nullable Object> context) {

@@ -75,6 +75,16 @@ public final class SessionAdvisors {
 	}
 
 	/**
+	 * The request runs on the session as the run with the id: a retry of the call uses the
+	 * same run id, so the session stores what it wrote once
+	 * ({@link SessionTurnAdvisor#RUN_ID_CONTEXT_KEY}).
+	 */
+	public static Consumer<ChatClient.AdvisorSpec> session(String sessionId, String runId) {
+		Assert.hasText(runId, "runId must not be empty");
+		return session(sessionId).andThen(advisors -> advisors.param(SessionTurnAdvisor.RUN_ID_CONTEXT_KEY, runId));
+	}
+
+	/**
 	 * The request resumes the session's parked turn with the decisions on the tool calls
 	 * it waits on; it carries no new user message.
 	 */

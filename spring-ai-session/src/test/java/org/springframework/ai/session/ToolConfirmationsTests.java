@@ -81,6 +81,20 @@ class ToolConfirmationsTests {
 	}
 
 	@Test
+	void callsWithoutIdsAreDecidedOnByTheirPosition() {
+		AssistantMessage withoutIds = AssistantMessage.builder()
+			.content("")
+			.toolCalls(List.of(new AssistantMessage.ToolCall("", "function", "book_flight", "{}"),
+					new AssistantMessage.ToolCall("", "function", "weather", "{}")))
+			.build();
+		Interaction question = ToolConfirmations.question(withoutIds, List.of("#0"));
+
+		ToolCallDecisions decisions = ToolConfirmations.complete(question, List.of(ToolCallDecision.deny("#0")));
+
+		assertThat(decisions.decisions()).containsExactly(ToolCallDecision.deny("#0"), ToolCallDecision.allow("#1"));
+	}
+
+	@Test
 	void decisionsRoundTripThroughAnAnswer() {
 		ToolCallDecisions decisions = ToolCallDecisions.of(ToolCallDecision.allow("c1"),
 				ToolCallDecision.deny("c2", "Not on Fridays."), ToolCallDecision.deny("c3"));

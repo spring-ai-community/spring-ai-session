@@ -162,46 +162,51 @@ ChatClient client = ChatClient.builder(chatModel)
 
 ## Idempotent session-event ids {#idempotent-session-event-ids}
 
-By default every persisted event gets a random id, so a retried write always creates a
-new event. Configure `requestEventIdGenerator`/`responseEventIdGenerator` to derive a
-deterministic id instead — a retry with the same id becomes a no-op (see [Idempotent
-`appendEvent`](../session-management/concepts.md#idempotent-appendevent)):
+A durability layer may replay a `ChatClient` call after a crash or a timeout. The memory
+advisor then writes the same messages again. To make such a replay write nothing twice,
+give each call a **run id**, the call's idempotency key: a retry of the call uses the same
+run id, a new call a new one.
 
 ```java
-IdempotentSessionEventIdGenerator idGenerator = new IdempotentSessionEventIdGenerator();
-
-SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
-    .requestEventIdGenerator(idGenerator)
-    .responseEventIdGenerator(idGenerator)
-    .build();
+chatClient.prompt()
+    .user("Book VX205")
+    .advisors(SessionAdvisors.session(sessionId, runId))   // RUN_ID_CONTEXT_KEY
+    .call()
+    .content();
 ```
 
-`IdempotentSessionEventIdGenerator` derives each id from two parts:
+The default id generator, `RunScopedSessionEventIdGenerator`, then derives each event's id
+from its position in the run, never from what the message says:
 
-- **The message.** For tool calls and tool responses it uses the model's tool-call ids. If
-  any of those ids is blank (some providers, such as Ollama, don't assign them), it uses
-  the tool names, arguments and response data instead. For every other message it uses
-  the message text.
-- **A context fingerprint.** These are the values of a list of advisor-context keys. The
-  default is just the session id.
+- the session id;
+- the run id, from `SessionTurnAdvisor.RUN_ID_CONTEXT_KEY`;
+- how the turn began: a new call, or the resumption of a parked turn;
+- the round of the tool-calling loop, which the `SessionTurnAdvisor` counts;
+- the slot in the round: the request's message, or the reply of a generation. The usage
+  event and the answers to interrupted tool calls take their ids from the reply's.
 
-Both parts are hashed into an id of the form `<messageType>-<sha256>`, at most 74
-characters, which fits the JDBC `VARCHAR(255)` column.
+A replay of the run gets the same ids, and `appendEvent` with an existing id is a no-op
+(see [Idempotent `appendEvent`](../session-management/concepts.md#idempotent-appendevent)).
+Two messages with the same text never share an id: "yes" in two calls is two events, and
+so are two identical tool calls in one turn, with or without tool call ids. The ids have
+the form `<messageType>-<sha256>`, at most 74 characters. The turn also records the run id
+(`SessionService.startTurn(sessionId, runId)`); the call that resumes a parked turn may
+keep the run id of the call it resumes.
 
-!!! warning "Identical messages collide"
-    With the default session-scoped fingerprint, two identical messages anywhere in the
-    same session get the same id, and the second is dropped as a replay. For example, a
-    user answering "yes" twice loses the second "yes". To avoid this, add a context key
-    that changes per request, such as a durable run id. The varargs constructor
-    *replaces* the default key list, so include the session key yourself:
-
-    ```java
-    new IdempotentSessionEventIdGenerator("run-id", SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY);
-    ```
+- **Without a run id**, or without the `SessionTurnAdvisor`, the ids are random, so a
+  retried write is a new event. Nothing is mistaken for a replay.
+- **A replayed round whose model gives a different reply** gets the same id as the first;
+  the log keeps the first reply.
 
 To write your own generator, implement `SessionEventRequestIdGenerator` and/or
-`SessionEventResponseIdGenerator`. The defaults are `SessionEventRequestIdGenerator.random()`
-and `SessionEventResponseIdGenerator.random()`.
+`SessionEventResponseIdGenerator`, and set it with `requestEventIdGenerator(...)` and
+`responseEventIdGenerator(...)` on the `SessionMemoryAdvisor` builder (or through
+`SessionAdvisors.builder(...).memory(...)`). `SessionEventRequestIdGenerator.random()` and
+`SessionEventResponseIdGenerator.random()` always give random ids.
+
+`IdempotentSessionEventIdGenerator`, which derives ids from the message's content, is
+deprecated: two identical messages in a session get the same id, so the second is dropped
+as a replay.
 
 ---
 
@@ -250,7 +255,7 @@ client.prompt()
 | `SESSION_ID_CONTEXT_KEY` | `"chat_memory_conversation_id"` (= `ChatMemory.CONVERSATION_ID`) | Routes the request to a session |
 | `SESSION_METADATA_CONTEXT_KEY` | `"chat_memory_session_metadata"` | A `Map<String, Object>` of metadata for a session the advisor creates on first use; ignored for an existing session |
 | `EVENT_FILTER_CONTEXT_KEY` | `"chat_memory_event_filter_id"` | Per-request `EventFilter` merged with the advisor-level filter |
-| `REQUEST_EVENT_ID_CONTEXT_KEY` | `"chat_memory_request_event_id"` | Set by the advisor: the id of the event that stores the request's trailing user or tool message, `null` when none was stored. Read it from the forwarded request or from `call().chatClientResponse().context()` |
+| `REQUEST_EVENT_ID_CONTEXT_KEY` | `"chat_memory_request_event_id"` | Set by the advisor: the id of the event that stores the request's trailing user or tool message; absent when none was stored. Read it from the forwarded request or from `call().chatClientResponse().context()` |
 | `RESPONSE_EVENT_IDS_CONTEXT_KEY` | `"chat_memory_response_event_ids"` | Set by the advisor on the response: the ids of the events that store the reply's assistant messages, a `List<String>`, empty when none was stored. Streamed chunks do not carry it; `subscribe(sessionId)` delivers the stored events instead |
 | `SessionTurnAdvisor.TOOL_CALL_DECISIONS_CONTEXT_KEY` | `"tool_call_decisions"` | A `ToolCallDecisions`, a `ToolCallDecision` or a collection of them, for the tool calls the parked turn waits on; see [Tool confirmation](#tool-confirmation) |
 
@@ -407,8 +412,8 @@ When streaming, the ids are on the last chunk of the reply.
   the memory advisor's id generators.
 - A turn interrupted while the model asked for a gated call does not park: the call is
   answered as interrupted (see [Interrupting a running call](#interrupting-a-running-call)).
-- A model that gives its tool calls no ids gets some from the loop when it pauses; decide
-  on those. The results are stored under the ids the log holds.
+- A decision names a call by its key, as `ToolCallDecisions.awaitingDecision(reply)` lists
+  them: the call's id, or `#<position>` for a model that gives its tool calls no ids.
 
 The parked turn is an
 [interaction](../session-management/concepts.md#interactions-a-parked-turn-in-general): an

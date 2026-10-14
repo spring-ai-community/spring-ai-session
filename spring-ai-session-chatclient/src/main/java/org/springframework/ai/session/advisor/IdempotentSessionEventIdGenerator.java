@@ -87,7 +87,11 @@ import org.springframework.util.StringUtils;
  *
  * @author Christian Tzolov
  * @since 0.7.0
+ * @deprecated since 0.11.0, in favour of {@link RunScopedSessionEventIdGenerator}, which
+ * derives ids from the position of a write in a run rather than from its content, so
+ * identical messages never collide
  */
+@Deprecated(since = "0.11.0")
 public final class IdempotentSessionEventIdGenerator implements SessionEventRequestIdGenerator, SessionEventResponseIdGenerator {
 
 	private final List<String> contextKeys;

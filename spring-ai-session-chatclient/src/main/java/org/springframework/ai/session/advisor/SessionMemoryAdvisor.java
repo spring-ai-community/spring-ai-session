@@ -115,13 +115,14 @@ import org.springframework.util.Assert;
  * {@link MessageFilter} in either direction with a warning.
  *
  * <p>
- * <strong>Event id generation:</strong> by default every persisted event gets a fresh
- * random id ({@link SessionEventRequestIdGenerator#random()} /
- * {@link SessionEventResponseIdGenerator#random()}), so a retried append is always a new
- * event. Configure {@link Builder#requestEventIdGenerator} / {@link Builder#responseEventIdGenerator}
- * with a deterministic derivation (e.g. content-addressable, or reusing an upstream
- * durability layer's own idempotency key) to make a retried append an idempotent no-op
- * instead, via {@code SessionRepository.appendEvent}'s id-based replay contract.
+ * <strong>Event id generation:</strong> by default ({@link RunScopedSessionEventIdGenerator})
+ * an event's id derives from its position in a run: the session, the run id the caller
+ * gives with {@link SessionTurnAdvisor#RUN_ID_CONTEXT_KEY}, the round of the turn and the
+ * slot in the round. A replay of the same run then writes nothing twice, via
+ * {@code SessionRepository.appendEvent}'s id-based replay contract. Without a run id (or
+ * without the {@link SessionTurnAdvisor}) the ids are random, so a retried append is a new
+ * event. Configure {@link Builder#requestEventIdGenerator} /
+ * {@link Builder#responseEventIdGenerator} for another derivation.
  *
  * <p>
  * <strong>Nesting inside a tool-calling loop:</strong> an advisor such as
@@ -176,8 +177,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	/**
 	 * Context key the advisor sets on the request it forwards, and so on the response: the
-	 * id of the event that stores the request's trailing user or tool message, or
-	 * {@code null} when none was stored. Lets a caller name the message it sent by the id
+	 * id of the event that stores the request's trailing user or tool message; absent
+	 * when none was stored. Lets a caller name the message it sent by the id
 	 * the log knows it by; inside a tool loop it is the current round's.
 	 */
 	public static final String REQUEST_EVENT_ID_CONTEXT_KEY = "chat_memory_request_event_id";
@@ -239,6 +240,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		String sessionId = SessionContexts.sessionId(request.context());
 		Session session = SessionContexts.findOrCreate(this.sessionService, sessionId, request.context(),
 				this.agent);
+		// Each call of before() is a round of the turn: the run-scoped event ids count them
+		SessionTurnAdvisor.nextRound(request.context());
 
 		// 2. Retrieve history applying the configured filter (default: all events)
 
@@ -334,11 +337,14 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			throw new TurnInterruptedException(sessionId);
 		}
 
-		// The forwarded request copies the context, so the id reaches the response too
-		return request.mutate()
-			.prompt(request.prompt().mutate().messages(combined).build())
-			.context(REQUEST_EVENT_ID_CONTEXT_KEY, requestEventId)
-			.build();
+		// The forwarded request copies the context, so the id reaches the response too. No
+		// null value: the model call advisor copies the context with Map.copyOf
+		ChatClientRequest.Builder forwarded = request.mutate()
+			.prompt(request.prompt().mutate().messages(combined).build());
+		if (requestEventId != null) {
+			forwarded.context(REQUEST_EVENT_ID_CONTEXT_KEY, requestEventId);
+		}
+		return forwarded.build();
 	}
 
 	@Override
@@ -687,9 +693,9 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		private MessageFilter messageFilter = MessageFilter.skipEmptyMessages();
 
-		private SessionEventRequestIdGenerator requestEventIdGenerator = SessionEventRequestIdGenerator.random();
+		private SessionEventRequestIdGenerator requestEventIdGenerator = new RunScopedSessionEventIdGenerator();
 
-		private SessionEventResponseIdGenerator responseEventIdGenerator = SessionEventResponseIdGenerator.random();
+		private SessionEventResponseIdGenerator responseEventIdGenerator = new RunScopedSessionEventIdGenerator();
 
 		private boolean recordUsage = true;
 
@@ -744,10 +750,9 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		/**
 		 * Overrides how the id is derived for the session event persisted in
-		 * {@code before()} (the current user/tool-response message). Defaults to
-		 * {@link SessionEventRequestIdGenerator#random()} -- a fresh random id every
-		 * call, i.e. today's behaviour. Supply a deterministic generator to make a
-		 * retried append idempotent instead of a duplicate.
+		 * {@code before()} (the current user/tool-response message). Defaults to a
+		 * {@link RunScopedSessionEventIdGenerator}: deterministic when the call carries a
+		 * run id, random otherwise.
 		 */
 		public Builder requestEventIdGenerator(SessionEventRequestIdGenerator requestEventIdGenerator) {
 			Assert.notNull(requestEventIdGenerator, "requestEventIdGenerator must not be null");
@@ -757,8 +762,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		/**
 		 * Overrides how the id is derived for each session event persisted in
-		 * {@code after()} (the assistant reply message(s)). Defaults to
-		 * {@link SessionEventResponseIdGenerator#random()}.
+		 * {@code after()} (the assistant reply message(s)). Defaults to a
+		 * {@link RunScopedSessionEventIdGenerator}.
 		 */
 		public Builder responseEventIdGenerator(SessionEventResponseIdGenerator responseEventIdGenerator) {
 			Assert.notNull(responseEventIdGenerator, "responseEventIdGenerator must not be null");

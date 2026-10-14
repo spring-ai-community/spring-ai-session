@@ -1125,13 +1125,13 @@ class SessionMemoryAdvisorIT {
 				messages.get(0).getId());
 		assertThat(reply.context()).containsEntry(SessionMemoryAdvisor.RESPONSE_EVENT_IDS_CONTEXT_KEY,
 				List.of(messages.get(1).getId()));
-		// Nothing stored: the request key is present and null, the response list empty
+		// Nothing stored: no request key (a null would break the model call advisor's copy
+		// of the context), the response list empty
 		ChatClientRequest empty = advisor.before(ChatClientRequest.builder()
 			.prompt(new Prompt(List.of()))
 			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
 			.build(), chain);
-		assertThat(empty.context()).containsKey(SessionMemoryAdvisor.REQUEST_EVENT_ID_CONTEXT_KEY);
-		assertThat(empty.context().get(SessionMemoryAdvisor.REQUEST_EVENT_ID_CONTEXT_KEY)).isNull();
+		assertThat(empty.context()).doesNotContainKey(SessionMemoryAdvisor.REQUEST_EVENT_ID_CONTEXT_KEY);
 		ChatClientResponse blank = advisor.after(buildResponse(this.sessionId, "   "), chain);
 		assertThat(blank.context()).containsEntry(SessionMemoryAdvisor.RESPONSE_EVENT_IDS_CONTEXT_KEY, List.of());
 	}

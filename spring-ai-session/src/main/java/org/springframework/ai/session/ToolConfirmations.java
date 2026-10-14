@@ -38,8 +38,9 @@ import org.springframework.util.Assert;
  * reason and {@code user.tool_confirmation} event.
  * <p>
  * The question ({@link Interaction#KIND_TOOL_CONFIRMATION}) holds every tool call of the
- * paused reply, with the ids the loop returned, and the ids of the calls that wait for a
- * decision: {@code {toolCalls: [{id, name, arguments}], awaiting: [ids]}}. A resumption
+ * paused reply and the keys of the calls that wait for a decision:
+ * {@code {toolCalls: [{id, name, arguments}], awaiting: [keys]}}. A call's key is its id, or
+ * its position when it has none ({@link ToolCallDecisions#toolCallKeys}). A resumption
  * rebuilds the reply from it, so the calls that run come from the log and never from the
  * caller. The answer is one map per decision: {@code {toolCallId, allowed, message}}.
  *
@@ -52,7 +53,7 @@ public final class ToolConfirmations {
 	/** The question's key for the tool calls of the paused reply. */
 	public static final String PAYLOAD_TOOL_CALLS = "toolCalls";
 
-	/** The question's key for the ids of the calls that wait for a decision. */
+	/** The question's key for the keys of the calls that wait for a decision. */
 	public static final String PAYLOAD_AWAITING = "awaiting";
 
 	private ToolConfirmations() {
@@ -60,8 +61,8 @@ public final class ToolConfirmations {
 
 	/**
 	 * The question a turn parks on.
-	 * @param reply the paused reply, every tool call with an id
-	 * @param awaiting the ids of the calls that wait for a decision
+	 * @param reply the paused reply, as the model gave it
+	 * @param awaiting the keys of the calls that wait for a decision
 	 */
 	public static Interaction question(AssistantMessage reply, List<String> awaiting) {
 		Assert.notNull(reply, "reply must not be null");
@@ -69,7 +70,7 @@ public final class ToolConfirmations {
 		List<Map<String, Object>> toolCalls = new ArrayList<>();
 		for (AssistantMessage.ToolCall toolCall : reply.getToolCalls()) {
 			Map<String, Object> entry = new LinkedHashMap<>();
-			entry.put("id", toolCall.id());
+			entry.put("id", (toolCall.id() != null) ? toolCall.id() : "");
 			entry.put("name", toolCall.name());
 			entry.put("arguments", (toolCall.arguments() != null) ? toolCall.arguments() : "");
 			toolCalls.add(entry);
@@ -85,7 +86,8 @@ public final class ToolConfirmations {
 		List<AssistantMessage.ToolCall> toolCalls = new ArrayList<>();
 		for (Object entry : list(payload(question).get(PAYLOAD_TOOL_CALLS))) {
 			if (entry instanceof Map<?, ?> call) {
-				toolCalls.add(new AssistantMessage.ToolCall(String.valueOf(call.get("id")), "function",
+				Object id = call.get("id");
+				toolCalls.add(new AssistantMessage.ToolCall((id != null) ? String.valueOf(id) : "", "function",
 						String.valueOf(call.get("name")), String.valueOf(call.get("arguments"))));
 			}
 		}
@@ -93,7 +95,7 @@ public final class ToolConfirmations {
 		return AssistantMessage.builder().content("").toolCalls(toolCalls).build();
 	}
 
-	/** The ids of the calls that wait for a decision. */
+	/** The keys of the calls that wait for a decision. */
 	public static List<String> awaiting(Interaction question) {
 		return list(payload(question).get(PAYLOAD_AWAITING)).stream().map(String::valueOf).toList();
 	}
@@ -106,20 +108,19 @@ public final class ToolConfirmations {
 	 */
 	public static ToolCallDecisions complete(Interaction question, Collection<ToolCallDecision> given) {
 		Assert.notNull(given, "given must not be null");
-		Set<String> ids = new LinkedHashSet<>();
-		reply(question).getToolCalls().forEach(toolCall -> ids.add(toolCall.id()));
+		Set<String> keys = new LinkedHashSet<>(ToolCallDecisions.toolCallKeys(reply(question)));
 		Map<String, ToolCallDecision> decisions = new LinkedHashMap<>();
 		for (ToolCallDecision decision : given) {
-			Assert.isTrue(ids.contains(decision.toolCallId()),
-					() -> "No tool call waits on '" + decision.toolCallId() + "'; the paused calls: " + ids);
+			Assert.isTrue(keys.contains(decision.toolCallId()),
+					() -> "No tool call waits on '" + decision.toolCallId() + "'; the paused calls: " + keys);
 			decisions.put(decision.toolCallId(), decision);
 		}
 		Set<String> missing = new LinkedHashSet<>(awaiting(question));
 		missing.removeAll(decisions.keySet());
 		Assert.isTrue(missing.isEmpty(), () -> "Every call that waits needs a decision; missing: " + missing);
 		List<ToolCallDecision> complete = new ArrayList<>();
-		for (String id : ids) {
-			complete.add(decisions.getOrDefault(id, ToolCallDecision.allow(id)));
+		for (String key : keys) {
+			complete.add(decisions.getOrDefault(key, ToolCallDecision.allow(key)));
 		}
 		return new ToolCallDecisions(complete);
 	}
