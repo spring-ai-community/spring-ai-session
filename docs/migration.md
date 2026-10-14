@@ -316,7 +316,8 @@ and `SessionAdvisors.decide(id, decisions)` fill a request's advisor context. Se
 
 `SessionService.interrupt(id, reason)` records an `INTERRUPT` event (`InterruptEvents`) and
 ends the running turn with `INTERRUPTED`; it is the first-class form of the manual
-`endTurn(id, INTERRUPTED)`. The parked turn is a service protocol: `park(id, interaction,
+`endTurn(id, INTERRUPTED)`. A running `ChatClient` call stops at its next step with a
+`TurnInterruptedException`, and the tool calls it stops are answered in the log. The parked turn is a service protocol: `park(id, interaction,
 relatedEventIds)` records the question and ends the turn with `REQUIRES_ACTION` naming the
 related events and the question, `pendingInteraction(id)` finds it, and `resume(id, runId,
 answer)` starts the turn and records the answer. Tool confirmation, the agent

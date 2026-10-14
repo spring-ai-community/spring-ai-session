@@ -137,7 +137,7 @@ The event types:
 | Group | Types | Written by |
 | --- | --- | --- |
 | Conversation | `MESSAGE` | every integration |
-| Turns | `STATUS`, `INTERRUPT`, `INTERACTION` | the memory advisor, the tool-confirmation gate, `interrupt` |
+| Turns | `STATUS`, `INTERRUPT`, `INTERACTION` | the turn advisor, `interrupt` |
 | Cost | `USAGE` | one per model call |
 | Compaction | `COMPACTION` | the service, when it compacts |
 | Sub-agents | `CHILD_CREATED`, `MESSAGE_SENT`, `MESSAGE_RECEIVED` | on the parent, when a child is used |
@@ -345,7 +345,8 @@ Tool confirmation is one kind of question (may this tool run?), and a spring-ai-
 is another. Both integrations use these three calls.
 
 **Interrupts.** `interrupt(sessionId, reason)` records an `INTERRUPT` event and ends the turn as
-`INTERRUPTED`, from any thread or process that shares the log.
+`INTERRUPTED`, from any thread or process that shares the log. A running `ChatClient` loop stops at
+its next step: the memory advisor checks every round, and answers the tool calls it stops.
 
 **Usage and budget.** One `USAGE` event per model call. `usage(id)` and `aggregateUsage(rootId)` sum
 them. A `BudgetPolicy` gives a tree its token budget, checked before every model call; once it's
@@ -510,9 +511,6 @@ Things I'd like to discuss:
 - **Release order.** 0.11.0 needs Spring AI 2.1 with tool call confirmation
   ([spring-ai#7157](https://github.com/spring-projects/spring-ai/pull/7157)). agent-utils 0.14.0 needs
   0.11.0. The agent module needs a published spring-ai-agent.
-- **Stopping a running ChatClient loop.** `interrupt` records the stop, but nothing ends a tool loop
-  that is already running. A small per-round check advisor does it. It should move into the
-  ChatClient module.
 - **Later cleanups.** Collapse the four compaction strategies into a window plus an optional summarizer.
   Split the prompt assembly out of the memory advisor. Record `TOOL_CALL` events only on failure.
 

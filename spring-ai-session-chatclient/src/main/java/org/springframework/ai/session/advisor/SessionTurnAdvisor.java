@@ -130,6 +130,12 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 	 */
 	public static final String TOOL_CALL_DECISIONS_CONTEXT_KEY = "tool_call_decisions";
 
+	/**
+	 * Context key that marks a request as part of a turn this advisor runs, so the
+	 * {@link SessionMemoryAdvisor} can stop the loop when the turn was interrupted.
+	 */
+	static final String TURN_CONTEXT_KEY = "chat_memory_session_turn";
+
 	private static final Logger logger = LoggerFactory.getLogger(SessionTurnAdvisor.class);
 
 	private final SessionService sessionService;
@@ -226,9 +232,19 @@ public final class SessionTurnAdvisor implements CallAdvisor, StreamAdvisor {
 		SessionContexts.findOrCreate(this.sessionService, sessionId, request.context(), this.agent);
 		if (decisions.isEmpty()) {
 			this.sessionService.startTurn(sessionId);
-			return new Start(request, null);
+			return new Start(inTurn(request), null);
 		}
-		return resume(request, sessionId, decisions);
+		Start resumed = resume(request, sessionId, decisions);
+		return (resumed.response() != null) ? resumed : new Start(inTurn(resumed.request()), null);
+	}
+
+	private static ChatClientRequest inTurn(ChatClientRequest request) {
+		return request.mutate().context(TURN_CONTEXT_KEY, Boolean.TRUE).build();
+	}
+
+	/** Whether the request or response belongs to a turn a {@link SessionTurnAdvisor} runs. */
+	static boolean inTurn(Map<String, @Nullable Object> context) {
+		return Boolean.TRUE.equals(context.get(TURN_CONTEXT_KEY));
 	}
 
 	private Start resume(ChatClientRequest request, String sessionId, List<ToolCallDecision> given) {

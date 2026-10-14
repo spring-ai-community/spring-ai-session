@@ -546,7 +546,9 @@ which events and a re-attempt of the same run reads as one.
 a compare-and-set from `IDLE`, so two concurrent calls cannot run turns on one session at
 the same time: the second gets an `IllegalStateException`. A caller interrupts a running
 turn with `interrupt(id, reason)`, which records an `INTERRUPT` event and ends the turn with
-`INTERRUPTED`; it is also how a turn a crashed process left running is ended.
+`INTERRUPTED`; it is also how a turn a crashed process left running is ended. A `ChatClient`
+call that runs the turn stops at its next step (see
+[Interrupting a running call](../chat-client/chat-client.md#interrupting-a-running-call)).
 
 ```mermaid
 stateDiagram-v2

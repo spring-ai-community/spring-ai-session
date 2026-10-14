@@ -19,6 +19,7 @@ package org.springframework.ai.session.advisor;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -46,6 +47,7 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.content.MediaContent;
 import org.springframework.ai.session.AgentSnapshot;
 import org.springframework.ai.session.EventFilter;
@@ -54,6 +56,8 @@ import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.SessionStatus;
+import org.springframework.ai.session.StopReason;
 import org.springframework.ai.session.TokenUsage;
 import org.springframework.ai.session.UsageEvents;
 import org.springframework.core.Ordered;
@@ -81,6 +85,11 @@ import org.springframework.util.Assert;
  * <li>Names the events it stored on the request and response context
  * ({@link #REQUEST_EVENT_ID_CONTEXT_KEY}, {@link #RESPONSE_EVENT_IDS_CONTEXT_KEY}), so a
  * caller can correlate what it sent and received with the log.</li>
+ * <li>Stops a turn the {@link SessionTurnAdvisor} runs once it was interrupted
+ * ({@link org.springframework.ai.session.SessionService#interrupt}), with a
+ * {@link TurnInterruptedException}: before the next model call, once the results of the
+ * tools that ran are stored, or after a reply that asks for tools, whose stored calls it
+ * answers with {@link #INTERRUPTED_TOOL_RESULT} instead of letting them run.</li>
  * </ol>
  *
  * <p>
@@ -144,6 +153,9 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	 * {@code .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "my-session-id"))}
 	 */
 	public static final String SESSION_ID_CONTEXT_KEY = ChatMemory.CONVERSATION_ID;
+
+	/** The result a tool call gets in the log when its turn was interrupted before it ran. */
+	public static final String INTERRUPTED_TOOL_RESULT = "The turn was interrupted before this tool call ran.";
 
 	/**
 	 * Context key for the metadata of a session the advisor creates on first use. The
@@ -225,7 +237,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// session. Whether the caller may use it is not decided here: an authorizing
 		// SessionService (see the security module) checks every read and append.
 		String sessionId = SessionContexts.sessionId(request.context());
-		SessionContexts.findOrCreate(this.sessionService, sessionId, request.context(), this.agent);
+		Session session = SessionContexts.findOrCreate(this.sessionService, sessionId, request.context(),
+				this.agent);
 
 		// 2. Retrieve history applying the configured filter (default: all events)
 
@@ -315,6 +328,12 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 				.message(userMessage)
 				.build());
 		}
+		// 5. A turn interrupted since the previous round stops before the next model call,
+		// once the results of the tools that ran are stored
+		if (SessionTurnAdvisor.inTurn(request.context()) && isInterrupted(session)) {
+			throw new TurnInterruptedException(sessionId);
+		}
+
 		// The forwarded request copies the context, so the id reaches the response too
 		return request.mutate()
 			.prompt(request.prompt().mutate().messages(combined).build())
@@ -330,15 +349,20 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		// configured message filter. By default excludes messages that carry no
 		// content — blank text, no tool calls, and no media.
 		List<String> responseEventIds = new ArrayList<>();
+		// The stored replies that ask for tools, by event id
+		Map<String, AssistantMessage> storedToolCalls = new LinkedHashMap<>();
 		if (response.chatResponse() != null) {
-			response.chatResponse().getResults().stream().map(g -> (Message) g.getOutput()).forEach(msg -> {
-				if (!shouldPersist(msg, sessionId)) {
+			response.chatResponse().getResults().stream().map(Generation::getOutput).forEach(reply -> {
+				if (!shouldPersist(reply, sessionId)) {
 					return;
 				}
-				String eventId = this.responseEventIdGenerator.generate(response, msg);
+				String eventId = this.responseEventIdGenerator.generate(response, reply);
 				this.sessionService
-					.appendEvent(SessionEvent.builder().id(eventId).sessionId(sessionId).message(msg).build());
+					.appendEvent(SessionEvent.builder().id(eventId).sessionId(sessionId).message(reply).build());
 				responseEventIds.add(eventId);
+				if (reply.hasToolCalls()) {
+					storedToolCalls.put(eventId, reply);
+				}
 			});
 		}
 		ChatClientResponse named = response.mutate()
@@ -351,7 +375,38 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			recordUsage(response, response.chatResponse(), sessionId);
 		}
 
+		// 2. A turn interrupted while the model answered: the reply's tool calls do not
+		// run. The stored calls are answered, so the log stays valid and the next turn's
+		// model learns why. The id derives from the reply's, so a retried after() with a
+		// deterministic generator answers them once.
+		if (response.chatResponse() != null && response.chatResponse().hasToolCalls()
+				&& SessionTurnAdvisor.inTurn(response.context())
+				&& isInterrupted(this.sessionService.findById(sessionId))) {
+			storedToolCalls.forEach((replyEventId, reply) -> this.sessionService.appendEvent(SessionEvent.builder()
+				.id(replyEventId + "-interrupted")
+				.sessionId(sessionId)
+				.message(interruptedResults(reply))
+				.build()));
+			throw new TurnInterruptedException(sessionId);
+		}
+
 		return named;
+	}
+
+	/** Whether the session's turn ended because it was interrupted. */
+	private static boolean isInterrupted(@Nullable Session session) {
+		return session != null && session.status() != SessionStatus.RUNNING
+				&& session.stopReason() == StopReason.INTERRUPTED;
+	}
+
+	/** Answers every tool call of the reply with {@link #INTERRUPTED_TOOL_RESULT}. */
+	private static ToolResponseMessage interruptedResults(AssistantMessage reply) {
+		return ToolResponseMessage.builder()
+			.responses(reply.getToolCalls()
+				.stream()
+				.map(call -> new ToolResponseMessage.ToolResponse(call.id(), call.name(), INTERRUPTED_TOOL_RESULT))
+				.toList())
+			.build();
 	}
 
 	/**

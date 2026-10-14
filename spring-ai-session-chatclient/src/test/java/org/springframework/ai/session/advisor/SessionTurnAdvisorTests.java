@@ -39,6 +39,7 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.session.AgentSnapshot;
+import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.EventType;
@@ -607,22 +608,94 @@ class SessionTurnAdvisorTests {
 	}
 
 	@Test
-	void aTurnInterruptedBeforeItCouldParkKeepsTheReply() {
+	void anInterruptWhileTheModelAnswersStopsBeforeTheToolsRun() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", ToolMetadata.builder().build()));
+		this.model.then(prompt -> {
+			this.sessionService.interrupt(this.sessionId, "Stop");
+			return calls(call("c1", "get_weather", "Paris"));
+		});
+
+		assertThatThrownBy(() -> say(client, "Weather in Paris?")).isInstanceOf(TurnInterruptedException.class);
+
+		assertThat(this.ran).isEmpty();
+		assertThat(this.model.prompts()).hasSize(1);
+		assertThat(session().stopReason()).isEqualTo(StopReason.INTERRUPTED);
+		// The call is answered, so the log stays valid and the next turn's model learns why
+		assertThat(toolResults(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
+			.containsExactly(SessionMemoryAdvisor.INTERRUPTED_TOOL_RESULT);
+		assertThat(say(client, "Never mind", "OK.")).isEqualTo("OK.");
+		assertThat(describe(this.model.prompts().get(1))).containsExactly("Weather in Paris?", "call:c1", "result:c1",
+				"Never mind");
+	}
+
+	@Test
+	void anInterruptWhileAGatedCallIsAskedForStopsBeforeTheTurnParks() {
 		ChatClient client = gated(tool("get_weather", "Sunny in ", confirmed()));
 		this.model.then(prompt -> {
 			this.sessionService.interrupt(this.sessionId, "Stop");
 			return calls(call("c1", "get_weather", "Paris"));
 		});
 
-		say(client, "Weather in Paris?");
+		assertThatThrownBy(() -> say(client, "Weather in Paris?")).isInstanceOf(TurnInterruptedException.class);
 
 		assertThat(session().stopReason()).isEqualTo(StopReason.INTERRUPTED);
 		assertThatThrownBy(() -> decide(client, ToolCallDecision.allow("c1")))
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("not waiting");
-		// The next turn goes on without the unanswered call
-		assertThat(say(client, "Never mind", "OK.")).isEqualTo("OK.");
 		assertThat(this.ran).isEmpty();
+	}
+
+	@Test
+	void anInterruptDuringAToolRunStopsBeforeTheNextModelCall() {
+		ToolCallback interrupting = FunctionToolCallback.builder("get_weather", (City city) -> {
+			this.ran.add("get_weather");
+			this.sessionService.interrupt(this.sessionId, "Stop");
+			return "Sunny in " + city.city();
+		}).description("The weather in a city").inputType(City.class).build();
+		ChatClient client = gated(interrupting);
+		this.model.thenCall("c1", "Paris").thenAnswer("Sunny in Paris.");
+
+		assertThatThrownBy(() -> say(client, "Weather in Paris?")).isInstanceOf(TurnInterruptedException.class);
+
+		assertThat(this.ran).containsExactly("get_weather");
+		assertThat(this.model.prompts()).hasSize(1);
+		assertThat(session().stopReason()).isEqualTo(StopReason.INTERRUPTED);
+		// The tool's own result is stored
+		assertThat(toolResults(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
+			.containsExactly("\"Sunny in Paris\"");
+	}
+
+	@Test
+	void anInterruptStopsAStreamedCallBeforeTheToolsRun() {
+		ChatClient client = gated(tool("get_weather", "Sunny in ", ToolMetadata.builder().build()));
+		this.model.then(prompt -> {
+			this.sessionService.interrupt(this.sessionId, "Stop");
+			return calls(call("c1", "get_weather", "Paris"));
+		});
+
+		assertThatThrownBy(() -> client.prompt()
+			.user("Weather in Paris?")
+			.advisors(SessionAdvisors.session(this.sessionId))
+			.stream()
+			.content()
+			.blockLast()).isInstanceOf(TurnInterruptedException.class);
+
+		assertThat(this.ran).isEmpty();
+		assertThat(session().stopReason()).isEqualTo(StopReason.INTERRUPTED);
+		assertThat(toolResults(new Prompt(this.sessionService.getActiveMessages(this.sessionId))))
+			.containsExactly(SessionMemoryAdvisor.INTERRUPTED_TOOL_RESULT);
+	}
+
+	@Test
+	void theMemoryAdvisorAloneIsNotStoppedByAnEarlierInterrupt() {
+		this.sessionService.create(CreateSessionRequest.builder().id(this.sessionId).build());
+		this.sessionService.startTurn(this.sessionId);
+		this.sessionService.interrupt(this.sessionId, "Stop");
+		ChatClient client = ChatClient.builder(this.model)
+			.defaultAdvisors(SessionMemoryAdvisor.builder(this.sessionService).build())
+			.build();
+
+		assertThat(say(client, "Hello", "Hi!")).isEqualTo("Hi!");
 	}
 
 	private ChatClient client() {

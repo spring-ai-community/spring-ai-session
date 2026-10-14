@@ -405,8 +405,8 @@ When streaming, the ids are on the last chunk of the reply.
   restarts them once.
 - A `returnDirect` result is stored by the turn advisor with a random event id, not with
   the memory advisor's id generators.
-- A turn that was interrupted before it could park keeps the reply; its calls stay
-  unanswered and the next turn goes on without them.
+- A turn interrupted while the model asked for a gated call does not park: the call is
+  answered as interrupted (see [Interrupting a running call](#interrupting-a-running-call)).
 - A model that gives its tool calls no ids gets some from the loop when it pauses; decide
   on those. The results are stored under the ids the log holds.
 
@@ -418,6 +418,36 @@ decisions. `ToolConfirmations` reads and writes both.
 
 Tools that the Tool Search Tool adds per round are not on the request that resumes, so an
 allowed call to one cannot run; deny it, or put the tool on the request.
+
+---
+
+## Interrupting a running call
+
+`SessionService.interrupt(sessionId, reason)` ends the running turn with `INTERRUPTED`, from
+any thread or any process that shares the log. A `ChatClient` call that runs the turn stops
+at its next step: the `SessionMemoryAdvisor` checks on every round of the tool loop, and
+throws a `TurnInterruptedException`.
+
+- **Before a model call:** no further model call is made. The results of the tools that ran
+  are stored first.
+- **After a reply that asks for tools:** the tools do not run. The reply's tool calls are
+  answered in the log with `SessionMemoryAdvisor.INTERRUPTED_TOOL_RESULT`, so the log stays
+  valid and the next turn's model learns why.
+- A tool that is running when the interrupt comes finishes; the loop stops after it.
+- A streamed call ends with the exception as its error.
+
+The check needs the `SessionTurnAdvisor`, which marks the requests of the turn it runs; the
+memory advisor on its own never stops a call. A turn interrupted and then started again by
+another request before the loop's next step is not told apart from the running one.
+
+```java
+try {
+    chatClient.prompt().user("Plan my trip").advisors(SessionAdvisors.session(sessionId)).call().content();
+}
+catch (TurnInterruptedException ex) {
+    // stopped from elsewhere; the session is idle with stopReason INTERRUPTED
+}
+```
 
 ---
 

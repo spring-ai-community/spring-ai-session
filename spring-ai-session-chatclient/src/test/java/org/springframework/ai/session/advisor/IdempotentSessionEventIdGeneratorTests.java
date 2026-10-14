@@ -26,6 +26,7 @@ import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -39,6 +40,7 @@ import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.SessionAttributes;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -181,6 +183,34 @@ class IdempotentSessionEventIdGeneratorTests {
 			.chatResponse(ChatResponse.builder().generations(List.of(new Generation(message))).build())
 			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
 			.build();
+	}
+
+	@Test
+	void aRetriedAfterOfAnInterruptedTurnAnswersTheToolCallsOnce() {
+		SessionMemoryAdvisor advisor = advisorWith(new IdempotentSessionEventIdGenerator());
+		AdvisorChain chain = mock(AdvisorChain.class);
+		this.sessionService.startTurn(this.sessionId);
+		this.sessionService.interrupt(this.sessionId, "Stop");
+		AssistantMessage toolCall = AssistantMessage.builder()
+			.content("")
+			.toolCalls(List.of(new AssistantMessage.ToolCall("c1", "function", "get_weather", "{}")))
+			.build();
+		ChatClientResponse response = ChatClientResponse.builder()
+			.chatResponse(ChatResponse.builder().generations(List.of(new Generation(toolCall))).build())
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId,
+					SessionTurnAdvisor.TURN_CONTEXT_KEY, Boolean.TRUE))
+			.build();
+
+		assertThatThrownBy(() -> advisor.after(response, chain)).isInstanceOf(TurnInterruptedException.class);
+		assertThatThrownBy(() -> advisor.after(response, chain)).isInstanceOf(TurnInterruptedException.class);
+
+		// One reply and one answer to its call, however often after() ran
+		assertThat(this.sessionService.getActiveMessages(this.sessionId)).hasSize(2);
+		assertThat(this.sessionService.getActiveMessages(this.sessionId).get(1))
+			.isInstanceOfSatisfying(ToolResponseMessage.class, results -> assertThat(results.getResponses())
+				.singleElement()
+				.satisfies(result -> assertThat(result.responseData())
+					.isEqualTo(SessionMemoryAdvisor.INTERRUPTED_TOOL_RESULT)));
 	}
 
 	private SessionMemoryAdvisor advisorWith(IdempotentSessionEventIdGenerator generator) {
