@@ -1,5 +1,240 @@
 # Migration Guide
 
+## Moving to Spring AI 2.1
+
+The session is part of Spring AI since 2.1.0.
+This project ends with 0.10.0: there is no 0.11 of its artifacts, and it gets no further fixes.
+
+- **What moved.** The core, the JDBC store, the `ChatClient` advisors, compaction and the recall tool are now in Spring AI. See the [Spring AI session reference](https://docs.spring.io/spring-ai/reference/api/session.html).
+- **What stays the same.** The Java packages are still `org.springframework.ai.session`, so most imports do not change. The configuration properties keep their names.
+- **What changed.** The design changed in the places this section lists: who owns a session, the advisors, compaction, text search, and the JDBC schema.
+- **What Spring AI does not have.** Turn status, tool confirmation that survives a restart, and more session stores are in [spring-ai-session-extensions](https://github.com/spring-ai-community/spring-ai-session-extensions).
+
+!!! warning
+    Do not keep both libraries on the classpath. They have classes with the same names in the same packages.
+
+### Requirements
+
+Spring AI 2.1.0 and Spring Boot 4.2. Version 0.10.0 was built on Spring AI 2.0.1 and Spring Boot 4.1.1.
+
+### Dependencies
+
+The group id changes from `org.springaicommunity` to `org.springframework.ai`.
+Remove the import of `spring-ai-session-bom`: the versions now come from `spring-ai-bom`.
+
+| 0.10.0, `org.springaicommunity` | Spring AI 2.1, `org.springframework.ai` |
+|---|---|
+| `spring-ai-session` | `spring-ai-session`, and `spring-ai-session-advisor` for the `ChatClient` advisors |
+| `spring-ai-session-jdbc` | `spring-ai-session-jdbc` |
+| `spring-ai-starter-session-jdbc` | `spring-ai-starter-model-session-jdbc` |
+| `spring-ai-autoconfigure-session` | `spring-ai-autoconfigure-model-session` |
+| `spring-ai-autoconfigure-session-jdbc` | `spring-ai-autoconfigure-model-session-jdbc` |
+| `spring-ai-session-test` | `spring-ai-test` |
+| `spring-ai-session-bom` | `spring-ai-bom` |
+
+The advisors are in their own artifact now. The JDBC starter brings it.
+
+### Breaking: a session has no user id
+
+`Session.userId()` is gone. Who a session belongs to is an entry of its metadata, under `SessionAttributes.PRINCIPAL_NAME`.
+
+| 0.10.0 | Spring AI 2.1 |
+|---|---|
+| `CreateSessionRequest.builder().userId("alice")` | `CreateSessionRequest.builder().metadata(SessionAttributes.PRINCIPAL_NAME, "alice")` |
+| `session.userId()` | `SessionAttributes.principalName(session)` |
+| `sessionService.findByUserId("alice")` | `sessionService.findByMetadata(SessionAttributes.PRINCIPAL_NAME, "alice")` |
+| `SessionMemoryAdvisor.Builder.defaultUserId("alice")` | no replacement; pass the metadata with the request, as below |
+| `a.param(USER_ID_CONTEXT_KEY, "alice")` | `a.param(SESSION_METADATA_CONTEXT_KEY, Map.of(SessionAttributes.PRINCIPAL_NAME, "alice"))` |
+| `sessionService.findEventsByUserId(userId, filter)` | no replacement |
+
+Two things follow:
+
+- **A session without an owner is valid.** `userId` was required; the principal name is optional.
+- **The advisor no longer checks the owner.** In 0.10.0 the advisor refused a session that belonged to another user. Now your application checks this before the call, or in a `SessionServiceDecorator`.
+
+`findByMetadata` answers only for indexed keys. Every store indexes the principal name. The JDBC store indexes more keys with `spring.ai.session.repository.jdbc.indexed-attributes`.
+
+### Breaking: two advisors instead of one
+
+`SessionMemoryAdvisor` did everything in 0.10.0. Spring AI 2.1 splits the work:
+
+- **`SessionTurnAdvisor`** runs once per call, outside the tool-calling loop. It compacts at the end of the turn and keeps tool calls answerable.
+- **`SessionMemoryAdvisor`** runs inside the loop, once per round. It loads the history and stores the messages.
+
+`SessionAdvisors` builds both at the right orders.
+
+Before:
+
+```java
+SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
+    .defaultUserId("alice")
+    .compactionTrigger(new TurnCountTrigger(20))
+    .compactionStrategy(SlidingWindowCompactionStrategy.builder().maxEvents(10).build())
+    .build();
+
+ChatClient chatClient = ChatClient.builder(chatModel).defaultAdvisors(advisor).build();
+```
+
+After:
+
+```java
+ChatClient chatClient = ChatClient.builder(chatModel)
+    .defaultAdvisors(SessionAdvisors.builder(sessionService)
+        .compaction(new TurnCountTrigger(20), WindowCompactionStrategy.builder().lastEvents(10).build())
+        .build())
+    .build();
+
+chatClient.prompt()
+    .user("Hello!")
+    .advisors(SessionAdvisors.session("session-abc"))
+    .call()
+    .content();
+```
+
+What else changed on the advisors:
+
+| 0.10.0 | Spring AI 2.1 |
+|---|---|
+| `compactionTrigger(..)` and `compactionStrategy(..)` on `SessionMemoryAdvisor.Builder` | `compaction(trigger, strategy)` on `SessionAdvisors.Builder`, or the two methods on `SessionTurnAdvisor.Builder` |
+| `eventFilter(..)` and `messageFilter(..)` on `SessionMemoryAdvisor.Builder` | the same methods, reached with `SessionAdvisors.Builder.memory(m -> m.eventFilter(..))` |
+| `requestEventIdGenerator(..)`, `responseEventIdGenerator(..)`, `IdempotentSessionEventIdGenerator` | removed; the advisor assigns the ids and reports them under `REQUEST_EVENT_ID_CONTEXT_KEY` and `RESPONSE_EVENT_IDS_CONTEXT_KEY` |
+| `EVENT_FILTER_CONTEXT_KEY` has the value `"chat_memory_event_filter_id"` | the value is `"chat_memory_event_filter"`; use the constant |
+| `SESSION_ID_CONTEXT_KEY` | unchanged; `SessionAdvisors.session(sessionId)` sets it |
+
+See [ChatClient Integration](https://docs.spring.io/spring-ai/reference/api/session/chat-client.html).
+
+### Breaking: one compaction strategy with a window
+
+The four strategies are one class now, `WindowCompactionStrategy`, with a window and an optional summarizer.
+
+| 0.10.0 | Spring AI 2.1 |
+|---|---|
+| `SlidingWindowCompactionStrategy.builder().maxEvents(n)` | `WindowCompactionStrategy.builder().lastEvents(n)` |
+| `TurnWindowCompactionStrategy.builder().maxTurns(n)` | `WindowCompactionStrategy.builder().lastTurns(n)` |
+| `TokenCountCompactionStrategy.builder().maxTokens(n)` | `WindowCompactionStrategy.builder().tokenBudget(n)` |
+| `RecursiveSummarizationCompactionStrategy.builder(chatClient).maxEventsToKeep(n)` | `WindowCompactionStrategy.builder().lastEvents(n).summarizer(ChatModelSummarizer.builder(chatModel).build())` |
+
+The summarizer takes a `ChatModel`, not a `ChatClient`.
+`overlapSize`, `systemPrompt`, `shadowPrompt` and `onSummarizationFailure` moved to `ChatModelSummarizer.Builder`.
+A summary now combines with any window: last turns or a token budget, not only last events.
+
+`TurnCountTrigger`, `TokenCountTrigger` and `CompositeCompactionTrigger` are unchanged.
+
+### Breaking: compaction appends a boundary, it does not archive
+
+In 0.10.0 a compaction set an `archived` flag on the events that left the prompt.
+In Spring AI 2.1 a compaction changes no event. It appends one event of type `COMPACTION`, the boundary, which names the events that make up the prompt from then on.
+
+| 0.10.0 | Spring AI 2.1 |
+|---|---|
+| `SessionEvent.isArchived()`, `asArchived()`, `Builder.archived(..)` | removed |
+| `EventFilter.Builder.excludeArchived(true)` | `EventFilter.Builder.activeView(true)`; `EventFilter.active()` still works |
+| `CompactionResult.compactedEvents()`, `archivedEvents()`, `archivedEventCount()` | `coveredEvents()`, `pinnedEvents()`, `preservedEvents()`, `summary()`, `coveredEventCount()` |
+| `CompactionRequest.currentEventCount()` | removed; use `events().size()` |
+
+`EventFilter.all()` still returns the whole log, the covered events included.
+The log now also holds events that carry no message, the boundary for example. Check `event.hasMessage()` before `event.getMessage()` when you read with `EventFilter.all()`.
+
+See [Compaction](https://docs.spring.io/spring-ai/reference/api/session/compaction.html).
+
+### Breaking: text search moved out of `EventFilter`
+
+`EventFilter` now selects events for a prompt and nothing else. Searching the text is a query of its own.
+
+| 0.10.0 | Spring AI 2.1 |
+|---|---|
+| `getEvents(id, EventFilter.keywordSearch("refund"))` | `searchEvents(id, EventQuery.keyword("refund"))` |
+| `EventFilter.keywordsSearch(terms, matchMode)`, `keyword`, `keywords`, `matchMode` | `EventQuery.builder().keywords(..).matchMode(..)` |
+| `page`, `pageSize` | `EventQuery.builder().page(..).pageSize(..)` |
+| `from` | `EventQuery.builder().since(..)` |
+| `to`, `EventFilter.patternSearch(pattern)`, `pattern` | removed |
+| `EventFilter.realOnly()` | `EventFilter.builder().excludeSynthetic(true).build()` |
+
+`EventFilter` gains `eventTypes(..)`, to read events of other types than messages.
+
+See [Event Filter](https://docs.spring.io/spring-ai/reference/api/session/event-filter.html).
+
+### Breaking: the recall tools
+
+| 0.10.0 | Spring AI 2.1 |
+|---|---|
+| `SessionEventTools` | `SessionRecallTools`; the tool is still named `conversation_search` |
+| `CrossSessionRecallTools`, the `cross_session_search` tool | removed, no replacement |
+
+The tool still reads the session id from the tool context.
+`SessionAdvisors.Builder.sessionIdInToolContext(true)` now puts it there for you.
+
+See [Recall](https://docs.spring.io/spring-ai/reference/api/session/recall.html).
+
+### Configuration
+
+The properties keep their names: `spring.ai.session.time-to-live`, `spring.ai.session.allow-system-messages`, and the `spring.ai.session.repository.jdbc.*` properties.
+`spring.ai.session.repository.jdbc.indexed-attributes` is new.
+
+The auto-configuration classes moved to other packages. Change them where you name them, in an exclude for example:
+
+| 0.10.0 | Spring AI 2.1 |
+|---|---|
+| `org.springaicommunity.session.autoconfigure` | `org.springframework.ai.model.session.autoconfigure` |
+| `org.springaicommunity.session.jdbc.autoconfigure` | `org.springframework.ai.model.session.jdbc.autoconfigure` |
+
+### JDBC: a new schema
+
+The tables keep their names, `AI_SESSION` and `AI_SESSION_EVENT`, but their columns changed.
+SQL Server is a supported database now, next to PostgreSQL, MySQL, MariaDB and H2.
+
+| Table | 0.10.0 | Spring AI 2.1 |
+|---|---|---|
+| `AI_SESSION` | `user_id`, with an index | removed; the owner is a row in `AI_SESSION_INDEX` |
+| `AI_SESSION` | `metadata` | now `NOT NULL` |
+| `AI_SESSION_INDEX` | | new: `session_id`, `attr_name`, `attr_value` |
+| `AI_SESSION_EVENT` | | new: `event_type`, `MESSAGE` by default |
+| `AI_SESSION_EVENT` | `message_type`, `NOT NULL` | nullable: an event without a message has none |
+| `AI_SESSION_EVENT` | `message_data`: the tool calls or tool responses | replaced by `payload`: the message parts and the message metadata |
+| `AI_SESSION_EVENT` | `archived`, `branch` | removed |
+| `AI_SESSION_EVENT` | `metadata` | now `NOT NULL` |
+
+!!! warning
+    The schema script creates a table only if it does not exist. On a database with the 0.10.0 tables it changes nothing, and the new repository then fails on the missing columns. Rename or drop the old tables first, or use another schema.
+
+There is no script that converts the data of an existing database.
+The stored message changed its format, from text plus tool-call JSON to the Spring AI message parts, and plain SQL cannot build that.
+You have two ways:
+
+- **Start with new tables.** Keep the old tables under another name for as long as you need the old conversations.
+- **Copy the data with a program of your own.** Read the old tables with plain JDBC, because the old library cannot be on the classpath next to the new one. Write through the new `SessionRepository`:
+    - One `Session` for each row of `AI_SESSION`, with the same id, `createdAt`, `expiresAt` and metadata. Put `user_id` into the metadata under `SessionAttributes.PRINCIPAL_NAME`.
+    - One `SessionEvent` for each row of `AI_SESSION_EVENT`, in `seq` order, with the same id and timestamp. Rebuild the message from `message_type`, `message_content` and `message_data`. For a row with `synthetic` set, put `SessionEvent.METADATA_SYNTHETIC` with `true` into the event's metadata.
+    - For a session that has archived events, append one `COMPACTION` event at the end. Build its payload with `CompactionBoundary`, and name the events that were not archived, in log order. Without it, the first prompt after the move holds the whole history.
+
+See [JDBC Repository](https://docs.spring.io/spring-ai/reference/api/session/jdbc.html).
+
+### Custom implementers
+
+**`SessionRepository`**
+
+| 0.10.0 | Spring AI 2.1 |
+|---|---|
+| `findByUserId(userId)` | `findByMetadata(name, value)` |
+| `applyCompaction(sessionId, plan, expectedVersion)`, `CompactionPlan` | `appendEvents(sessionId, events, expectedVersion)`: the general version-checked append, which compaction uses |
+| `findEventsByUserId(userId, filter)` | removed |
+| | new: `searchEvents(sessionId, query)`, with a default that filters in memory |
+
+The contract tests moved to `org.springframework.ai:spring-ai-test`, as `org.springframework.ai.test.session.AbstractSessionRepositoryContractTests`.
+A store that carries its own event types, or reads events by type, needs nothing more: `EventType` is open, and `EventFilter.eventTypes(..)` selects by it.
+See [Extension Points](https://docs.spring.io/spring-ai/reference/api/session/extending.html).
+
+**`CompactionStrategy`**
+
+The interface is the same, but the result changed.
+A strategy no longer returns the new log. It returns what it covers, pins and preserves, and the summary messages, and the service writes the boundary.
+`CompactionResult.unchanged()` says that there is nothing to compact.
+
+**`JdbcSessionRepositoryDialect`**
+
+`getKeywordFilterFragment()` and `getKeywordPredicateFragment()` are gone.
+The dialect now has `getKeywordPredicate()`, `toKeywordParameter(keyword)` and `getLimitClause()`, all with defaults.
+
 ## Upgrading to 0.10.0
 
 ### Breaking: branch-based multi-agent isolation removed
